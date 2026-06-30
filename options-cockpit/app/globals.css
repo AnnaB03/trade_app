@@ -1,0 +1,45 @@
+:root{
+  --paper:#E8E5DD; --surface:#F7F5EF; --ink:#1B1916; --muted:#6E685C; --faint:#9A9384;
+  --line:#D2CCBF; --accent:#1C3A4F; --bull:#41684E; --bear:#9A4736; --neutral:#807A6D;
+  --serif:Georgia,'Times New Roman',serif;
+  --mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+  --sans:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+}
+*{box-sizing:border-box;}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);line-height:1.5;-webkit-font-smoothing:antialiased;}
+.wrap{max-width:1040px;margin:0 auto;padding:26px 18px 80px;}
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--faint);}
+h1{font-family:var(--serif);font-weight:400;font-size:32px;margin:6px 0 2px;letter-spacing:-.01em;}
+.sub{color:var(--muted);font-size:13.5px;margin:0 0 18px;}
+.tabs{display:flex;gap:6px;border-bottom:1px solid var(--line);margin-bottom:22px;}
+.tab{font-family:var(--mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase;background:none;border:0;padding:11px 16px;color:var(--faint);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;}
+.tab.on{color:var(--ink);border-bottom-color:var(--accent);}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:3px;padding:18px;margin-bottom:18px;}
+.label{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);display:block;margin-bottom:8px;}
+.in,.sel{font-family:var(--mono);font-size:14px;background:var(--paper);border:1px solid var(--line);border-radius:2px;padding:9px 10px;color:var(--ink);outline:none;}
+.in:focus,.sel:focus{border-color:var(--accent);}
+.btn{font-family:var(--sans);font-size:13px;font-weight:600;background:var(--accent);color:#F7F5EF;border:0;border-radius:2px;padding:10px 16px;cursor:pointer;}
+.btn:disabled{opacity:.45;cursor:default;}
+.chip{font-family:var(--mono);font-size:12px;background:none;border:1px solid var(--line);border-radius:2px;padding:6px 11px;color:var(--muted);cursor:pointer;}
+.chip:hover{border-color:var(--accent);color:var(--ink);}
+.err{background:rgba(154,71,54,.1);border:1px solid rgba(154,71,54,.4);color:var(--bear);border-radius:3px;padding:11px 14px;margin-bottom:16px;font-size:13px;}
+.danger{background:var(--bear);color:#F7F5EF;border-radius:3px;padding:14px 16px;margin-bottom:16px;}
+.danger b{font-weight:700;} .danger .d2{font-size:13px;opacity:.92;margin-top:5px;}
+.safe{background:rgba(65,104,78,.12);border:1px solid rgba(65,104,78,.4);color:var(--bull);border-radius:3px;padding:10px 14px;margin-bottom:16px;font-size:13px;font-weight:600;}
+table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12.5px;}
+th{font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);text-align:right;padding:6px 8px;border-bottom:1px solid var(--line);font-weight:500;}
+td{text-align:right;padding:7px 8px;border-bottom:1px solid var(--line);}
+tr.atm td{background:rgba(28,58,79,.06);}
+.strike-col{text-align:center !important;font-weight:600;}
+.row-btn{cursor:pointer;}
+.row-btn:hover td{background:rgba(28,58,79,.09);}
+.metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:4px 0 6px;}
+.metric{text-align:center;} .metric .k{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);}
+.metric .v{font-family:var(--mono);font-size:21px;font-weight:600;margin-top:4px;}
+.up{color:var(--bull);} .down{color:var(--bear);}
+.muted{color:var(--muted);} .mono{font-family:var(--mono);}
+.leg{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;font-family:var(--mono);font-size:13px;padding:7px 0;border-bottom:1px solid var(--line);}
+.x{background:none;border:0;color:var(--faint);font-size:17px;cursor:pointer;}
+.foot{margin-top:30px;padding-top:16px;border-top:1px solid var(--line);font-size:11.5px;color:var(--faint);line-height:1.5;}
+.live{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--bull);margin-right:6px;}
+@media(max-width:640px){h1{font-size:27px;} th,td{padding:6px 4px;font-size:11px;}}
