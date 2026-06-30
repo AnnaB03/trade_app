@@ -232,6 +232,47 @@ function ChainRisk({ symbol, setSymbol }) {
   );
 }
 
+function Ideas() {
+  const [suggestions, setSuggestions] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 60000);
+    return () => clearInterval(t);
+  }, []);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const d = await getJSON(`/api/suggestions?symbols=SPY,QQQ,NVDA,TSLA,AMD`);
+      setSuggestions(d.suggestions);
+      setErr("");
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="card">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <span className="label" style={{ margin: 0 }}><span className="live" />Ideas · refreshes every 60s</span>
+        <button className="btn" onClick={load} disabled={loading}>{loading ? "Loading..." : "Refresh"}</button>
+      </div>
+      {err && <div className="err">{err}</div>}
+      {suggestions && (
+        <div style={{ fontFamily: "var(--mono)", fontSize: "13px", lineHeight: "1.8", whiteSpace: "pre-wrap", color: "var(--ink)" }}>
+          {suggestions}
+        </div>
+      )}
+      {!suggestions && !loading && <div className="muted">Click Refresh to get trading ideas from Claude AI</div>}
+    </div>
+  );
+}
+
 export default function Page() {
   const [tab, setTab] = useState("watch");
   const [symbol, setSymbol] = useState("");
@@ -244,13 +285,15 @@ export default function Page() {
       <div className="tabs">
         <button className={"tab" + (tab === "watch" ? " on" : "")} onClick={() => setTab("watch")}>Watchlist</button>
         <button className={"tab" + (tab === "chain" ? " on" : "")} onClick={() => setTab("chain")}>Chain &amp; Risk</button>
+        <button className={"tab" + (tab === "ideas" ? " on" : "")} onClick={() => setTab("ideas")}>Ideas</button>
       </div>
       {tab === "watch" && <Watchlist onPick={pick} />}
       {tab === "chain" && <ChainRisk symbol={symbol} setSymbol={setSymbol} />}
+      {tab === "ideas" && <Ideas />}
       <div className="foot">
         Informational only — not financial advice. Real-time data requires a funded Tradier brokerage account; without one the feed is delayed.
         Risk figures assume holding to expiration and ignore commissions, assignment, and slippage — confirm in your broker before trading.
-        Your token stays server-side and is never sent to the browser.
+        Your token stays server-side and is never sent to the browser. AI suggestions are educational only and not investment advice.
       </div>
     </div>
   );
