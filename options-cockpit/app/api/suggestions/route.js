@@ -2,6 +2,11 @@ import { NextResponse } from "next/server";
 import { Anthropic } from "@anthropic-ai/sdk";
 import { tradier, asArray } from "../tradier";
 
+console.log("API Key check:", {
+  hasKey: !!process.env.ANTHROPIC_API_KEY,
+  keyStart: process.env.ANTHROPIC_API_KEY?.substring(0, 20),
+});
+
 const client = new Anthropic();
 
 export async function GET(req) {
