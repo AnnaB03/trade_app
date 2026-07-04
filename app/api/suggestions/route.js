@@ -2,14 +2,25 @@ import { NextResponse } from "next/server";
 import { Anthropic } from "@anthropic-ai/sdk";
 import { tradier, asArray } from "../tradier";
 
-const client = new Anthropic();
+const fmt = (v, dp = 2) => {
+  if (v == null || v === "") return "N/A";
+  const n = Number(v);
+  return Number.isFinite(n) ? n.toFixed(dp) : "N/A";
+};
 
 export async function GET(req) {
   const symbols = new URL(req.url).searchParams.get("symbols");
   if (!symbols) return NextResponse.json({ error: "symbols required" }, { status: 400 });
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return NextResponse.json(
+      { error: "Server is missing ANTHROPIC_API_KEY — set it in your environment / Vercel project settings." },
+      { status: 500 }
+    );
+  }
+  const client = new Anthropic();
 
   try {
-    const syms = symbols.split(",").map(s => s.trim());
+    const syms = symbols.split(",").map(s => s.trim()).filter(Boolean);
 
     // Fetch quotes for all symbols
     const quotes = await Promise.all(
@@ -19,36 +30,37 @@ export async function GET(req) {
           .catch(() => ({ symbol: sym, data: {} }))
       )
     );
+    const lastBySym = Object.fromEntries(quotes.map(q => [q.symbol, Number(q.data.last)]));
 
     // Fetch expirations and option chains for first 3 symbols (to avoid too much data)
     const chains = await Promise.all(
-      syms.slice(0, 3).map(sym =>
-        tradier(`/markets/options/expirations?symbol=${encodeURIComponent(sym)}&includeAllRoots=true`)
-          .then(d => {
-            const exp = asArray(d?.expirations?.date)?.[0];
-            if (!exp) return { symbol: sym, expirations: [] };
-            return tradier(`/markets/options/chains?symbol=${encodeURIComponent(sym)}&expiration=${encodeURIComponent(exp)}&greeks=true`)
-              .then(cd => ({
-                symbol: sym,
-                expiration: exp,
-                options: asArray(cd?.options?.option)?.slice(0, 10) || []
-              }))
-              .catch(() => ({ symbol: sym, expirations: [] }));
-          })
-          .catch(() => ({ symbol: sym, expirations: [] }))
-      )
+      syms.slice(0, 3).map(async (sym) => {
+        try {
+          const d = await tradier(`/markets/options/expirations?symbol=${encodeURIComponent(sym)}&includeAllRoots=true`);
+          const exp = asArray(d?.expirations?.date)[0];
+          if (!exp) return { symbol: sym, options: [] };
+          const cd = await tradier(`/markets/options/chains?symbol=${encodeURIComponent(sym)}&expiration=${encodeURIComponent(exp)}&greeks=true`);
+          return { symbol: sym, expiration: exp, options: asArray(cd?.options?.option) };
+        } catch {
+          return { symbol: sym, options: [] };
+        }
+      })
     );
 
     // Build prompt for Claude
     const marketData = quotes
-      .map(q => `${q.symbol}: Last=$${q.data.last?.toFixed(2) || "N/A"}, Change=${q.data.change?.toFixed(2) || "N/A"} (${q.data.change_percentage?.toFixed(1) || "N/A"}%), Volume=${q.data.volume?.toLocaleString() || "N/A"}`)
+      .map(q => `${q.symbol}: Last=$${fmt(q.data.last)}, Change=${fmt(q.data.change)} (${fmt(q.data.change_percentage, 1)}%), Volume=${q.data.volume != null ? Number(q.data.volume).toLocaleString() : "N/A"}`)
       .join("\n");
 
     const optionData = chains
-      .filter(c => c.options?.length > 0)
+      .filter(c => c.options.length > 0)
       .map(c => {
-        const atm = c.options.find(o => Math.abs(o.strike - c.options[Math.floor(c.options.length/2)].strike) < 5);
-        return `${c.symbol} (expires ${c.expiration}): ATM strike ~${atm?.strike || "N/A"}, IV=${atm?.greeks?.mid_iv?.toFixed(2) || "N/A"}`;
+        const spot = lastBySym[c.symbol];
+        const ref = Number.isFinite(spot) ? spot : Number(c.options[Math.floor(c.options.length / 2)].strike);
+        const atm = c.options.reduce((best, o) =>
+          Math.abs(Number(o.strike) - ref) < Math.abs(Number(best.strike) - ref) ? o : best
+        );
+        return `${c.symbol} (expires ${c.expiration}): ATM strike ~${atm.strike}, IV=${fmt(atm.greeks?.mid_iv)}`;
       })
       .join("\n");
 
@@ -83,7 +95,7 @@ Then add a section called "OTHER TOOLS" with 5 free/cheap tools that help trader
       messages: [{ role: "user", content: prompt }],
     });
 
-    const suggestions = message.content[0].type === "text" ? message.content[0].text : "";
+    const suggestions = message.content.find(b => b.type === "text")?.text || "";
 
     return NextResponse.json({ suggestions, timestamp: new Date().toISOString() });
   } catch (e) {

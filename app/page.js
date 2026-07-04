@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 
 /* ---------- risk math (defined-risk + uncapped-risk detection) ---------- */
 const num = (v) => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
@@ -47,16 +47,25 @@ async function getJSON(url) {
 
 /* ---------- watchlist ---------- */
 function Watchlist({ onPick }) {
-  const [syms, setSyms] = useState(() => {
-    if (typeof window === "undefined") return ["SPY", "QQQ", "NVDA", "TSLA", "AMD"];
-    try { return JSON.parse(localStorage.getItem("cockpit_watch")) || ["SPY", "QQQ", "NVDA", "TSLA", "AMD"]; }
-    catch { return ["SPY", "QQQ", "NVDA", "TSLA", "AMD"]; }
-  });
+  const [syms, setSyms] = useState(["SPY", "QQQ", "NVDA", "TSLA", "AMD"]);
   const [quotes, setQuotes] = useState([]);
   const [err, setErr] = useState("");
   const [add, setAdd] = useState("");
+  const hydrated = useRef(false);
 
-  useEffect(() => { try { localStorage.setItem("cockpit_watch", JSON.stringify(syms)); } catch {} }, [syms]);
+  // Restore the saved list after mount so server and client render the same initial HTML.
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("cockpit_watch"));
+      if (Array.isArray(saved) && saved.length) setSyms(saved);
+    } catch {}
+    hydrated.current = true;
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated.current) return;
+    try { localStorage.setItem("cockpit_watch", JSON.stringify(syms)); } catch {}
+  }, [syms]);
 
   const load = useCallback(async () => {
     if (!syms.length) { setQuotes([]); return; }
@@ -86,12 +95,13 @@ function Watchlist({ onPick }) {
           {syms.map((s) => {
             const q = quotes.find((x) => x.symbol === s) || {};
             const chg = q.change, dn = chg < 0;
+            const chgCls = chg == null ? "muted" : dn ? "down" : "up";
             return (
               <tr key={s}>
                 <td style={{ textAlign: "left", fontWeight: 600, cursor: "pointer" }} onClick={() => onPick(s)}>{s}</td>
                 <td>{f2(q.last)}</td>
-                <td className={dn ? "down" : "up"}>{q.change != null ? (dn ? "" : "+") + f2(q.change) : "—"}</td>
-                <td className={dn ? "down" : "up"}>{q.change_percentage != null ? (dn ? "" : "+") + Number(q.change_percentage).toFixed(2) + "%" : "—"}</td>
+                <td className={chgCls}>{q.change != null ? (dn ? "" : "+") + f2(q.change) : "—"}</td>
+                <td className={chgCls}>{q.change_percentage != null ? (dn ? "" : "+") + Number(q.change_percentage).toFixed(2) + "%" : "—"}</td>
                 <td className="muted">{f2(q.bid)}</td><td className="muted">{f2(q.ask)}</td>
                 <td className="muted">{q.volume ? Number(q.volume).toLocaleString() : "—"}</td>
                 <td><button className="chip" onClick={() => onPick(s)}>chain →</button>
@@ -108,6 +118,7 @@ function Watchlist({ onPick }) {
 /* ---------- chain + risk builder ---------- */
 function ChainRisk({ symbol, setSymbol }) {
   const [input, setInput] = useState(symbol || "");
+  const [loadedSym, setLoadedSym] = useState("");
   const [exps, setExps] = useState([]);
   const [exp, setExp] = useState("");
   const [chain, setChain] = useState([]);
@@ -116,10 +127,13 @@ function ChainRisk({ symbol, setSymbol }) {
   const [loading, setLoading] = useState(false);
   const [legs, setLegs] = useState([]);
 
-  useEffect(() => { if (symbol) { setInput(symbol); loadExp(symbol); } }, [symbol]);
+  useEffect(() => {
+    if (symbol && symbol !== loadedSym) { setInput(symbol); loadExp(symbol); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [symbol, loadedSym]);
 
   async function loadExp(sym) {
-    setErr(""); setChain([]); setExp("");
+    setErr(""); setChain([]); setExp(""); setLoadedSym(sym);
     try {
       const [e, q] = await Promise.all([
         getJSON(`/api/expirations?symbol=${sym}`),
@@ -161,7 +175,7 @@ function ChainRisk({ symbol, setSymbol }) {
         {exps.length > 0 && (
           <div style={{ marginTop: 12 }}>
             <span className="label">Expiration</span>
-            <select className="sel" value={exp} onChange={(e) => loadChain(input, e.target.value)} style={{ width: "100%", maxWidth: 260 }}>
+            <select className="sel" value={exp} onChange={(e) => loadChain(loadedSym, e.target.value)} style={{ width: "100%", maxWidth: 260 }}>
               {exps.map((d) => <option key={d} value={d}>{d}</option>)}
             </select>
           </div>
@@ -194,7 +208,7 @@ function ChainRisk({ symbol, setSymbol }) {
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", fontFamily: "var(--mono)", fontSize: 12, color: "var(--muted)", marginTop: 8 }}>
             <span>{a.net >= 0 ? "Net debit: " : "Net credit: "}<b style={{ color: "var(--ink)" }}>{money(Math.abs(a.net))}</b></span>
-            {a.rr && <span>Risk/reward 1 : {a.rr.toFixed(2)}</span>}
+            {a.rr != null && <span>Risk/reward 1 : {a.rr.toFixed(2)}</span>}
             <button className="chip" onClick={() => setLegs([])}>clear</button>
           </div>
         </div>
