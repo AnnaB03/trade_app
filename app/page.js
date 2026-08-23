@@ -50,7 +50,15 @@ const ADDED_SYMS = [{ v: 1, sym: "SPX" }];
    volume reality (RVOL + float rotation), whether news justifies the move
    (catalyst type + freshness), and where LULD halt bands sit. */
 function RealityPanel({ data, symbol }) {
-  if (!data) return <span className="muted mono" style={{ fontSize: 12.5 }}>Checking {symbol}… (needs FMP_API_KEY)</span>;
+  if (data === undefined) return <span className="muted mono" style={{ fontSize: 12.5 }}>Checking {symbol}…</span>;
+  if (!data || data.unavailable) {
+    return (
+      <span className="muted mono" style={{ fontSize: 12.5 }}>
+        No reality check for {symbol} — {data?.reason || "unavailable"}.
+        {" "}Index symbols (SPX) have no company profile, float, or share volume to check.
+      </span>
+    );
+  }
   const { volume: v, news: n, halt: h } = data;
   const toneCls = (t) => t === "warn" ? "down" : t === "ok" || t === "strong" ? "up" : t === "weak" ? "down" : "muted";
   const Row = ({ label, children }) => (
@@ -64,7 +72,9 @@ function RealityPanel({ data, symbol }) {
       <Row label="Volume">
         <span className={toneCls(v.read.tone)} style={{ fontWeight: 600 }}>{v.read.text}</span>
         <div className="muted">
-          {v.today ? `${Number(v.today).toLocaleString()} today vs ${Number(v.average).toLocaleString()} average` : "—"}
+          {v.today != null && v.average != null
+            ? `${Number(v.today).toLocaleString()} today vs ${Number(v.average).toLocaleString()} average`
+            : "share counts unavailable"}
           {v.rotation != null && <> · {(v.rotation * 100).toFixed(0)}% of float traded{v.rotation >= 1 ? " — full float rotation, classic squeeze signature" : ""}</>}
         </div>
       </Row>
@@ -113,11 +123,19 @@ function TopMovers({ onPick }) {
 
   if (!data) return null;
   const { gainers, losers } = data.session;
-  const row = (m, chgPct, extra) => (
+  // FMP's gainers/losers track the live session while it is open, so the
+  // heading must not claim "last session" during regular hours.
+  const sessionLabel = data.marketState === "open" ? "Today" : "Last session";
+  const row = (m, chgPctRaw, extra) => {
+    // A missing/garbled percentage from the feed must not render as "NaN%".
+    const chgPct = Number.isFinite(Number(chgPctRaw)) ? Number(chgPctRaw) : null;
+    return (
     <div key={m.symbol} style={{ padding: "7px 0", borderBottom: "1px solid var(--line)" }}>
       <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap", fontFamily: "var(--mono)", fontSize: 13 }}>
         <button className="chip" style={{ padding: "2px 8px", fontWeight: 700 }} onClick={() => onPick(m.symbol)}>{m.symbol}</button>
-        <span className={chgPct < 0 ? "down" : "up"} style={{ fontWeight: 600 }}>{chgPct >= 0 ? "+" : ""}{chgPct.toFixed(1)}%</span>
+        <span className={chgPct == null ? "muted" : chgPct < 0 ? "down" : "up"} style={{ fontWeight: 600 }}>
+          {chgPct == null ? "—" : `${chgPct >= 0 ? "+" : ""}${chgPct.toFixed(1)}%`}
+        </span>
         {extra}
       </div>
       {m.headline && (
@@ -126,7 +144,8 @@ function TopMovers({ onPick }) {
         </div>
       )}
     </div>
-  );
+    );
+  };
   return (
     <div className="card">
       <span className="label">Top movers · tap a symbol for its chain · filtered: ≥$5, common stocks, no leveraged ETFs</span>
@@ -138,13 +157,13 @@ function TopMovers({ onPick }) {
       )}
       {gainers.length > 0 && (
         <>
-          <div className="mono" style={{ fontSize: 12, fontWeight: 700, margin: "10px 0 2px" }}>Last session · gainers</div>
+          <div className="mono" style={{ fontSize: 12, fontWeight: 700, margin: "10px 0 2px" }}>{sessionLabel} · gainers</div>
           {gainers.slice(0, 5).map((m) => row(m, m.changePct, <span className="muted">${f2(m.price)} · {m.name?.slice(0, 40)}</span>))}
         </>
       )}
       {losers.length > 0 && (
         <>
-          <div className="mono" style={{ fontSize: 12, fontWeight: 700, margin: "10px 0 2px" }}>Last session · losers</div>
+          <div className="mono" style={{ fontSize: 12, fontWeight: 700, margin: "10px 0 2px" }}>{sessionLabel} · losers</div>
           {losers.slice(0, 5).map((m) => row(m, m.changePct, <span className="muted">${f2(m.price)} · {m.name?.slice(0, 40)}</span>))}
         </>
       )}
@@ -272,7 +291,7 @@ function Watchlist({ onPick }) {
     const load = () => {
       syms.slice(0, 12).forEach((s) => {
         getJSON(`/api/reality?symbol=${s}`)
-          .then((d) => { if (on) setReality((m) => ({ ...m, [s]: d.available ? d : null })); })
+          .then((d) => { if (on) setReality((m) => ({ ...m, [s]: d.available ? d : { unavailable: true, reason: d.reason } })); })
           .catch(() => {});
       });
     };

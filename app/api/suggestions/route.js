@@ -35,12 +35,17 @@ export async function GET(req) {
     );
     const lastBySym = Object.fromEntries(quotes.map(q => [q.symbol, Number(q.data.last)]));
 
-    // Fetch expirations and option chains for every watched symbol
+    // Fetch expirations and option chains for every watched symbol.
+    // Use the first expiration at least ~5 days out, NOT expirations[0]: the
+    // nearest expiry on index products is a same-day (0DTE) contract — the
+    // worst possible thing to put in front of a beginner as a suggestion.
+    const minExp = new Date(Date.now() + 5 * 86400000).toISOString().slice(0, 10);
     const chains = await Promise.all(
       syms.map(async (sym) => {
         try {
           const d = await tradier(`/markets/options/expirations?symbol=${encodeURIComponent(sym)}&includeAllRoots=true`);
-          const exp = asArray(d?.expirations?.date)[0];
+          const exps = asArray(d?.expirations?.date);
+          const exp = exps.find((x) => x >= minExp) || exps[0];
           if (!exp) return { symbol: sym, options: [] };
           const cd = await tradier(`/markets/options/chains?symbol=${encodeURIComponent(sym)}&expiration=${encodeURIComponent(exp)}&greeks=true`);
           return { symbol: sym, expiration: exp, options: asArray(cd?.options?.option) };
@@ -142,28 +147,41 @@ ${calendarData}
 ` : ""}
 
 REQUIREMENTS:
-1. Use ONLY these simple words: BUY, SELL, CALL, PUT, expiration date, cheap, expensive, risky, safe, up, down
-2. Give exactly one idea for EVERY symbol listed in OPTION CHAINS above — never skip one, including index symbols like SPX
+1. Write in plain everyday words a beginner understands. No financial jargon — no "theta", "IV crush", "delta", "credit spread". If you must use a trading term, explain it in the same sentence.
+2. Cover EVERY symbol listed in OPTION CHAINS above — never skip one, including index symbols like SPX. But do NOT manufacture a trade: if a symbol has no clear setup right now, say so for that symbol using the WAIT line format below. An honest "nothing here today" is more useful than a forced idea, and you will not be penalized for saying it.
 3. This app is for OPTIONS trading — prefer a CALL or PUT idea over a plain stock BUY/SELL whenever that symbol has option chain data. For options, ALWAYS include the expiration date
 4. Explain each idea in 1-2 simple sentences that a beginner understands
-5. Rate risk as: LOW, MEDIUM, or HIGH
-6. Include a simple emoji (📈 for bullish, 📉 for bearish, ⚡ for options)
-7. NO financial jargon
-8. If recent news is relevant to an idea, mention it briefly in plain words (e.g. "because of good earnings news")
+5. Rate risk as: LOW, MEDIUM, or HIGH. Be honest — buying short-dated options is HIGH risk even when the idea is good.
+6. Include a simple emoji (📈 for bullish, 📉 for bearish, ⚡ for options, ⏸ for wait)
+7. If recent news is relevant to an idea, mention it briefly in plain words (e.g. "because of good earnings news")
+8. Never promise a result. Say what would have to happen for the trade to work, and say plainly what makes it lose.
 
 Format each idea like:
 [EMOJI] SYMBOL | BUY/SELL/CALL/PUT [expiration] | Risk: LOW/MEDIUM/HIGH
 Why: Simple explanation in 1-2 sentences
 
+For a symbol with no clear setup, use exactly:
+⏸ SYMBOL | WAIT | Risk: —
+Why: Simple reason there is no good setup right now.
+
 Then add a section called "OTHER TOOLS" with 5 free/cheap tools that help traders like:
 - Tool name | What it does | Free/Paid
 `;
 
+    // max_tokens must fit one idea per watched symbol plus the tools section —
+    // at 1024 the response was silently truncated mid-idea once the watchlist
+    // grew past a few symbols. Model is overridable for cost tuning; this
+    // endpoint can auto-refresh every 60s while the Ideas tab is open.
     const message = await client.messages.create({
-      model: "claude-opus-4-8",
-      max_tokens: 1024,
+      model: process.env.SUGGESTIONS_MODEL || "claude-opus-5",
+      max_tokens: 8000,
+      output_config: { effort: "medium" },
       messages: [{ role: "user", content: prompt }],
     });
+
+    if (message.stop_reason === "refusal") {
+      return NextResponse.json({ error: "The model declined to answer this request." }, { status: 502 });
+    }
 
     const suggestions = message.content.find(b => b.type === "text")?.text || "";
 

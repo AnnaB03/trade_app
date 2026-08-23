@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { fmpGet } from "../fmp";
 import { extendedQuotes } from "../extended";
+import { tradier } from "../tradier";
 
 /* Top movers, two views:
    - session: FMP biggest gainers/losers (updates intraday), filtered to
@@ -46,19 +47,28 @@ export async function GET() {
     const gainers = cleanMovers(gainRaw).map((m) => ({ ...m, headline: headlineBySym[m.symbol] || null }));
     const losers = cleanMovers(loseRaw).map((m) => ({ ...m, headline: headlineBySym[m.symbol] || null }));
 
-    // News-driven extended-hours scan (extendedQuotes caps at 10 symbols)
-    let extended = [];
-    try {
-      const newsSyms = [...new Set(news.map((a) => a.symbol))];
-      const ext = await extendedQuotes(newsSyms);
-      extended = ext
-        .filter((e) => e.extChangePct != null && Math.abs(e.extChangePct) >= 3)
-        .sort((x, y) => Math.abs(y.extChangePct) - Math.abs(x.extChangePct))
-        .slice(0, 8)
-        .map((e) => ({ symbol: e.symbol, ext: e.ext, extChangePct: e.extChangePct, asOf: e.asOf, headline: headlineBySym[e.symbol] || null }));
-    } catch {}
+    // News-driven scan. Only meaningful outside the regular session: during
+    // market hours the timesales window is dominated by regular-session bars,
+    // so the same numbers would be "today's move" mislabelled as extended
+    // hours — and FMP's gainers list already covers that live.
+    let clockState = "unknown";
+    try { clockState = (await tradier(`/markets/clock`))?.clock?.state || "unknown"; } catch {}
+    const regularSession = clockState === "open" || clockState === "unknown";
 
-    const data = { available: true, session: { gainers, losers }, extended };
+    let extended = [];
+    if (!regularSession) {
+      try {
+        const newsSyms = [...new Set(news.map((a) => a.symbol))];
+        const ext = await extendedQuotes(newsSyms);
+        extended = ext
+          .filter((e) => e.extChangePct != null && Math.abs(e.extChangePct) >= 3)
+          .sort((x, y) => Math.abs(y.extChangePct) - Math.abs(x.extChangePct))
+          .slice(0, 8)
+          .map((e) => ({ symbol: e.symbol, ext: e.ext, extChangePct: e.extChangePct, asOf: e.asOf, headline: headlineBySym[e.symbol] || null }));
+      } catch {}
+    }
+
+    const data = { available: true, marketState: clockState, session: { gainers, losers }, extended };
     cached = { at: Date.now(), data };
     return NextResponse.json(data);
   } catch (e) {

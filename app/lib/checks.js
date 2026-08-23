@@ -55,11 +55,27 @@ export function classifyCatalyst(title) {
   return { kind: "general news", weight: "unknown" };
 }
 
-// Age of a headline in hours. FMP timestamps are US/Eastern wall-clock.
+// US/Eastern UTC offset (ms) at a given instant — +4h in EDT, +5h in EST.
+// Derived via Intl so it is correct year-round and independent of server TZ.
+function easternOffsetMs(instant) {
+  const dtf = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", hour12: false,
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+  });
+  const p = Object.fromEntries(dtf.formatToParts(instant).map((x) => [x.type, x.value]));
+  const wallAsUTC = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour % 24, +p.minute, +p.second);
+  return instant.getTime() - wallAsUTC;
+}
+
+// Age of a headline in hours. FMP timestamps are US/Eastern wall-clock with no
+// zone marker, so the offset must be resolved for that date — a fixed -04:00
+// is an hour wrong for roughly half the year (EST).
 export function headlineAgeHours(publishedDate, now = new Date()) {
   if (!publishedDate) return null;
-  const t = Date.parse(String(publishedDate).replace(" ", "T") + "-04:00");
-  if (isNaN(t)) return null;
+  const naive = Date.parse(String(publishedDate).trim().replace(" ", "T") + "Z");
+  if (isNaN(naive)) return null;
+  const t = naive + easternOffsetMs(new Date(naive));
   const h = (now.getTime() - t) / 3600000;
   return h >= 0 ? h : 0;
 }
