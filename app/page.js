@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef, Fragment } from "react";
 import {
   analyze, toRows, expectedMove, moveVerdict, ivSnapshot, ivRank, ivRankRead, nearestMonthly,
   oiWalls, todayStr, daysUntil, eventsHeldThrough,
@@ -45,6 +45,55 @@ const DEFAULT_SYMS = ["SPY", "SPX", "QQQ", "NVDA", "TSLA", "AMD"];
 // When adding another, append it here and bump WATCH_VERSION to match.
 const WATCH_VERSION = 1;
 const ADDED_SYMS = [{ v: 1, sym: "SPX" }];
+
+/* The three checks that separate a real move from a trap, per symbol:
+   volume reality (RVOL + float rotation), whether news justifies the move
+   (catalyst type + freshness), and where LULD halt bands sit. */
+function RealityPanel({ data, symbol }) {
+  if (!data) return <span className="muted mono" style={{ fontSize: 12.5 }}>Checking {symbol}… (needs FMP_API_KEY)</span>;
+  const { volume: v, news: n, halt: h } = data;
+  const toneCls = (t) => t === "warn" ? "down" : t === "ok" || t === "strong" ? "up" : t === "weak" ? "down" : "muted";
+  const Row = ({ label, children }) => (
+    <div style={{ display: "grid", gridTemplateColumns: "96px 1fr", gap: 10, padding: "6px 0", alignItems: "baseline" }}>
+      <span className="label" style={{ margin: 0 }}>{label}</span>
+      <div className="mono" style={{ fontSize: 12.5, lineHeight: 1.6 }}>{children}</div>
+    </div>
+  );
+  return (
+    <div>
+      <Row label="Volume">
+        <span className={toneCls(v.read.tone)} style={{ fontWeight: 600 }}>{v.read.text}</span>
+        <div className="muted">
+          {v.today ? `${Number(v.today).toLocaleString()} today vs ${Number(v.average).toLocaleString()} average` : "—"}
+          {v.rotation != null && <> · {(v.rotation * 100).toFixed(0)}% of float traded{v.rotation >= 1 ? " — full float rotation, classic squeeze signature" : ""}</>}
+        </div>
+      </Row>
+      <Row label="News">
+        <span className={toneCls(n.verdict.tone)} style={{ fontWeight: 600 }}>{n.verdict.text}</span>
+        {n.headline && (
+          <div className="muted" style={{ marginTop: 2 }}>
+            “{n.headline.title}” — {n.headline.site}
+          </div>
+        )}
+      </Row>
+      {h && (
+        <Row label="Halt bands">
+          <span>
+            Trading pauses if it hits <b className="down">${h.down.toFixed(2)}</b> or <b className="up">${h.up.toFixed(2)}</b>
+            {" "}(±{(h.pct * 100).toFixed(0)}%, Tier {h.tier}{h.doubled ? ", doubled window" : ""})
+          </span>
+          <div className="muted">
+            Indicative: the official band tracks a rolling 5-min average price, not the last trade. Tier estimated from market cap.
+            {" "}You cannot exit during a halt. {h.note}
+          </div>
+        </Row>
+      )}
+      <div className="muted mono" style={{ fontSize: 11.5, marginTop: 6, opacity: 0.8 }}>
+        Volume and % move are regular-session figures — in pre/post-market they lag the extended tape shown above.
+      </div>
+    </div>
+  );
+}
 
 /* Market-wide top movers. "News movers" = fresh headlines cross-priced against
    Tradier extended-session trades, ranked by |pre/post-market move| — catches
@@ -181,6 +230,8 @@ function Watchlist({ onPick }) {
   const [quotes, setQuotes] = useState([]);
   const [err, setErr] = useState("");
   const [add, setAdd] = useState("");
+  const [reality, setReality] = useState({}); // symbol → reality check payload
+  const [openSym, setOpenSym] = useState(null); // expanded reality panel
   const hydrated = useRef(false);
 
   // Restore the saved list after mount so server and client render the same initial HTML.
@@ -210,6 +261,26 @@ function Watchlist({ onPick }) {
     try { const d = await getJSON(`/api/quote?symbols=${syms.join(",")}`); setQuotes(d.quotes); setErr(""); }
     catch (e) { setErr(e.message); }
   }, [syms]);
+
+  // Reality checks (volume / news / halt bands) per symbol, refreshed every
+  // 5 min. Server-cached 2 min; one call per symbol since FMP's batch quote
+  // endpoints need a higher plan tier.
+  const symKey = syms.join(",");
+  useEffect(() => {
+    if (!syms.length) return;
+    let on = true;
+    const load = () => {
+      syms.slice(0, 12).forEach((s) => {
+        getJSON(`/api/reality?symbol=${s}`)
+          .then((d) => { if (on) setReality((m) => ({ ...m, [s]: d.available ? d : null })); })
+          .catch(() => {});
+      });
+    };
+    load();
+    const t = setInterval(load, 300000);
+    return () => { on = false; clearInterval(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [symKey]);
 
   const clock = useMarketClock();
   const closed = marketClosed(clock);
@@ -248,24 +319,45 @@ function Watchlist({ onPick }) {
       <table>
         <thead><tr>
           <th style={{ textAlign: "left" }}>Symbol</th><th>Last</th><th>Chg</th><th>Chg %</th>
-          <th>Bid</th><th>Ask</th><th>Vol</th><th></th>
+          <th>Bid</th><th>Ask</th><th>Vol</th>
+          <th title="Relative volume: today's volume vs its average. Under 1× means thinner than normal.">RVOL</th>
+          <th></th>
         </tr></thead>
         <tbody>
           {syms.map((s) => {
             const q = quotes.find((x) => x.symbol === s) || {};
             const chg = q.change, dn = chg < 0;
             const chgCls = chg == null ? "muted" : dn ? "down" : "up";
+            const rc = reality[s], rv = rc?.volume?.rvol ?? null, isOpen = openSym === s;
             return (
-              <tr key={s}>
+              <Fragment key={s}>
+              <tr>
                 <td style={{ textAlign: "left", fontWeight: 600, cursor: "pointer" }} onClick={() => onPick(s)}>{s}</td>
                 <td>{f2(q.last)}</td>
                 <td className={chgCls}>{q.change != null ? (dn ? "" : "+") + f2(q.change) : "—"}</td>
                 <td className={chgCls}>{q.change_percentage != null ? (dn ? "" : "+") + Number(q.change_percentage).toFixed(2) + "%" : "—"}</td>
                 <td className="muted">{f2(q.bid)}</td><td className="muted">{f2(q.ask)}</td>
                 <td className="muted">{q.volume ? Number(q.volume).toLocaleString() : "—"}</td>
-                <td><button className="chip" onClick={() => onPick(s)}>chain →</button>
-                  <button className="x" onClick={() => setSyms(syms.filter((x) => x !== s))}>×</button></td>
+                <td className={rv == null ? "muted" : rv >= 2 ? "up" : rv < 1 ? "down" : ""} style={rv != null ? { fontWeight: 600 } : undefined}>
+                  {rv != null ? rv.toFixed(1) + "×" : "—"}
+                </td>
+                <td>
+                  <button className="chip" onClick={() => setOpenSym(isOpen ? null : s)}
+                    title="Reality check: is the volume real, does news justify the move, where are the halt bands">
+                    {isOpen ? "hide" : "check"}
+                  </button>
+                  <button className="chip" onClick={() => onPick(s)}>chain →</button>
+                  <button className="x" onClick={() => setSyms(syms.filter((x) => x !== s))}>×</button>
+                </td>
               </tr>
+              {isOpen && (
+                <tr key={s + "-rc"}>
+                  <td colSpan={9} style={{ textAlign: "left", background: "var(--paper)", padding: "12px 10px" }}>
+                    <RealityPanel data={rc} symbol={s} />
+                  </td>
+                </tr>
+              )}
+              </Fragment>
             );
           })}
         </tbody>
