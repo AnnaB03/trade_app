@@ -537,17 +537,18 @@ function Ideas() {
   const clock = useMarketClock();
   const closed = marketClosed(clock);
 
-  // Load once on mount; auto-refresh only while the market is open — each
-  // refresh is a paid Claude call plus a batch of data fetches, and a closed
-  // market produces identical input every time. Manual Refresh always works.
+  // Load once on mount. Auto-refresh cadence follows the market: 60s while
+  // open; 10 min in pre/post-market (extended prices still move, but slower —
+  // and each refresh is a paid Claude call); fully paused when closed, since a
+  // closed market produces identical input every time. Manual Refresh always works.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, []);
   useEffect(() => {
-    if (closed) return;
-    const t = setInterval(load, 60000);
+    if (clock?.state === "closed") return;
+    const t = setInterval(load, closed ? 600000 : 60000);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [closed]);
+  }, [closed, clock?.state]);
 
   async function load() {
     setLoading(true);
@@ -571,14 +572,19 @@ function Ideas() {
     <div className="card">
       {closed && (
         <div className="warn" style={{ marginBottom: 12 }}>
-          Market {clock.state === "closed" ? "closed" : clock.state} — ideas below are based on the last session&apos;s close and are plans for the next open.
-          Prices can gap at the open, so re-check before acting. Auto-refresh is paused; the Refresh button still works.
+          {clock.state === "closed"
+            ? <>Market closed — ideas below are based on the last session&apos;s close plus overnight news, framed as plans for the next open.
+                Prices can gap at the open, so re-check before acting. Auto-refresh is paused; the Refresh button still works.</>
+            : <>{clock.state === "premarket" ? "Premarket" : "After hours"} — ideas factor in live extended-hours prices and fresh news from the Overnight Brief,
+                framed as plans for the next regular session. Option quotes stay stale until the open. Auto-refresh every 10 min; Refresh for the latest.</>}
         </div>
       )}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
         <span className="label" style={{ margin: 0 }}>
           <span className="live" style={closed ? { background: "var(--faint)" } : undefined} />
-          {closed ? "Ideas · auto-refresh paused (market closed)" : "Ideas · refreshes every 60s"}
+          {clock?.state === "closed" ? "Ideas · auto-refresh paused (market closed)"
+            : closed ? "Ideas · extended hours · refreshes every 10 min"
+            : "Ideas · refreshes every 60s"}
         </span>
         <button className="btn" onClick={load} disabled={loading}>{loading ? "Loading..." : "Refresh"}</button>
       </div>

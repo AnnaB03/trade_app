@@ -96,8 +96,11 @@ export async function GET(req) {
       .map(a => `${a.symbol}: "${a.title}" (${a.site}, ${a.publishedDate})`)
       .join("\n");
 
+    const inExtended = clock.state === "premarket" || clock.state === "postmarket";
     const marketStatus = marketOpen
       ? "The market is OPEN — prices below are live."
+      : inExtended
+      ? `The regular session is closed but EXTENDED-HOURS trading is active (${clock.state}). MARKET DATA below shows the last regular-session close; the EXTENDED-HOURS PRICES section shows where each stock is trading RIGHT NOW — treat those as the current prices and base each idea on them, mentioning the extended-hours move when it is meaningful. Option chains do not trade in extended hours, so option quotes are stale until the open. Frame every idea as a PLAN for the next regular session open, and remind the trader once at the top, in one short sentence, that opening prices can differ.`
       : `The market is CLOSED (${clock.description || "weekend/holiday"}). Every price below is from the LAST SESSION'S CLOSE, not live. Frame every idea as a PLAN for the next market open: use wording like "plan to buy at the open" (never "buy now"), and remind the trader once at the top, in one short sentence, that prices can gap at the open so they must re-check before acting.`;
 
     const prompt = `You are a simple trading advisor. A beginner trader is using your app to learn. Analyze this market data and give SIMPLE trading ideas in VERY EASY words (like Robinhood uses).
