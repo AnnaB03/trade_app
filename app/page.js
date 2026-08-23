@@ -1,37 +1,12 @@
 "use client";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import {
+  analyze, toRows, expectedMove, moveVerdict, ivSnapshot, ivRank, ivRankRead, nearestMonthly,
+  oiWalls, todayStr, daysUntil, eventsHeldThrough,
+} from "./lib/metrics";
+import Divergence from "./components/Divergence";
+import Journal from "./components/Journal";
 
-/* ---------- risk math (defined-risk + uncapped-risk detection) ---------- */
-const num = (v) => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
-const intrinsic = (t, K, S) => (t === "call" ? Math.max(S - K, 0) : Math.max(K - S, 0));
-
-function analyze(legs) {
-  const v = legs.filter((l) => l.strike !== "" && l.premium !== "");
-  if (!v.length) return null;
-  const pnl = (S) => v.reduce((s, l) => {
-    const intr = intrinsic(l.type, num(l.strike), S);
-    const per = l.action === "buy" ? intr - num(l.premium) : num(l.premium) - intr;
-    return s + per * (num(l.qty) || 1) * 100;
-  }, 0);
-  const net = v.reduce((s, l) => s + (l.action === "buy" ? 1 : -1) * num(l.premium) * (num(l.qty) || 1) * 100, 0);
-  const callSlope = v.reduce((s, l) => l.type === "call" ? s + (l.action === "buy" ? 1 : -1) * (num(l.qty) || 1) : s, 0);
-  const unlimitedLoss = callSlope < 0, unlimitedProfit = callSlope > 0;
-  const strikes = v.map((l) => num(l.strike));
-  const pts = Array.from(new Set([0, ...strikes, Math.max(...strikes) * 3 + 50])).sort((a, b) => a - b);
-  const samp = pts.map((S) => ({ S, p: pnl(S) }));
-  let maxP = Math.max(...samp.map((d) => d.p)), maxL = Math.min(...samp.map((d) => d.p));
-  if (unlimitedProfit) maxP = Infinity; if (unlimitedLoss) maxL = -Infinity;
-  const bes = [];
-  for (let i = 1; i < samp.length; i++) {
-    const a = samp[i - 1], b = samp[i];
-    if (((a.p <= 0 && b.p >= 0) || (a.p >= 0 && b.p <= 0)) && a.p !== b.p) {
-      const S = a.S + (b.S - a.S) * (0 - a.p) / (b.p - a.p);
-      if (S >= 0) bes.push(S);
-    }
-  }
-  const rr = isFinite(maxP) && isFinite(maxL) && maxL !== 0 ? Math.abs(maxP / maxL) : null;
-  return { net, maxP, maxL, bes, unlimitedLoss, unlimitedProfit, rr };
-}
 const money = (v) => v === Infinity ? "Unlimited ▲" : v === -Infinity ? "UNLIMITED" :
   (v < 0 ? "-$" : "$") + Math.abs(v).toFixed(Math.abs(v) >= 1000 ? 0 : 2);
 const pct = (v) => v == null ? "—" : (v * 100).toFixed(1) + "%";
@@ -126,6 +101,24 @@ function ChainRisk({ symbol, setSymbol }) {
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
   const [legs, setLegs] = useState([]);
+  const [userMove, setUserMove] = useState("");
+  const [ivInfo, setIvInfo] = useState(null);
+  const [events, setEvents] = useState({});
+  const [evLabel, setEvLabel] = useState("");
+  const [evDate, setEvDate] = useState("");
+  const evHydrated = useRef(false);
+
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("cockpit_events"));
+      if (saved && typeof saved === "object") setEvents(saved);
+    } catch {}
+    evHydrated.current = true;
+  }, []);
+  useEffect(() => {
+    if (!evHydrated.current) return;
+    try { localStorage.setItem("cockpit_events", JSON.stringify(events)); } catch {}
+  }, [events]);
 
   useEffect(() => {
     if (symbol && symbol !== loadedSym) { setInput(symbol); loadExp(symbol); }
@@ -133,15 +126,37 @@ function ChainRisk({ symbol, setSymbol }) {
   }, [symbol, loadedSym]);
 
   async function loadExp(sym) {
-    setErr(""); setChain([]); setExp(""); setLoadedSym(sym);
+    setErr(""); setChain([]); setExp(""); setLoadedSym(sym); setIvInfo(null);
     try {
       const [e, q] = await Promise.all([
         getJSON(`/api/expirations?symbol=${sym}`),
         getJSON(`/api/quote?symbols=${sym}`),
       ]);
-      setExps(e.expirations); setSpot(q.quotes[0]?.last ?? null);
+      const spotVal = q.quotes[0]?.last ?? null;
+      setExps(e.expirations); setSpot(spotVal);
       if (e.expirations[0]) loadChain(sym, e.expirations[0]);
+      snapshotIv(sym, e.expirations, spotVal);
     } catch (er) { setErr(er.message); }
+  }
+
+  // IV snapshot from the nearest monthly expiration; history in localStorage → IV Rank
+  async function snapshotIv(sym, expsList, spotVal) {
+    try {
+      const mExp = nearestMonthly(expsList);
+      if (!mExp || spotVal == null) return;
+      const d = await getJSON(`/api/chain?symbol=${sym}&expiration=${mExp}`);
+      const snap = ivSnapshot(toRows(d.options), spotVal);
+      if (snap == null) return;
+      let prior = [];
+      try {
+        const store = JSON.parse(localStorage.getItem("iv_history") || "{}");
+        prior = (store[sym] || []).filter((h) => h.date !== todayStr());
+        store[sym] = [...prior, { date: todayStr(), iv: snap }].slice(-250);
+        localStorage.setItem("iv_history", JSON.stringify(store));
+      } catch {}
+      const { rank, n } = ivRank(prior, snap);
+      setIvInfo({ snap, rank, n, monthly: mExp });
+    } catch {}
   }
   async function loadChain(sym, expiration) {
     setExp(expiration); setLoading(true); setErr("");
@@ -149,11 +164,19 @@ function ChainRisk({ symbol, setSymbol }) {
     catch (er) { setErr(er.message); } finally { setLoading(false); }
   }
 
-  const strikes = useMemo(() => {
-    const m = {};
-    chain.forEach((o) => { (m[o.strike] = m[o.strike] || {})[o.type] = o; });
-    return Object.keys(m).map(Number).sort((a, b) => a - b).map((k) => ({ strike: k, ...m[k] }));
-  }, [chain]);
+  const strikes = useMemo(() => toRows(chain), [chain]);
+  const em = useMemo(() => expectedMove(strikes, spot), [strikes, spot]);
+  const walls = useMemo(() => oiWalls(strikes), [strikes]);
+  const verdict = em && userMove !== "" ? moveVerdict(parseFloat(userMove), em.emPct * 100) : null;
+
+  const symEvents = events[loadedSym] || [];
+  const heldThrough = legs.length > 0 && exp ? eventsHeldThrough(symEvents, exp) : [];
+  const addEvent = () => {
+    if (!evLabel.trim() || !evDate || !loadedSym) return;
+    setEvents((ev) => ({ ...ev, [loadedSym]: [...(ev[loadedSym] || []), { label: evLabel.trim(), date: evDate }].sort((a, b) => a.date < b.date ? -1 : 1) }));
+    setEvLabel(""); setEvDate("");
+  };
+  const removeEvent = (i) => setEvents((ev) => ({ ...ev, [loadedSym]: symEvents.filter((_, j) => j !== i) }));
 
   const addLeg = (o, action) => {
     const mid = o.bid != null && o.ask != null ? ((Number(o.bid) + Number(o.ask)) / 2) : Number(o.last || 0);
@@ -183,6 +206,51 @@ function ChainRisk({ symbol, setSymbol }) {
       </div>
 
       {err && <div className="err">{err}</div>}
+
+      {em && exp && (
+        <div className="card">
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+            <span className="label" style={{ margin: 0 }}>Expected move · straddle-implied</span>
+            {ivInfo && (
+              <span className="badge">
+                IV snapshot: {(ivInfo.snap * 100).toFixed(1)}%{" · "}
+                {ivInfo.rank != null
+                  ? <>IV Rank: {ivInfo.rank.toFixed(0)} ({ivRankRead(ivInfo.rank)})</>
+                  : <>IV Rank: n/a — building history ({ivInfo.n} day{ivInfo.n === 1 ? "" : "s"})</>}
+              </span>
+            )}
+          </div>
+          <div style={{ fontFamily: "var(--serif)", fontSize: 22, margin: "10px 0 4px" }}>
+            Market implies <b>±${em.em.toFixed(2)}</b> (±{(em.emPct * 100).toFixed(1)}%) by {exp}
+          </div>
+          <div className="mono muted" style={{ fontSize: 12.5 }}>
+            Implied range: ${em.low.toFixed(2)} … ${em.high.toFixed(2)} · ATM strike {em.atmStrike}
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 12 }}>
+            <span className="mono" style={{ fontSize: 12.5 }}>Your expected move %:</span>
+            <input className="in" style={{ width: 80 }} placeholder="e.g. 5" inputMode="decimal"
+              value={userMove} onChange={(e) => setUserMove(e.target.value.replace(/[^0-9.]/g, ""))} />
+            {verdict && (
+              <span className={verdict.tone === "bull" ? "up" : verdict.tone === "bear" ? "down" : "muted"}
+                style={{ fontSize: 13, fontWeight: 600 }}>{verdict.text}</span>
+            )}
+          </div>
+          {walls && (
+            <div className="mono" style={{ fontSize: 12.5, marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--line)" }}>
+              {walls.callWall && <>Call wall <b>{walls.callWall.strike}</b> (OI {walls.callWall.oi.toLocaleString()})</>}
+              {walls.callWall && walls.putWall && " · "}
+              {walls.putWall && <>Put wall <b>{walls.putWall.strike}</b> (OI {walls.putWall.oi.toLocaleString()})</>}
+              {walls.pc != null && <> · P/C {walls.pc.toFixed(2)} <span className="muted">— {walls.note}</span></>}
+            </div>
+          )}
+        </div>
+      )}
+
+      {heldThrough.map((ev) => (
+        <div className="warn" key={ev.label + ev.date}>
+          ⚠ You are holding through {ev.label} in {daysUntil(ev.date)} day{daysUntil(ev.date) === 1 ? "" : "s"} — expect IV crush after.
+        </div>
+      ))}
 
       {a && a.unlimitedLoss && (
         <div className="danger"><b>⚠ UNCAPPED RISK — DO NOT SUBMIT BLIND</b>
@@ -214,6 +282,29 @@ function ChainRisk({ symbol, setSymbol }) {
         </div>
       )}
 
+      {loadedSym && (
+        <div className="card">
+          <span className="label">Event risk · {loadedSym} · add earnings / deliveries / Fed dates — we don&apos;t auto-fetch these</span>
+          {symEvents.map((ev, i) => (
+            <div className="leg" key={ev.label + ev.date}>
+              <span>
+                <b>{ev.label}</b> · {ev.date} ·{" "}
+                <span className={daysUntil(ev.date) < 0 ? "muted" : "mono"}>
+                  {daysUntil(ev.date) < 0 ? "past" : daysUntil(ev.date) === 0 ? "today" : `in ${daysUntil(ev.date)} day${daysUntil(ev.date) === 1 ? "" : "s"}`}
+                </span>
+              </span>
+              <button className="x" onClick={() => removeEvent(i)}>×</button>
+            </div>
+          ))}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+            <input className="in" style={{ width: 160 }} placeholder="Event (e.g. Earnings)" value={evLabel}
+              onChange={(e) => setEvLabel(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addEvent()} />
+            <input className="in" type="date" value={evDate} onChange={(e) => setEvDate(e.target.value)} />
+            <button className="chip" onClick={addEvent}>+ add event</button>
+          </div>
+        </div>
+      )}
+
       {loading && <div className="card muted">Loading chain…</div>}
 
       {strikes.length > 0 && (
@@ -228,13 +319,14 @@ function ChainRisk({ symbol, setSymbol }) {
             <tbody>
               {strikes.map((r) => {
                 const atm = spot != null && Math.abs(r.strike - spot) <= (strikes[1]?.strike - strikes[0]?.strike || 5) / 2;
+                const cWall = walls?.callWall?.strike === r.strike, pWall = walls?.putWall?.strike === r.strike;
                 return (
                   <tr key={r.strike} className={atm ? "atm" : ""}>
-                    <td>{f2(r.call?.delta)}</td><td>{pct(r.call?.iv)}</td><td className="muted">{r.call?.oi ?? "—"}</td>
+                    <td>{f2(r.call?.delta)}</td><td>{pct(r.call?.iv)}</td><td className={cWall ? "wall" : "muted"}>{r.call?.oi ?? "—"}</td>
                     <td>{r.call ? <span><button className="chip" style={{ padding: "2px 6px" }} onClick={() => addLeg(r.call, "buy")}>{f2(r.call.bid)}</button>×<button className="chip" style={{ padding: "2px 6px" }} onClick={() => addLeg(r.call, "sell")}>{f2(r.call.ask)}</button></span> : "—"}</td>
                     <td className="strike-col">{r.strike}</td>
                     <td>{r.put ? <span><button className="chip" style={{ padding: "2px 6px" }} onClick={() => addLeg(r.put, "buy")}>{f2(r.put.bid)}</button>×<button className="chip" style={{ padding: "2px 6px" }} onClick={() => addLeg(r.put, "sell")}>{f2(r.put.ask)}</button></span> : "—"}</td>
-                    <td className="muted">{r.put?.oi ?? "—"}</td><td>{pct(r.put?.iv)}</td><td>{f2(r.put?.delta)}</td>
+                    <td className={pWall ? "wall" : "muted"}>{r.put?.oi ?? "—"}</td><td>{pct(r.put?.iv)}</td><td>{f2(r.put?.delta)}</td>
                   </tr>
                 );
               })}
@@ -299,10 +391,14 @@ export default function Page() {
       <div className="tabs">
         <button className={"tab" + (tab === "watch" ? " on" : "")} onClick={() => setTab("watch")}>Watchlist</button>
         <button className={"tab" + (tab === "chain" ? " on" : "")} onClick={() => setTab("chain")}>Chain &amp; Risk</button>
+        <button className={"tab" + (tab === "div" ? " on" : "")} onClick={() => setTab("div")}>Divergence</button>
+        <button className={"tab" + (tab === "journal" ? " on" : "")} onClick={() => setTab("journal")}>Journal</button>
         <button className={"tab" + (tab === "ideas" ? " on" : "")} onClick={() => setTab("ideas")}>Ideas</button>
       </div>
       {tab === "watch" && <Watchlist onPick={pick} />}
       {tab === "chain" && <ChainRisk symbol={symbol} setSymbol={setSymbol} />}
+      {tab === "div" && <Divergence />}
+      {tab === "journal" && <Journal />}
       {tab === "ideas" && <Ideas />}
       <div className="foot">
         Informational only — not financial advice. Real-time data requires a funded Tradier brokerage account; without one the feed is delayed.
