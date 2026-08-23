@@ -46,6 +46,63 @@ const DEFAULT_SYMS = ["SPY", "SPX", "QQQ", "NVDA", "TSLA", "AMD"];
 const WATCH_VERSION = 1;
 const ADDED_SYMS = [{ v: 1, sym: "SPX" }];
 
+/* Market-wide top movers. "News movers" = fresh headlines cross-priced against
+   Tradier extended-session trades, ranked by |pre/post-market move| — catches
+   news-driven gaps (the Moderna-at-8am case) before any session gainers list.
+   "Last session" = FMP gainers/losers filtered to tradeable names (≥$5, common
+   stock, no leveraged ETFs). Tap a symbol to load its chain. */
+function TopMovers({ onPick }) {
+  const [data, setData] = useState(null);
+
+  useEffect(() => {
+    let on = true;
+    const load = () => getJSON("/api/movers").then((d) => { if (on) setData(d.available ? d : null); }).catch(() => {});
+    load();
+    const t = setInterval(load, 300000);
+    return () => { on = false; clearInterval(t); };
+  }, []);
+
+  if (!data) return null;
+  const { gainers, losers } = data.session;
+  const row = (m, chgPct, extra) => (
+    <div key={m.symbol} style={{ padding: "7px 0", borderBottom: "1px solid var(--line)" }}>
+      <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap", fontFamily: "var(--mono)", fontSize: 13 }}>
+        <button className="chip" style={{ padding: "2px 8px", fontWeight: 700 }} onClick={() => onPick(m.symbol)}>{m.symbol}</button>
+        <span className={chgPct < 0 ? "down" : "up"} style={{ fontWeight: 600 }}>{chgPct >= 0 ? "+" : ""}{chgPct.toFixed(1)}%</span>
+        {extra}
+      </div>
+      {m.headline && (
+        <div className="muted" style={{ fontSize: 12.5, marginTop: 3 }}>
+          “{m.headline.title}” <span style={{ opacity: 0.7 }}>— {m.headline.site}{m.headline.publishedDate ? `, ${String(m.headline.publishedDate).slice(0, 16)}` : ""}</span>
+        </div>
+      )}
+    </div>
+  );
+  return (
+    <div className="card">
+      <span className="label">Top movers · tap a symbol for its chain · filtered: ≥$5, common stocks, no leveraged ETFs</span>
+      {data.extended.length > 0 && (
+        <>
+          <div className="mono" style={{ fontSize: 12, fontWeight: 700, margin: "4px 0 2px" }}>News movers · extended hours</div>
+          {data.extended.map((m) => row(m, m.extChangePct, <span className="muted">ext ${f2(m.ext)}</span>))}
+        </>
+      )}
+      {gainers.length > 0 && (
+        <>
+          <div className="mono" style={{ fontSize: 12, fontWeight: 700, margin: "10px 0 2px" }}>Last session · gainers</div>
+          {gainers.slice(0, 5).map((m) => row(m, m.changePct, <span className="muted">${f2(m.price)} · {m.name?.slice(0, 40)}</span>))}
+        </>
+      )}
+      {losers.length > 0 && (
+        <>
+          <div className="mono" style={{ fontSize: 12, fontWeight: 700, margin: "10px 0 2px" }}>Last session · losers</div>
+          {losers.slice(0, 5).map((m) => row(m, m.changePct, <span className="muted">${f2(m.price)} · {m.name?.slice(0, 40)}</span>))}
+        </>
+      )}
+    </div>
+  );
+}
+
 /* What moved since the close: last pre/post-market trade per symbol (Tradier
    extended-session timesales) + fresh headlines (FMP). Shown only outside
    regular hours — this is where Monday's gaps come from. */
@@ -214,6 +271,7 @@ function Watchlist({ onPick }) {
         </tbody>
       </table>
     </div>
+    <TopMovers onPick={onPick} />
     {closed && <OvernightBrief syms={syms} />}
     </>
   );
