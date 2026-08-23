@@ -1,3 +1,18 @@
+// Generic FMP GET against the /stable API. Returns parsed JSON, or null when the
+// key is missing or the call fails — callers degrade gracefully rather than 502.
+export async function fmpGet(path, params = {}) {
+  const key = process.env.FMP_API_KEY;
+  if (!key) return null;
+  const qs = new URLSearchParams({ ...params, apikey: key }).toString();
+  try {
+    const r = await fetch(`https://financialmodelingprep.com/stable/${path}?${qs}`, { cache: "no-store" });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch {
+    return null;
+  }
+}
+
 // FMP stock news, shared by /api/news and /api/suggestions. Requires FMP Starter plan or higher.
 // Fetches per symbol (not one combined call) — FMP's `limit` caps the whole combined
 // response, so a noisy ticker (e.g. NVDA) would otherwise crowd out quieter ones.

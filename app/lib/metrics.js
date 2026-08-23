@@ -144,6 +144,47 @@ export function divergence(price30Pct, sentiment) {
   return { score, label, priceNorm, sentNorm };
 }
 
+/* Feature 7 — Option liquidity: bid–ask spread as a fraction of mid.
+   The spread is what you pay the market maker to get in AND out; wide spreads
+   quietly eat more than most losing theses. null when unquotable (no bid). */
+export function spreadPct(o) {
+  if (!o) return null;
+  const b = Number(o.bid), a = Number(o.ask);
+  if (!(a > 0) || !(b >= 0) || a < b) return null;
+  const mid = (a + b) / 2;
+  if (!(mid > 0)) return null;
+  return (a - b) / mid;
+}
+// tiers: ok ≤4% · wide ≤8% · bad >8% (or no bid at all)
+export const spreadFlag = (p) => p == null ? "bad" : p > 0.08 ? "bad" : p > 0.04 ? "wide" : "ok";
+export const spreadRead = (flag) =>
+  flag === "bad" ? "very wide/no market — entry+exit slippage will be severe"
+  : flag === "wide" ? "wide market — use limit orders at mid, expect to give some up"
+  : "tight market";
+
+/* Feature 8 — Realized (historical) volatility: annualized stdev of daily log
+   returns over the last n closes, ×√252. Compare with implied: IV >> HV means
+   options are pricing more movement than the stock has delivered (rich);
+   IV << HV means cheaper than delivered movement. */
+export function realizedVol(closes, n) {
+  const c = (closes || []).map(Number).filter((v) => v > 0);
+  if (c.length < n + 1) return null;
+  const w = c.slice(-(n + 1));
+  const rets = [];
+  for (let i = 1; i < w.length; i++) rets.push(Math.log(w[i] / w[i - 1]));
+  const mean = rets.reduce((s, r) => s + r, 0) / rets.length;
+  const varc = rets.reduce((s, r) => s + (r - mean) ** 2, 0) / (rets.length - 1);
+  return Math.sqrt(varc) * Math.sqrt(252);
+}
+
+export function ivHvRead(iv, hv) {
+  if (!(iv > 0) || !(hv > 0)) return null;
+  const ratio = iv / hv;
+  if (ratio >= 1.25) return { ratio, tone: "sell", text: "options EXPENSIVE vs realized — edge favors selling premium / credit spreads" };
+  if (ratio <= 0.8) return { ratio, tone: "buy", text: "options CHEAP vs realized — edge favors buying premium / debit spreads" };
+  return { ratio, tone: "fair", text: "options fairly priced vs realized movement — no vol edge either way" };
+}
+
 /* Feature 6 — Journal stats (closed = status other than open; win = status "won") */
 export function journalStats(entries) {
   const closed = (entries || []).filter((e) => e.status && e.status !== "open");

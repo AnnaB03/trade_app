@@ -18,6 +18,7 @@ export async function GET(req) {
       start: bars[0].date, end: bars[bars.length - 1].date,
       first_close: first, last_close: last,
       change_pct: ((last - first) / first) * 100,
+      closes: bars.map((b) => Number(b.close)),
     });
   } catch (e) {
     return NextResponse.json({ error: String(e.message || e) }, { status: 502 });

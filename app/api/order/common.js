@@ -1,6 +1,25 @@
 import { sandboxLockError, tradeFetch, accountId, asArray } from "../tradeClient";
-import { validateLegs, gateA, gateB, gateC, buildOrderForm, netPremium } from "../../lib/orders";
+import { validateLegs, gateA, gateB, gateC, gateE, buildOrderForm, netPremium } from "../../lib/orders";
 import { analyze } from "../../lib/metrics";
+import { tradier, asArray as asArr } from "../tradier";
+
+// Live NBBO for each leg's OCC symbol, for the liquidity gate. [] on failure —
+// gateE then reports itself unavailable instead of blocking the order.
+async function fetchLegQuotes(legs) {
+  try {
+    const occs = legs.map((l) => l.occ).join(",");
+    const d = await tradier(`/markets/quotes?symbols=${encodeURIComponent(occs)}`);
+    const qs = asArr(d?.quotes?.quote);
+    return legs
+      .map((l) => {
+        const q = qs.find((x) => x.symbol === l.occ);
+        return q ? { occ: l.occ, bid: q.bid, ask: q.ask } : null;
+      })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
 
 export const MAX_LOSS_CAP = () => {
   const n = Number(process.env.MAX_LOSS_PER_TRADE);
@@ -43,7 +62,9 @@ export async function vetOrder(body, { preview }) {
     const c = gateC(legs, MAX_LOSS_CAP(), b);
     if (!c.ok) return { error: c.msg, status: 422, gates: { a, b, c } };
     if (!b.ok) return { error: b.msg, status: 422, gates: { a, b, c }, needs_ack: true, figure: b.figure };
-    gates = { a, b, c };
+    const e = gateE(await fetchLegQuotes(legs), body?.ack_wide_spread);
+    if (!e.ok) return { error: e.msg, status: 422, gates: { a, b, c, e }, needs_spread_ack: true, worst_spread: e.worst };
+    gates = { a, b, c, e };
   }
 
   const risk = analyze(legs);

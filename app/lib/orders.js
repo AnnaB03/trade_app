@@ -84,6 +84,29 @@ export function gateD({ closing, thesis, exit_plan, outcome_note }) {
     : { ok: true, msg: "Thesis and exit plan present" };
 }
 
+/* Gate E — liquidity: bid–ask spread vs mid, from LIVE quotes fetched server-side
+   at vet time (never trusted from the client). Spread >8% of mid (or an unquotable
+   market) requires explicit ack — slippage on entry+exit is a real cost, not noise.
+   legQuotes: [{ occ, bid, ask }] */
+export function gateE(legQuotes, ack) {
+  if (!Array.isArray(legQuotes) || !legQuotes.length) {
+    return { ok: true, required: false, unavailable: true, msg: "Liquidity check unavailable — could not fetch live option quotes" };
+  }
+  const worst = legQuotes.reduce((w, q) => {
+    const b = Number(q.bid), a = Number(q.ask);
+    const mid = (a + b) / 2;
+    const p = a > 0 && b >= 0 && a >= b && mid > 0 ? (a - b) / mid : null; // null = no real market
+    return w === undefined || p === null || (w !== null && p > w) ? p : w;
+  }, undefined);
+  const pctTxt = worst == null ? "no bid (unquotable)" : `${(worst * 100).toFixed(1)}% of mid`;
+  if (worst != null && worst <= 0.08) {
+    return { ok: true, required: false, worst, msg: `Spreads acceptable (worst ${pctTxt})` };
+  }
+  return ack === true
+    ? { ok: true, required: true, worst, msg: `Acknowledged: wide market (worst spread ${pctTxt}) — expect slippage both ways` }
+    : { ok: false, required: true, worst, msg: `Wide market: worst leg spread is ${pctTxt}. Slippage will cost you on entry AND exit. Tick the acknowledgement to proceed.` };
+}
+
 /* Tradier order form — exact shapes from the brief. Limit orders only. */
 export function buildOrderForm(legs, { closing = false, limitPrice = null, preview = false } = {}) {
   const underlying = parseOcc(legs[0].occ).underlying;

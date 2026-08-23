@@ -40,6 +40,10 @@ tr.atm td{background:rgba(28,58,79,.06);}
 .metric{text-align:center;} .metric .k{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);}
 .metric .v{font-family:var(--mono);font-size:21px;font-weight:600;margin-top:4px;}
 .up{color:var(--bull);} .down{color:var(--bear);}
+.sp-wide{display:inline-block;border-bottom:2px dotted #A37820;padding-bottom:1px;}
+.sp-bad{display:inline-block;border-bottom:2px solid var(--bear);padding-bottom:1px;}
+.stat-rt{color:var(--bull);border-color:rgba(65,104,78,.5);font-weight:600;}
+.stat-delay{color:#7A5C15;border-color:rgba(163,120,32,.5);font-weight:600;}
 .muted{color:var(--muted);} .mono{font-family:var(--mono);}
 .leg{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;font-family:var(--mono);font-size:13px;padding:7px 0;border-bottom:1px solid var(--line);}
 .x{background:none;border:0;color:var(--faint);font-size:17px;cursor:pointer;}

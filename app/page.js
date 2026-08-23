@@ -3,6 +3,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
   analyze, toRows, expectedMove, moveVerdict, ivSnapshot, ivRank, ivRankRead, nearestMonthly,
   oiWalls, todayStr, daysUntil, eventsHeldThrough,
+  spreadPct, spreadFlag, spreadRead, realizedVol, ivHvRead,
 } from "./lib/metrics";
 import Divergence from "./components/Divergence";
 import Journal from "./components/Journal";
@@ -107,6 +108,21 @@ function Watchlist({ onPick }) {
 }
 
 /* ---------- chain + risk builder ---------- */
+// Bid×Ask pair with a liquidity underline: dotted = spread >4% of mid, solid = >8% or no bid
+function SpreadCell({ o, onBuy, onSell }) {
+  const p = spreadPct(o);
+  const flag = spreadFlag(p);
+  const cls = flag === "bad" ? "sp-bad" : flag === "wide" ? "sp-wide" : "";
+  const tip = p != null ? `spread ${(p * 100).toFixed(1)}% of mid — ${spreadRead(flag)}` : `no bid — ${spreadRead(flag)}`;
+  return (
+    <span className={cls} title={flag === "ok" ? undefined : tip}>
+      <button className="chip" style={{ padding: "2px 6px" }} onClick={onBuy}>{f2(o.bid)}</button>
+      ×
+      <button className="chip" style={{ padding: "2px 6px" }} onClick={onSell}>{f2(o.ask)}</button>
+    </span>
+  );
+}
+
 function ChainRisk({ symbol, setSymbol }) {
   const [input, setInput] = useState(symbol || "");
   const [loadedSym, setLoadedSym] = useState("");
@@ -119,6 +135,9 @@ function ChainRisk({ symbol, setSymbol }) {
   const [legs, setLegs] = useState([]);
   const [userMove, setUserMove] = useState("");
   const [ivInfo, setIvInfo] = useState(null);
+  const [hv, setHv] = useState(null);          // { hv20, hv60 } realized vol
+  const [autoEvents, setAutoEvents] = useState([]); // earnings + macro from FMP
+  const [street, setStreet] = useState(null);  // analyst target consensus
   const [events, setEvents] = useState({});
   const [evLabel, setEvLabel] = useState("");
   const [evDate, setEvDate] = useState("");
@@ -142,7 +161,8 @@ function ChainRisk({ symbol, setSymbol }) {
   }, [symbol, loadedSym]);
 
   async function loadExp(sym) {
-    setErr(""); setChain([]); setExp(""); setLoadedSym(sym); setIvInfo(null);
+    setErr(""); setChain([]); setExp(""); setLoadedSym(sym);
+    setIvInfo(null); setHv(null); setAutoEvents([]); setStreet(null);
     try {
       const [e, q] = await Promise.all([
         getJSON(`/api/expirations?symbol=${sym}`),
@@ -152,7 +172,21 @@ function ChainRisk({ symbol, setSymbol }) {
       setExps(e.expirations); setSpot(spotVal);
       if (e.expirations[0]) loadChain(sym, e.expirations[0]);
       snapshotIv(sym, e.expirations, spotVal);
+      loadContext(sym);
     } catch (er) { setErr(er.message); }
+  }
+
+  // Context fetches — each degrades independently; none blocks the chain.
+  function loadContext(sym) {
+    getJSON(`/api/history?symbol=${sym}&days=160`)
+      .then((h) => setHv({ hv20: realizedVol(h.closes, 20), hv60: realizedVol(h.closes, 60) }))
+      .catch(() => {});
+    getJSON(`/api/events?symbol=${sym}`)
+      .then((d) => setAutoEvents(d.events || []))
+      .catch(() => {});
+    getJSON(`/api/analyst?symbol=${sym}`)
+      .then((d) => setStreet(d.available ? d : null))
+      .catch(() => {});
   }
 
   // IV snapshot from the nearest monthly expiration; history in localStorage → IV Rank
@@ -186,7 +220,8 @@ function ChainRisk({ symbol, setSymbol }) {
   const verdict = em && userMove !== "" ? moveVerdict(parseFloat(userMove), em.emPct * 100) : null;
 
   const symEvents = events[loadedSym] || [];
-  const heldThrough = legs.length > 0 && exp ? eventsHeldThrough(symEvents, exp) : [];
+  const allEvents = [...autoEvents, ...symEvents];
+  const heldThrough = legs.length > 0 && exp ? eventsHeldThrough(allEvents, exp) : [];
   const addEvent = () => {
     if (!evLabel.trim() || !evDate || !loadedSym) return;
     setEvents((ev) => ({ ...ev, [loadedSym]: [...(ev[loadedSym] || []), { label: evLabel.trim(), date: evDate }].sort((a, b) => a.date < b.date ? -1 : 1) }));
@@ -196,9 +231,18 @@ function ChainRisk({ symbol, setSymbol }) {
 
   const addLeg = (o, action) => {
     const mid = o.bid != null && o.ask != null ? ((Number(o.bid) + Number(o.ask)) / 2) : Number(o.last || 0);
-    setLegs((ls) => [...ls, { action, type: o.type, strike: String(o.strike), premium: mid.toFixed(2), qty: 1 }]);
+    setLegs((ls) => [...ls, { action, type: o.type, strike: String(o.strike), premium: mid.toFixed(2), qty: 1, bid: o.bid, ask: o.ask }]);
   };
   const a = useMemo(() => analyze(legs), [legs]);
+  // worst bid–ask spread across legs (display-side; the order gate re-checks live server-side)
+  const worstLegSpread = useMemo(() => {
+    const ps = legs.map((l) => spreadPct(l));
+    if (!ps.length) return null;
+    if (ps.some((p) => p == null)) return { p: null, flag: "bad" };
+    const p = Math.max(...ps);
+    return { p, flag: spreadFlag(p) };
+  }, [legs]);
+  const ivhv = ivInfo && hv?.hv20 ? ivHvRead(ivInfo.snap, hv.hv20) : null;
 
   return (
     <>
@@ -211,6 +255,13 @@ function ChainRisk({ symbol, setSymbol }) {
           <button className="btn" onClick={() => input.trim() && (setSymbol(input.trim()), loadExp(input.trim()))}>Load chain</button>
           {spot != null && <span className="mono" style={{ alignSelf: "center" }}>Spot: <b>${f2(spot)}</b></span>}
         </div>
+        {street && spot != null && (
+          <div className="mono muted" style={{ fontSize: 12, marginTop: 8 }}>
+            Street 12-mo target: <b>${f2(street.median ?? street.consensus)}</b> (range ${f2(street.low)}–${f2(street.high)})
+            {" · "}{((((street.median ?? street.consensus) - spot) / spot) * 100).toFixed(1)}% vs spot
+            <span className="muted"> — analyst consensus, context not signal</span>
+          </div>
+        )}
         {exps.length > 0 && (
           <div style={{ marginTop: 12 }}>
             <span className="label">Expiration</span>
@@ -242,6 +293,19 @@ function ChainRisk({ symbol, setSymbol }) {
           <div className="mono muted" style={{ fontSize: 12.5 }}>
             Implied range: ${em.low.toFixed(2)} … ${em.high.toFixed(2)} · ATM strike {em.atmStrike}
           </div>
+          {hv && (hv.hv20 || hv.hv60) && (
+            <div className="mono" style={{ fontSize: 12.5, marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--line)" }}>
+              Realized vol: {hv.hv20 ? <>HV20 <b>{(hv.hv20 * 100).toFixed(1)}%</b></> : null}
+              {hv.hv20 && hv.hv60 ? " · " : null}
+              {hv.hv60 ? <>HV60 <b>{(hv.hv60 * 100).toFixed(1)}%</b></> : null}
+              {ivInfo && <> · IV <b>{(ivInfo.snap * 100).toFixed(1)}%</b></>}
+              {ivhv && (
+                <span className={ivhv.tone === "sell" ? "down" : ivhv.tone === "buy" ? "up" : "muted"} style={{ fontWeight: 600 }}>
+                  {" "}— IV/HV20 {ivhv.ratio.toFixed(2)}: {ivhv.text}
+                </span>
+              )}
+            </div>
+          )}
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 12 }}>
             <span className="mono" style={{ fontSize: 12.5 }}>Your expected move %:</span>
             <input className="in" style={{ width: 80 }} placeholder="e.g. 5" inputMode="decimal"
@@ -285,6 +349,11 @@ function ChainRisk({ symbol, setSymbol }) {
               <button className="x" onClick={() => setLegs(legs.filter((_, j) => j !== i))}>×</button>
             </div>
           ))}
+          {worstLegSpread && worstLegSpread.flag !== "ok" && (
+            <div className="mono" style={{ fontSize: 12.5, color: "#7A5C15", padding: "8px 0" }}>
+              ⚠ Liquidity: worst leg spread {worstLegSpread.p != null ? (worstLegSpread.p * 100).toFixed(1) + "% of mid" : "no bid — unquotable"} — {spreadRead(worstLegSpread.flag)}.
+            </div>
+          )}
           <div className="metrics" style={{ marginTop: 14 }}>
             <div className="metric"><div className="k">Max profit</div><div className="v" style={{ color: a.unlimitedProfit ? "var(--bull)" : "var(--ink)" }}>{money(a.maxP)}</div></div>
             <div className="metric"><div className="k">Max loss</div><div className="v" style={{ color: a.unlimitedLoss ? "var(--bear)" : "var(--ink)" }}>{money(a.maxL)}</div></div>
@@ -300,7 +369,18 @@ function ChainRisk({ symbol, setSymbol }) {
 
       {loadedSym && (
         <div className="card">
-          <span className="label">Event risk · {loadedSym} · add earnings / deliveries / Fed dates — we don&apos;t auto-fetch these</span>
+          <span className="label">Event risk · {loadedSym} · earnings &amp; high-impact macro auto-fetched (FMP) — add your own below</span>
+          {autoEvents.map((ev) => (
+            <div className="leg" key={"auto" + ev.label + ev.date}>
+              <span>
+                <b>{ev.label}</b> · {ev.date} ·{" "}
+                <span className={daysUntil(ev.date) < 0 ? "muted" : "mono"}>
+                  {daysUntil(ev.date) < 0 ? "past" : daysUntil(ev.date) === 0 ? "today" : `in ${daysUntil(ev.date)} day${daysUntil(ev.date) === 1 ? "" : "s"}`}
+                </span>
+              </span>
+              <span className="badge" style={{ fontSize: 10, padding: "2px 6px" }}>{ev.kind === "earnings" ? "auto · earnings" : "auto · macro"}</span>
+            </div>
+          ))}
           {symEvents.map((ev, i) => (
             <div className="leg" key={ev.label + ev.date}>
               <span>
@@ -325,7 +405,7 @@ function ChainRisk({ symbol, setSymbol }) {
 
       {strikes.length > 0 && (
         <div className="card" style={{ overflowX: "auto" }}>
-          <span className="label">Chain · {exp} · tap a price to add a leg (buy)/(sell) · IV &amp; Greeks live from Tradier/ORATS</span>
+          <span className="label">Chain · {exp} · tap a price to add a leg (buy)/(sell) · underline = wide spread (dotted &gt;4%, solid &gt;8% of mid)</span>
           <table>
             <thead><tr>
               <th>C Δ</th><th>C IV</th><th>C OI</th><th>C Bid×Ask</th>
@@ -339,9 +419,9 @@ function ChainRisk({ symbol, setSymbol }) {
                 return (
                   <tr key={r.strike} className={atm ? "atm" : ""}>
                     <td>{f2(r.call?.delta)}</td><td>{pct(r.call?.iv)}</td><td className={cWall ? "wall" : "muted"}>{r.call?.oi ?? "—"}</td>
-                    <td>{r.call ? <span><button className="chip" style={{ padding: "2px 6px" }} onClick={() => addLeg(r.call, "buy")}>{f2(r.call.bid)}</button>×<button className="chip" style={{ padding: "2px 6px" }} onClick={() => addLeg(r.call, "sell")}>{f2(r.call.ask)}</button></span> : "—"}</td>
+                    <td>{r.call ? <SpreadCell o={r.call} onBuy={() => addLeg(r.call, "buy")} onSell={() => addLeg(r.call, "sell")} /> : "—"}</td>
                     <td className="strike-col">{r.strike}</td>
-                    <td>{r.put ? <span><button className="chip" style={{ padding: "2px 6px" }} onClick={() => addLeg(r.put, "buy")}>{f2(r.put.bid)}</button>×<button className="chip" style={{ padding: "2px 6px" }} onClick={() => addLeg(r.put, "sell")}>{f2(r.put.ask)}</button></span> : "—"}</td>
+                    <td>{r.put ? <SpreadCell o={r.put} onBuy={() => addLeg(r.put, "buy")} onSell={() => addLeg(r.put, "sell")} /> : "—"}</td>
                     <td className={pWall ? "wall" : "muted"}>{r.put?.oi ?? "—"}</td><td>{pct(r.put?.iv)}</td><td>{f2(r.put?.delta)}</td>
                   </tr>
                 );
@@ -403,10 +483,29 @@ function Ideas() {
 export default function Page() {
   const [tab, setTab] = useState("watch");
   const [symbol, setSymbol] = useState("");
+  const [status, setStatus] = useState(null);
   const pick = (s) => { setSymbol(s); setTab("chain"); };
+
+  useEffect(() => {
+    getJSON("/api/status").then(setStatus).catch(() => {});
+  }, []);
+
   return (
     <div className="wrap">
-      <span className="eyebrow">Options Desk · Live Cockpit</span>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+        <span className="eyebrow">Options Desk · Live Cockpit</span>
+        {status && (
+          <span style={{ display: "flex", gap: 6 }}>
+            <span className={"badge " + (status.data === "realtime" ? "stat-rt" : "stat-delay")}
+              title={status.data === "realtime" ? "Production Tradier — real-time quotes" : "Sandbox Tradier — quotes are ~15 min delayed. Set TRADIER_TOKEN (production) for real-time."}>
+              {status.data === "realtime" ? "● DATA: REALTIME" : "● DATA: DELAYED (sandbox)"}
+            </span>
+            <span className="badge" title="Order routes are hard-locked to the Tradier sandbox — staged orders never touch real money.">
+              ORDERS: PAPER
+            </span>
+          </span>
+        )}
+      </div>
       <h1>The Cockpit</h1>
       <p className="sub">Live quotes and chains from your Tradier account, with defined-risk math built in.</p>
       <div className="tabs">
