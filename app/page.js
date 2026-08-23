@@ -21,8 +21,16 @@ async function getJSON(url) {
 }
 
 /* ---------- watchlist ---------- */
+const DEFAULT_SYMS = ["SPY", "SPX", "QQQ", "NVDA", "TSLA", "AMD"];
+// Symbols added to DEFAULT_SYMS after launch, tagged with the version that introduced
+// them. Each is merged into an already-saved watchlist exactly once, so new defaults
+// reach existing users without resurrecting symbols they deliberately deleted.
+// When adding another, append it here and bump WATCH_VERSION to match.
+const WATCH_VERSION = 1;
+const ADDED_SYMS = [{ v: 1, sym: "SPX" }];
+
 function Watchlist({ onPick }) {
-  const [syms, setSyms] = useState(["SPY", "QQQ", "NVDA", "TSLA", "AMD"]);
+  const [syms, setSyms] = useState(DEFAULT_SYMS);
   const [quotes, setQuotes] = useState([]);
   const [err, setErr] = useState("");
   const [add, setAdd] = useState("");
@@ -32,7 +40,15 @@ function Watchlist({ onPick }) {
   useEffect(() => {
     try {
       const saved = JSON.parse(localStorage.getItem("cockpit_watch"));
-      if (Array.isArray(saved) && saved.length) setSyms(saved);
+      if (Array.isArray(saved) && saved.length) {
+        const seen = Number(localStorage.getItem("cockpit_watch_v")) || 0;
+        const merged = [...saved];
+        for (const { v, sym } of ADDED_SYMS) {
+          if (v > seen && !merged.includes(sym)) merged.push(sym);
+        }
+        setSyms(merged);
+      }
+      localStorage.setItem("cockpit_watch_v", String(WATCH_VERSION));
     } catch {}
     hydrated.current = true;
   }, []);
