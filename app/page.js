@@ -368,7 +368,12 @@ function Ideas() {
   async function load() {
     setLoading(true);
     try {
-      const d = await getJSON(`/api/suggestions?symbols=SPY,QQQ,NVDA,TSLA,AMD`);
+      let syms = DEFAULT_SYMS;
+      try {
+        const saved = JSON.parse(localStorage.getItem("cockpit_watch"));
+        if (Array.isArray(saved) && saved.length) syms = saved;
+      } catch {}
+      const d = await getJSON(`/api/suggestions?symbols=${syms.join(",")}`);
       setSuggestions(d.suggestions);
       setErr("");
     } catch (e) {

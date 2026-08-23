@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { Anthropic } from "@anthropic-ai/sdk";
 import { tradier, asArray } from "../tradier";
+import { fetchStockNews } from "../fmp";
 
 const fmt = (v, dp = 2) => {
   if (v == null || v === "") return "N/A";
@@ -32,9 +33,9 @@ export async function GET(req) {
     );
     const lastBySym = Object.fromEntries(quotes.map(q => [q.symbol, Number(q.data.last)]));
 
-    // Fetch expirations and option chains for first 3 symbols (to avoid too much data)
+    // Fetch expirations and option chains for every watched symbol
     const chains = await Promise.all(
-      syms.slice(0, 3).map(async (sym) => {
+      syms.map(async (sym) => {
         try {
           const d = await tradier(`/markets/options/expirations?symbol=${encodeURIComponent(sym)}&includeAllRoots=true`);
           const exp = asArray(d?.expirations?.date)[0];
@@ -46,6 +47,9 @@ export async function GET(req) {
         }
       })
     );
+
+    // Fetch recent news headlines, if FMP_API_KEY is configured (degrades to [] otherwise)
+    const { articles: newsArticles } = await fetchStockNews(syms, 2);
 
     // Build prompt for Claude
     const marketData = quotes
@@ -64,7 +68,11 @@ export async function GET(req) {
       })
       .join("\n");
 
-    const prompt = `You are a simple trading advisor. A beginner trader is using your app to learn. Analyze this market data and give 3-5 SIMPLE trading ideas in VERY EASY words (like Robinhood uses).
+    const newsData = newsArticles
+      .map(a => `${a.symbol}: "${a.title}" (${a.site}, ${a.publishedDate})`)
+      .join("\n");
+
+    const prompt = `You are a simple trading advisor. A beginner trader is using your app to learn. Analyze this market data and give SIMPLE trading ideas in VERY EASY words (like Robinhood uses).
 
 LIVE MARKET DATA:
 ${marketData}
@@ -72,14 +80,18 @@ ${marketData}
 OPTION CHAINS (if available):
 ${optionData}
 
+RECENT NEWS (if available):
+${newsData || "None available"}
+
 REQUIREMENTS:
 1. Use ONLY these simple words: BUY, SELL, CALL, PUT, expiration date, cheap, expensive, risky, safe, up, down
-2. Give ideas for BOTH stocks AND options
-3. For options, ALWAYS include the expiration date
+2. Give exactly one idea for EVERY symbol listed in OPTION CHAINS above — never skip one, including index symbols like SPX
+3. This app is for OPTIONS trading — prefer a CALL or PUT idea over a plain stock BUY/SELL whenever that symbol has option chain data. For options, ALWAYS include the expiration date
 4. Explain each idea in 1-2 simple sentences that a beginner understands
 5. Rate risk as: LOW, MEDIUM, or HIGH
 6. Include a simple emoji (📈 for bullish, 📉 for bearish, ⚡ for options)
 7. NO financial jargon
+8. If recent news is relevant to an idea, mention it briefly in plain words (e.g. "because of good earnings news")
 
 Format each idea like:
 [EMOJI] SYMBOL | BUY/SELL/CALL/PUT [expiration] | Risk: LOW/MEDIUM/HIGH
