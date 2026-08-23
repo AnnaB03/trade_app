@@ -21,6 +21,22 @@ async function getJSON(url) {
   return d;
 }
 
+/* Market clock: { state, description } refreshed every 5 min.
+   state "unknown" (clock unavailable) is treated as open everywhere so a clock
+   outage never freezes quotes or ideas. */
+function useMarketClock() {
+  const [clock, setClock] = useState(null);
+  useEffect(() => {
+    let on = true;
+    const load = () => getJSON("/api/clock").then((d) => { if (on) setClock(d); }).catch(() => {});
+    load();
+    const t = setInterval(load, 300000);
+    return () => { on = false; clearInterval(t); };
+  }, []);
+  return clock;
+}
+const marketClosed = (clock) => clock != null && clock.state !== "open" && clock.state !== "unknown";
+
 /* ---------- watchlist ---------- */
 const DEFAULT_SYMS = ["SPY", "SPX", "QQQ", "NVDA", "TSLA", "AMD"];
 // Symbols added to DEFAULT_SYMS after launch, tagged with the version that introduced
@@ -65,12 +81,32 @@ function Watchlist({ onPick }) {
     catch (e) { setErr(e.message); }
   }, [syms]);
 
-  useEffect(() => { load(); const t = setInterval(load, 30000); return () => clearInterval(t); }, [load]);
+  const clock = useMarketClock();
+  const closed = marketClosed(clock);
+
+  // Poll only while the market can move prices. Pre/post-market still trades,
+  // so only a fully closed market (weekend/holiday/overnight) pauses polling.
+  useEffect(() => {
+    load();
+    if (clock?.state === "closed") return;
+    const t = setInterval(load, 30000);
+    return () => clearInterval(t);
+  }, [load, clock?.state]);
 
   return (
     <div className="card">
+      {closed && (
+        <div className="warn" style={{ marginBottom: 12 }}>
+          {clock.state === "closed"
+            ? <>Market closed — prices shown are from the last session&apos;s close{clock.description ? ` (${clock.description})` : ""}. Orders queue until the next open, and prices can gap.</>
+            : <>{clock.state === "premarket" ? "Premarket" : "After hours"} — regular session closed. Stock quotes may reflect extended trading; option quotes are stale until the open.</>}
+        </div>
+      )}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-        <span className="label" style={{ margin: 0 }}><span className="live" />Live · refreshes every 30s</span>
+        <span className="label" style={{ margin: 0 }}>
+          <span className="live" style={clock?.state === "closed" ? { background: "var(--faint)" } : undefined} />
+          {clock?.state === "closed" ? "Market closed · polling paused" : "Live · refreshes every 30s"}
+        </span>
         <div style={{ display: "flex", gap: 6 }}>
           <input className="in" style={{ width: 90 }} placeholder="add" value={add}
             onChange={(e) => setAdd(e.target.value.toUpperCase())}
@@ -438,12 +474,20 @@ function Ideas() {
   const [suggestions, setSuggestions] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
+  const clock = useMarketClock();
+  const closed = marketClosed(clock);
 
+  // Load once on mount; auto-refresh only while the market is open — each
+  // refresh is a paid Claude call plus a batch of data fetches, and a closed
+  // market produces identical input every time. Manual Refresh always works.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { load(); }, []);
   useEffect(() => {
-    load();
+    if (closed) return;
     const t = setInterval(load, 60000);
     return () => clearInterval(t);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [closed]);
 
   async function load() {
     setLoading(true);
@@ -465,8 +509,17 @@ function Ideas() {
 
   return (
     <div className="card">
+      {closed && (
+        <div className="warn" style={{ marginBottom: 12 }}>
+          Market {clock.state === "closed" ? "closed" : clock.state} — ideas below are based on the last session&apos;s close and are plans for the next open.
+          Prices can gap at the open, so re-check before acting. Auto-refresh is paused; the Refresh button still works.
+        </div>
+      )}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-        <span className="label" style={{ margin: 0 }}><span className="live" />Ideas · refreshes every 60s</span>
+        <span className="label" style={{ margin: 0 }}>
+          <span className="live" style={closed ? { background: "var(--faint)" } : undefined} />
+          {closed ? "Ideas · auto-refresh paused (market closed)" : "Ideas · refreshes every 60s"}
+        </span>
         <button className="btn" onClick={load} disabled={loading}>{loading ? "Loading..." : "Refresh"}</button>
       </div>
       {err && <div className="err">{err}</div>}

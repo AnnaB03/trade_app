@@ -51,6 +51,16 @@ export async function GET(req) {
     // Fetch recent news headlines, if FMP_API_KEY is configured (degrades to [] otherwise)
     const { articles: newsArticles } = await fetchStockNews(syms, 2);
 
+    // Market clock — when closed, quotes are the last session's close and ideas
+    // must be framed as plans for the next open. "unknown" (clock fetch failed)
+    // is treated as open rather than blocking suggestions.
+    let clock = { state: "unknown", description: "" };
+    try {
+      const c = await tradier(`/markets/clock`);
+      clock = { state: c?.clock?.state || "unknown", description: c?.clock?.description || "" };
+    } catch {}
+    const marketOpen = clock.state === "open" || clock.state === "unknown";
+
     // Build prompt for Claude
     const marketData = quotes
       .map(q => `${q.symbol}: Last=$${fmt(q.data.last)}, Change=${fmt(q.data.change)} (${fmt(q.data.change_percentage, 1)}%), Volume=${q.data.volume != null ? Number(q.data.volume).toLocaleString() : "N/A"}`)
@@ -72,9 +82,15 @@ export async function GET(req) {
       .map(a => `${a.symbol}: "${a.title}" (${a.site}, ${a.publishedDate})`)
       .join("\n");
 
+    const marketStatus = marketOpen
+      ? "The market is OPEN — prices below are live."
+      : `The market is CLOSED (${clock.description || "weekend/holiday"}). Every price below is from the LAST SESSION'S CLOSE, not live. Frame every idea as a PLAN for the next market open: use wording like "plan to buy at the open" (never "buy now"), and remind the trader once at the top, in one short sentence, that prices can gap at the open so they must re-check before acting.`;
+
     const prompt = `You are a simple trading advisor. A beginner trader is using your app to learn. Analyze this market data and give SIMPLE trading ideas in VERY EASY words (like Robinhood uses).
 
-LIVE MARKET DATA:
+MARKET STATUS: ${marketStatus}
+
+MARKET DATA (see MARKET STATUS above for freshness):
 ${marketData}
 
 OPTION CHAINS (if available):
@@ -109,7 +125,7 @@ Then add a section called "OTHER TOOLS" with 5 free/cheap tools that help trader
 
     const suggestions = message.content.find(b => b.type === "text")?.text || "";
 
-    return NextResponse.json({ suggestions, timestamp: new Date().toISOString() });
+    return NextResponse.json({ suggestions, market_state: clock.state, timestamp: new Date().toISOString() });
   } catch (e) {
     console.error("Suggestions error:", e);
     return NextResponse.json({ error: String(e.message || e) }, { status: 502 });
