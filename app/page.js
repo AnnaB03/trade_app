@@ -46,6 +46,63 @@ const DEFAULT_SYMS = ["SPY", "SPX", "QQQ", "NVDA", "TSLA", "AMD"];
 const WATCH_VERSION = 1;
 const ADDED_SYMS = [{ v: 1, sym: "SPX" }];
 
+/* What moved since the close: last pre/post-market trade per symbol (Tradier
+   extended-session timesales) + fresh headlines (FMP). Shown only outside
+   regular hours — this is where Monday's gaps come from. */
+function OvernightBrief({ syms }) {
+  const [ext, setExt] = useState([]);
+  const [news, setNews] = useState([]);
+  const list = syms.slice(0, 10).join(",");
+
+  useEffect(() => {
+    if (!list) return;
+    let on = true;
+    const load = () => {
+      getJSON(`/api/overnight?symbols=${list}`).then((d) => { if (on) setExt(d.quotes || []); }).catch(() => {});
+      getJSON(`/api/news?symbols=${list}&limit=2`).then((d) => { if (on) setNews(d.articles || []); }).catch(() => {});
+    };
+    load();
+    const t = setInterval(load, 300000);
+    return () => { on = false; clearInterval(t); };
+  }, [list]);
+
+  if (!list) return null;
+  return (
+    <div className="card">
+      <span className="label">Overnight brief · extended-hours moves &amp; news since the close — this is where opening gaps come from</span>
+      {syms.slice(0, 10).map((s) => {
+        const e = ext.find((x) => x.symbol === s);
+        const arts = news.filter((a) => a.symbol === s).slice(0, 2);
+        const chg = e?.extChangePct;
+        const moved = chg != null && Math.abs(chg) >= 0.05;
+        return (
+          <div key={s} style={{ padding: "8px 0", borderBottom: "1px solid var(--line)" }}>
+            <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap", fontFamily: "var(--mono)", fontSize: 13 }}>
+              <b style={{ cursor: "default" }}>{s}</b>
+              {e?.ext != null ? (
+                <span>
+                  ext ${f2(e.ext)}{" "}
+                  <span className={moved ? (chg < 0 ? "down" : "up") : "muted"} style={moved ? { fontWeight: 600 } : undefined}>
+                    {chg != null ? `${chg >= 0 ? "+" : ""}${chg.toFixed(2)}% vs close` : ""}
+                  </span>
+                </span>
+              ) : (
+                <span className="muted">no extended-hours trades</span>
+              )}
+            </div>
+            {arts.map((a) => (
+              <div key={a.url || a.title} className="muted" style={{ fontSize: 12.5, marginTop: 3 }}>
+                “{a.title}” <span style={{ opacity: 0.7 }}>— {a.site}{a.publishedDate ? `, ${String(a.publishedDate).slice(0, 16)}` : ""}</span>
+              </div>
+            ))}
+            {!arts.length && <div className="muted" style={{ fontSize: 12, marginTop: 3, opacity: 0.7 }}>no fresh headlines</div>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function Watchlist({ onPick }) {
   const [syms, setSyms] = useState(DEFAULT_SYMS);
   const [quotes, setQuotes] = useState([]);
@@ -94,6 +151,7 @@ function Watchlist({ onPick }) {
   }, [load, clock?.state]);
 
   return (
+    <>
     <div className="card">
       {closed && (
         <div className="warn" style={{ marginBottom: 12 }}>
@@ -140,6 +198,8 @@ function Watchlist({ onPick }) {
         </tbody>
       </table>
     </div>
+    {closed && <OvernightBrief syms={syms} />}
+    </>
   );
 }
 

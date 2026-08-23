@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { Anthropic } from "@anthropic-ai/sdk";
 import { tradier, asArray } from "../tradier";
 import { fetchStockNews } from "../fmp";
+import { extendedQuotes } from "../extended";
 
 const fmt = (v, dp = 2) => {
   if (v == null || v === "") return "N/A";
@@ -61,6 +62,19 @@ export async function GET(req) {
     } catch {}
     const marketOpen = clock.state === "open" || clock.state === "unknown";
 
+    // Outside regular hours, pull the last pre/post-market trades so overnight
+    // moves are part of the analysis instead of invisible until the open.
+    let extendedData = "";
+    if (!marketOpen) {
+      try {
+        const ext = await extendedQuotes(syms);
+        extendedData = ext
+          .filter((e) => e.ext != null && e.extChangePct != null)
+          .map((e) => `${e.symbol}: last extended-hours trade $${Number(e.ext).toFixed(2)} (${e.extChangePct >= 0 ? "+" : ""}${e.extChangePct.toFixed(2)}% vs regular close${e.asOf ? `, as of ${e.asOf}` : ""})`)
+          .join("\n");
+      } catch {}
+    }
+
     // Build prompt for Claude
     const marketData = quotes
       .map(q => `${q.symbol}: Last=$${fmt(q.data.last)}, Change=${fmt(q.data.change)} (${fmt(q.data.change_percentage, 1)}%), Volume=${q.data.volume != null ? Number(q.data.volume).toLocaleString() : "N/A"}`)
@@ -98,6 +112,10 @@ ${optionData}
 
 RECENT NEWS (if available):
 ${newsData || "None available"}
+${extendedData ? `
+EXTENDED-HOURS PRICES (pre/post-market trades since the regular close — these show where the stock is heading BEFORE the next open; weigh them together with the news):
+${extendedData}
+` : ""}
 
 REQUIREMENTS:
 1. Use ONLY these simple words: BUY, SELL, CALL, PUT, expiration date, cheap, expensive, risky, safe, up, down
