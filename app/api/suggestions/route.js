@@ -3,6 +3,7 @@ import { Anthropic } from "@anthropic-ai/sdk";
 import { tradier, asArray } from "../tradier";
 import { fetchStockNews } from "../fmp";
 import { extendedQuotes } from "../extended";
+import { upcomingEarnings, macroEvents, todayET } from "../eventsLib";
 
 const fmt = (v, dp = 2) => {
   if (v == null || v === "") return "N/A";
@@ -75,6 +76,23 @@ export async function GET(req) {
       } catch {}
     }
 
+    // Outside regular hours, add today's macro releases and imminent earnings so
+    // the plan accounts for scheduled events (e.g. don't buy blind ahead of CPI).
+    let calendarData = "";
+    if (!marketOpen && process.env.FMP_API_KEY) {
+      try {
+        const today = todayET();
+        const [macroAll, ...earnLists] = await Promise.all([
+          macroEvents(),
+          ...syms.slice(0, 10).map((s) => upcomingEarnings(s.toUpperCase()).catch(() => [])),
+        ]);
+        calendarData = [
+          ...macroAll.filter((m) => m.date === today).map((m) => `${m.label} today${m.timeET ? ` at ${m.timeET} ET` : ""}`),
+          ...earnLists.flat().filter((e) => e.date >= today).slice(0, 6).map((e) => `${e.label} on ${e.date}`),
+        ].join("\n");
+      } catch {}
+    }
+
     // Build prompt for Claude
     const marketData = quotes
       .map(q => `${q.symbol}: Last=$${fmt(q.data.last)}, Change=${fmt(q.data.change)} (${fmt(q.data.change_percentage, 1)}%), Volume=${q.data.volume != null ? Number(q.data.volume).toLocaleString() : "N/A"}`)
@@ -118,6 +136,9 @@ ${newsData || "None available"}
 ${extendedData ? `
 EXTENDED-HOURS PRICES (pre/post-market trades since the regular close — these show where the stock is heading BEFORE the next open; weigh them together with the news):
 ${extendedData}
+` : ""}${calendarData ? `
+SCHEDULED EVENTS (known in advance — factor the TIMING into every plan; e.g. warn against buying options right before a big report, and say when an idea depends on an event going a certain way):
+${calendarData}
 ` : ""}
 
 REQUIREMENTS:

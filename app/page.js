@@ -52,6 +52,7 @@ const ADDED_SYMS = [{ v: 1, sym: "SPX" }];
 function OvernightBrief({ syms }) {
   const [ext, setExt] = useState([]);
   const [news, setNews] = useState([]);
+  const [cal, setCal] = useState(null); // today's macro + upcoming earnings
   const list = syms.slice(0, 10).join(",");
 
   useEffect(() => {
@@ -60,6 +61,7 @@ function OvernightBrief({ syms }) {
     const load = () => {
       getJSON(`/api/overnight?symbols=${list}`).then((d) => { if (on) setExt(d.quotes || []); }).catch(() => {});
       getJSON(`/api/news?symbols=${list}&limit=2`).then((d) => { if (on) setNews(d.articles || []); }).catch(() => {});
+      getJSON(`/api/today?symbols=${list}`).then((d) => { if (on) setCal(d.available ? d : null); }).catch(() => {});
     };
     load();
     const t = setInterval(load, 300000);
@@ -67,9 +69,23 @@ function OvernightBrief({ syms }) {
   }, [list]);
 
   if (!list) return null;
+  const calItems = cal ? [
+    ...cal.earnings.map((e) => ({ key: "e" + e.symbol + e.date, hot: e.when === "today", text: `${e.symbol} earnings ${e.when}` })),
+    ...cal.macro.map((m) => ({ key: "m" + m.label, hot: true, text: `${m.label}${m.timeET ? ` · ${m.timeET} ET` : ""}` })),
+  ] : [];
   return (
     <div className="card">
       <span className="label">Overnight brief · extended-hours moves &amp; news since the close — this is where opening gaps come from</span>
+      {calItems.length > 0 && (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", padding: "2px 0 10px", borderBottom: "1px solid var(--line)", marginBottom: 4 }}>
+          <span className="mono" style={{ fontSize: 12, fontWeight: 700 }}>On the calendar:</span>
+          {calItems.map((c) => (
+            <span key={c.key} className="badge" style={c.hot ? { color: "#7A5C15", borderColor: "rgba(163,120,32,.5)", fontWeight: 600 } : undefined}>
+              {c.text}
+            </span>
+          ))}
+        </div>
+      )}
       {syms.slice(0, 10).map((s) => {
         const e = ext.find((x) => x.symbol === s);
         const arts = news.filter((a) => a.symbol === s).slice(0, 2);
