@@ -52,11 +52,15 @@ export default function Journal() {
 
   const exportJSON = () => {
     const blob = new Blob([JSON.stringify(entries, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
+    a.href = url;
     a.download = `cockpit-journal-${todayStr()}.json`;
+    document.body.appendChild(a);
     a.click();
-    URL.revokeObjectURL(a.href);
+    a.remove();
+    // revoking in the same tick cancels the download in Firefox/Safari
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
   };
   const importJSON = async (e) => {
     const file = e.target.files?.[0];
@@ -108,7 +112,7 @@ export default function Journal() {
           <>
             <div className="metrics">
               <div className="metric"><div className="k">Win rate</div><div className="v">{pctFmt(s.winRate)}</div></div>
-              <div className="metric"><div className="k">Expectancy / trade</div><div className="v" style={{ color: s.expectancy >= 0 ? "var(--bull)" : "var(--bear)" }}>{usd(s.expectancy)}</div></div>
+              <div className="metric"><div className="k">Expectancy / trade</div><div className="v" style={{ color: s.expectancy == null ? "var(--muted)" : s.expectancy >= 0 ? "var(--bull)" : "var(--bear)" }}>{usd(s.expectancy)}</div></div>
               <div className="metric"><div className="k">Avg win / avg loss</div><div className="v">{usd(s.avgWin)} / {usd(s.avgLoss)}</div></div>
             </div>
             <div className="mono muted" style={{ fontSize: 12, marginTop: 8 }}>

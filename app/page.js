@@ -2,8 +2,8 @@
 import { useState, useEffect, useMemo, useCallback, useRef, Fragment } from "react";
 import {
   analyze, toRows, expectedMove, moveVerdict, ivSnapshot, ivRank, ivRankRead, nearestMonthly,
-  oiWalls, todayStr, daysUntil, eventsHeldThrough,
-  spreadPct, spreadFlag, spreadRead, realizedVol, ivHvRead,
+  oiWalls, todayStr, daysUntil, eventsHeldThrough, optMid,
+  spreadPct, spreadFlag, spreadRead, realizedVol, ivHvRead, rsiRead, gradesRead,
 } from "./lib/metrics";
 import Divergence from "./components/Divergence";
 import Journal from "./components/Journal";
@@ -346,6 +346,9 @@ function Watchlist({ onPick }) {
           {syms.map((s) => {
             const q = quotes.find((x) => x.symbol === s) || {};
             const chg = q.change, dn = chg < 0;
+            // change_percentage carries its own sign — don't colour it by change
+            const pctVal = q.change_percentage, pctDn = pctVal < 0;
+            const pctCls = pctVal == null ? "muted" : pctDn ? "down" : "up";
             const chgCls = chg == null ? "muted" : dn ? "down" : "up";
             const rc = reality[s], rv = rc?.volume?.rvol ?? null, isOpen = openSym === s;
             return (
@@ -354,7 +357,7 @@ function Watchlist({ onPick }) {
                 <td style={{ textAlign: "left", fontWeight: 600, cursor: "pointer" }} onClick={() => onPick(s)}>{s}</td>
                 <td>{f2(q.last)}</td>
                 <td className={chgCls}>{q.change != null ? (dn ? "" : "+") + f2(q.change) : "—"}</td>
-                <td className={chgCls}>{q.change_percentage != null ? (dn ? "" : "+") + Number(q.change_percentage).toFixed(2) + "%" : "—"}</td>
+                <td className={pctCls}>{pctVal != null ? (pctDn ? "" : "+") + Number(pctVal).toFixed(2) + "%" : "—"}</td>
                 <td className="muted">{f2(q.bid)}</td><td className="muted">{f2(q.ask)}</td>
                 <td className="muted">{q.volume ? Number(q.volume).toLocaleString() : "—"}</td>
                 <td className={rv == null ? "muted" : rv >= 2 ? "up" : rv < 1 ? "down" : ""} style={rv != null ? { fontWeight: 600 } : undefined}>
@@ -419,6 +422,7 @@ function ChainRisk({ symbol, setSymbol }) {
   const [hv, setHv] = useState(null);          // { hv20, hv60 } realized vol
   const [autoEvents, setAutoEvents] = useState([]); // earnings + macro from FMP
   const [street, setStreet] = useState(null);  // analyst target consensus
+  const [trend, setTrend] = useState(null);    // RSI 14 + analyst grades distribution
   const [events, setEvents] = useState({});
   const [evLabel, setEvLabel] = useState("");
   const [evDate, setEvDate] = useState("");
@@ -442,8 +446,13 @@ function ChainRisk({ symbol, setSymbol }) {
   }, [symbol, loadedSym]);
 
   async function loadExp(sym) {
-    setErr(""); setChain([]); setExp(""); setLoadedSym(sym);
-    setIvInfo(null); setHv(null); setAutoEvents([]); setStreet(null);
+    setErr(""); setChain([]); setExp("");
+    setIvInfo(null); setHv(null); setAutoEvents([]); setStreet(null); setTrend(null);
+    // stale expirations/spot from the previous ticker must not survive the switch,
+    // and legs belong to the underlying they were built from
+    setExps([]); setSpot(null);
+    if (sym !== loadedSym) { setLegs([]); setUserMove(""); }
+    setLoadedSym(sym);
     try {
       const [e, q] = await Promise.all([
         getJSON(`/api/expirations?symbol=${sym}`),
@@ -467,6 +476,9 @@ function ChainRisk({ symbol, setSymbol }) {
       .catch(() => {});
     getJSON(`/api/analyst?symbol=${sym}`)
       .then((d) => setStreet(d.available ? d : null))
+      .catch(() => {});
+    getJSON(`/api/trend?symbol=${sym}`)
+      .then((d) => setTrend(d.available ? d : null))
       .catch(() => {});
   }
 
@@ -511,7 +523,9 @@ function ChainRisk({ symbol, setSymbol }) {
   const removeEvent = (i) => setEvents((ev) => ({ ...ev, [loadedSym]: symEvents.filter((_, j) => j !== i) }));
 
   const addLeg = (o, action) => {
-    const mid = o.bid != null && o.ask != null ? ((Number(o.bid) + Number(o.ask)) / 2) : Number(o.last || 0);
+    // optMid falls back to last when bid/ask are both 0 (illiquid strikes),
+    // which a raw (bid+ask)/2 would price at zero and wreck the risk math
+    const mid = optMid(o) ?? 0;
     setLegs((ls) => [...ls, { action, type: o.type, strike: String(o.strike), premium: mid.toFixed(2), qty: 1, bid: o.bid, ask: o.ask }]);
   };
   const a = useMemo(() => analyze(legs), [legs]);
@@ -524,6 +538,8 @@ function ChainRisk({ symbol, setSymbol }) {
     return { p, flag: spreadFlag(p) };
   }, [legs]);
   const ivhv = ivInfo && hv?.hv20 ? ivHvRead(ivInfo.snap, hv.hv20) : null;
+  const momo = useMemo(() => rsiRead(trend?.rsi), [trend]);
+  const conviction = useMemo(() => gradesRead(trend?.grades), [trend]);
 
   return (
     <>
@@ -541,6 +557,28 @@ function ChainRisk({ symbol, setSymbol }) {
             Street 12-mo target: <b>${f2(street.median ?? street.consensus)}</b> (range ${f2(street.low)}–${f2(street.high)})
             {" · "}{((((street.median ?? street.consensus) - spot) / spot) * 100).toFixed(1)}% vs spot
             <span className="muted"> — analyst consensus, context not signal</span>
+          </div>
+        )}
+        {(momo || conviction) && (
+          <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px solid var(--line)" }}>
+            {momo && (
+              <div className="mono" style={{ fontSize: 12, lineHeight: 1.6 }}>
+                Momentum · RSI 14 <b>{momo.rsi.toFixed(0)}</b>{" "}
+                <span className={momo.tone === "bull" ? "up" : momo.tone === "bear" ? "down" : "muted"} style={{ fontWeight: 600 }}>
+                  {momo.band}
+                </span>
+                <span className="muted"> — {momo.text}</span>
+              </div>
+            )}
+            {conviction && (
+              <div className="mono" style={{ fontSize: 12, lineHeight: 1.6, marginTop: momo ? 3 : 0 }}>
+                Conviction{" "}
+                <span className={conviction.tone === "bull" ? "up" : conviction.tone === "bear" ? "down" : "muted"} style={{ fontWeight: 600 }}>
+                  {conviction.band}
+                </span>
+                <span className="muted"> — {conviction.text}</span>
+              </div>
+            )}
           </div>
         )}
         {exps.length > 0 && (

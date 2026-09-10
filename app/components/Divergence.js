@@ -58,12 +58,17 @@ export default function Divergence() {
   useEffect(() => { load(); }, [load]);
 
   const computed = rows.map((r) => {
-    const manualVal = manual[r.sym] !== undefined && manual[r.sym] !== "" ? Number(manual[r.sym]) : null;
+    // stored raw so "7." and "" stay typeable; clamped only once it parses
+    const n = Number(manual[r.sym]);
+    const manualVal = manual[r.sym] === undefined || manual[r.sym] === "" || !Number.isFinite(n)
+      ? null : Math.max(0, Math.min(100, n));
     const sentiment = manualVal ?? r.autoSent;
     const source = manualVal != null ? "manual" : r.autoSent != null ? "auto" : null;
     const d = divergence(r.price30, sentiment);
     return { ...r, sentiment, source, d };
-  }).sort((a, b) => Math.abs(b.d?.score ?? -1) - Math.abs(a.d?.score ?? -1));
+    // rank by strength of disagreement; rows with no sentiment yet sink to the
+    // bottom rather than floating up as if they scored a full ±1
+  }).sort((a, b) => (b.d ? Math.abs(b.d.score) : -1) - (a.d ? Math.abs(a.d.score) : -1));
 
   const anyAuto = rows.some((r) => r.autoSent != null);
 
@@ -96,8 +101,8 @@ export default function Divergence() {
                   inputMode="decimal" placeholder={r.autoSent != null ? r.autoSent.toFixed(0) : "50"}
                   value={manual[r.sym] ?? ""}
                   onChange={(e) => {
-                    const v = e.target.value.replace(/[^0-9.]/g, "");
-                    setManual((m) => ({ ...m, [r.sym]: v === "" ? undefined : Math.min(100, Number(v)) }));
+                    const v = e.target.value.replace(/[^0-9.]/g, "").slice(0, 5);
+                    setManual((m) => ({ ...m, [r.sym]: v === "" ? undefined : v }));
                   }} />
                 {r.source && <span className="muted" style={{ fontSize: 10, marginLeft: 5 }}>{r.source}</span>}
               </td>

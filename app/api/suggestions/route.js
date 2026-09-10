@@ -4,6 +4,8 @@ import { tradier, asArray } from "../tradier";
 import { fetchStockNews } from "../fmp";
 import { extendedQuotes } from "../extended";
 import { upcomingEarnings, macroEvents, todayET } from "../eventsLib";
+import { fetchRsi, fetchGrades } from "../trendLib";
+import { rsiRead, gradesRead } from "../../lib/metrics";
 
 const fmt = (v, dp = 2) => {
   if (v == null || v === "") return "N/A";
@@ -119,6 +121,20 @@ export async function GET(req) {
       .map(a => `${a.symbol}: "${a.title}" (${a.site}, ${a.publishedDate})`)
       .join("\n");
 
+    // Momentum + analyst conviction. Both are cached in trendLib (RSI 1h, grades
+    // 12h), so the Ideas tab's 60s refresh does not re-bill FMP for them.
+    const trendData = (await Promise.all(
+      syms.map(async (sym) => {
+        const [rsi, grades] = await Promise.all([
+          fetchRsi(sym).catch(() => null),
+          fetchGrades(sym).catch(() => null),
+        ]);
+        const m = rsiRead(rsi), c = gradesRead(grades);
+        if (!m && !c) return null;
+        return `${sym}: ${m ? `RSI ${m.rsi.toFixed(0)} (${m.band})` : "RSI n/a"}${c ? ` · analysts ${c.bulls} buy / ${c.bears} sell of ${c.total}${c.crowded ? " — CROWDED" : ""}` : ""}`;
+      })
+    )).filter(Boolean).join("\n");
+
     const inExtended = clock.state === "premarket" || clock.state === "postmarket";
     const marketStatus = marketOpen
       ? "The market is OPEN — prices below are live."
@@ -138,7 +154,10 @@ ${optionData}
 
 RECENT NEWS (if available):
 ${newsData || "None available"}
-${extendedData ? `
+${trendData ? `
+MOMENTUM AND ANALYST OPINION (RSI over 70 means the stock already ran up hard and may be due a pause; under 30 means it already fell hard. "CROWDED" means nearly every analyst already says buy, so there is little good news left to surprise on and the bigger risk is a downgrade. Use this to judge whether a move still has room, and say so in plain words — never print the letters "RSI" in your answer):
+${trendData}
+` : ""}${extendedData ? `
 EXTENDED-HOURS PRICES (pre/post-market trades since the regular close — these show where the stock is heading BEFORE the next open; weigh them together with the news):
 ${extendedData}
 ` : ""}${calendarData ? `

@@ -1,5 +1,5 @@
 import { sandboxLockError, tradeFetch, accountId, asArray } from "../tradeClient";
-import { validateLegs, gateA, gateB, gateC, gateE, buildOrderForm, netPremium } from "../../lib/orders";
+import { validateLegs, gateA, gateB, gateC, gateE, buildOrderForm, netPremiumPerSpread } from "../../lib/orders";
 import { analyze } from "../../lib/metrics";
 import { tradier, asArray as asArr } from "../tradier";
 
@@ -74,7 +74,7 @@ export async function vetOrder(body, { preview }) {
   return {
     gates, form, underlying,
     computed: {
-      net, suggested_limit: Math.abs(netPremium(legs)),
+      net, suggested_limit: Math.abs(netPremiumPerSpread(legs)),
       max_loss: risk ? risk.maxL : null,
       max_profit: risk ? risk.maxP : null,
       breakevens: risk ? risk.bes : [],

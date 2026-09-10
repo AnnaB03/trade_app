@@ -13,6 +13,9 @@ export async function GET(req) {
     const bars = asArray(d?.history?.day).filter((x) => x && x.close != null);
     if (bars.length < 2) return NextResponse.json({ error: `no daily history for ${symbol}` }, { status: 502 });
     const first = Number(bars[0].close), last = Number(bars[bars.length - 1].close);
+    if (!Number.isFinite(first) || !Number.isFinite(last) || first <= 0) {
+      return NextResponse.json({ error: `unusable closes for ${symbol}` }, { status: 502 });
+    }
     return NextResponse.json({
       symbol, days,
       start: bars[0].date, end: bars[bars.length - 1].date,

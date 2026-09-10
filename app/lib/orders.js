@@ -37,6 +37,17 @@ export function parseOcc(occ) {
 export const netPremium = (legs) =>
   legs.reduce((s, l) => s + (l.action === "buy" ? 1 : -1) * Number(l.premium) * Number(l.qty), 0);
 
+/* How many identical spread units the legs describe — the GCD of the leg
+   quantities. A 2-lot 550/560 vertical is 2 units of a 1×1 spread; a 1×2 ratio
+   is 1 unit of itself. */
+const gcd2 = (a, b) => (b ? gcd2(b, a % b) : a);
+export const spreadUnits = (legs) => legs.reduce((g, l) => gcd2(g, Math.abs(Number(l.qty)) || 1), 0) || 1;
+
+/* Tradier prices an order PER SPREAD UNIT and multiplies by quantity itself, so
+   the qty-weighted netPremium above must be divided down before it goes on the
+   form — otherwise a 2-lot debit spread is submitted at twice its real price. */
+export const netPremiumPerSpread = (legs) => netPremium(legs) / spreadUnits(legs);
+
 /* Gate A — HARD BLOCK: net call exposure = Σ(long call qty) − Σ(short call qty) */
 export function gateA(legs) {
   const netCalls = legs.reduce((s, l) => l.type === "call" ? s + (l.action === "buy" ? 1 : -1) * Number(l.qty) : s, 0);
@@ -114,7 +125,8 @@ export function buildOrderForm(legs, { closing = false, limitPrice = null, previ
     ? (l.action === "buy" ? "buy_to_close" : "sell_to_close")
     : (l.action === "buy" ? "buy_to_open" : "sell_to_open");
   const net = netPremium(legs);
-  const px = limitPrice != null && limitPrice !== "" ? Math.abs(Number(limitPrice)) : Math.abs(net);
+  // price is per spread unit, never the qty-weighted total
+  const px = limitPrice != null && limitPrice !== "" ? Math.abs(Number(limitPrice)) : Math.abs(netPremiumPerSpread(legs));
   let form;
   if (legs.length === 1) {
     const l = legs[0];

@@ -82,9 +82,9 @@ export function ivSnapshot(rows, spot) {
 
 // IV Rank = (current − min) / (max − min) × 100 over stored history
 export function ivRank(history, current) {
-  const vals = (history || []).map((h) => h.iv).filter((v) => v != null);
-  if (current != null) vals.push(current);
-  if (vals.length < 10) return { rank: null, n: vals.length };
+  const vals = (history || []).map((h) => Number(h.iv)).filter((v) => Number.isFinite(v));
+  if (current != null) vals.push(Number(current));
+  if (!Number.isFinite(Number(current)) || vals.length < 10) return { rank: null, n: vals.length };
   const min = Math.min(...vals), max = Math.max(...vals);
   if (max === min) return { rank: 50, n: vals.length };
   return { rank: ((current - min) / (max - min)) * 100, n: vals.length };
@@ -135,8 +135,11 @@ export const eventsHeldThrough = (events, exp) =>
 /* Feature 3 — Divergence: normalize both to −1…+1, divergence = price_norm − sent_norm */
 export function divergence(price30Pct, sentiment) {
   if (price30Pct == null || sentiment == null) return null;
-  const priceNorm = Math.max(-15, Math.min(15, Number(price30Pct))) / 15;
-  const sentNorm = (Number(sentiment) - 50) / 50;
+  const p = Number(price30Pct), s = Number(sentiment);
+  // a half-typed input ("." or "") must read as "no data", not as a NaN score
+  if (!Number.isFinite(p) || !Number.isFinite(s)) return null;
+  const priceNorm = Math.max(-15, Math.min(15, p)) / 15;
+  const sentNorm = (s - 50) / 50;
   const score = priceNorm - sentNorm;
   const label = score <= -0.6 ? "CROWD HOT / TAPE WEAK — euphoria unconfirmed (caution / fade-watch)"
     : score >= 0.6 ? "TAPE STRONG / CROWD COLD — wall of worry (continuation-watch)"
@@ -209,4 +212,51 @@ export function journalStats(entries) {
     byDirection: { bull: rate(closed.filter((e) => e.direction === "bull")), bear: rate(closed.filter((e) => e.direction === "bear")), neutral: rate(closed.filter((e) => e.direction === "neutral")) },
     avgWin, avgLoss, expectancy,
   };
+}
+
+/* ---------- Feature 8 — Momentum (RSI) ----------
+   The app reads volatility well (IV rank, HV, expected move) but had no read on
+   direction. RSI 14 is the cheapest honest one. The bands are standard (≥70
+   overbought, ≤30 oversold); the wording is deliberately about what the reading
+   costs you as an OPTIONS buyer, since that is the decision at hand. */
+export function rsiRead(rsi) {
+  const v = Number(rsi);
+  if (rsi == null || !Number.isFinite(v)) return null;
+  if (v >= 70) return { rsi: v, tone: "bear", band: "overbought",
+    text: "Overbought — the move mostly already happened. Calls here are priced for a continuation that has to keep earning it." };
+  if (v <= 30) return { rsi: v, tone: "bull", band: "oversold",
+    text: "Oversold — the drop mostly already happened. Puts here are priced for a continuation that has to keep earning it." };
+  if (v >= 55) return { rsi: v, tone: "bull", band: "firm",
+    text: "Trending up, not yet stretched — the friendliest zone for a bullish debit spread." };
+  if (v <= 45) return { rsi: v, tone: "bear", band: "soft",
+    text: "Trending down, not yet stretched — the friendliest zone for a bearish debit spread." };
+  return { rsi: v, tone: "flat", band: "neutral",
+    text: "No momentum edge — direction here is close to a coin flip." };
+}
+
+/* ---------- Feature 9 — Analyst conviction ----------
+   Context for the price target the app already shows: a $250 target means one
+   thing from 3 analysts and another from 79. The non-obvious read is crowding —
+   when nearly everyone is already at Buy, the upgrades that push a stock up
+   have largely been spent, and downgrade risk is the asymmetric one. */
+export function gradesRead(g) {
+  if (!g) return null;
+  const bulls = g.strongBuy + g.buy, bears = g.sell + g.strongSell;
+  const total = bulls + g.hold + bears;
+  const mix = `${bulls} buy / ${g.hold} hold / ${bears} sell of ${total}`;
+  if (total < 5) return { total, bulls, bears, tone: "flat", band: "thin coverage", crowded: false,
+    text: `Thin coverage (${total} analyst${total === 1 ? "" : "s"}) — treat the target as one opinion, not a consensus.` };
+  const bullPct = bulls / total, pc = Math.round(bullPct * 100);
+  if (bullPct >= 0.85) return { total, bulls, bears, bullPct, tone: "bear", band: "crowded long", crowded: true,
+    text: `Crowded long — ${pc}% of ${total} analysts already say Buy. Little upgrade fuel left; downgrades are the live risk.` };
+  if (bullPct <= 0.25) return { total, bulls, bears, bullPct, tone: "bull", band: "out of favour", crowded: true,
+    text: `Out of favour — only ${pc}% of ${total} analysts say Buy. Bad news is largely in the price; upgrades would be the surprise.` };
+  // Analyst ratings skew structurally bullish, so the middle band must still
+  // name the tilt — calling 76%-buy "split" would misread the room.
+  if (bullPct >= 0.6) return { total, bulls, bears, bullPct, tone: "flat", band: "leaning bullish", crowded: false,
+    text: `Leaning bullish — ${mix}. Positive, but not yet the unanimity that leaves nowhere to go but down.` };
+  if (bullPct <= 0.4) return { total, bulls, bears, bullPct, tone: "flat", band: "leaning bearish", crowded: false,
+    text: `Leaning bearish — ${mix}.` };
+  return { total, bulls, bears, bullPct, tone: "flat", band: "split", crowded: false,
+    text: `Genuinely split — ${mix}. No consensus to lean on either way.` };
 }
