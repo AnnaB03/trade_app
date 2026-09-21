@@ -1,15 +1,29 @@
 "use client";
 import { useState, useEffect, useMemo, useCallback, useRef, Fragment } from "react";
 import {
-  analyze, toRows, expectedMove, moveVerdict, ivSnapshot, ivRank, ivRankRead, nearestMonthly,
+  analyze, toRows, expectedMove, ivSnapshot, ivRank, ivRankRead, nearestMonthly,
   oiWalls, todayStr, daysUntil, eventsHeldThrough,
   spreadPct, spreadFlag, spreadRead, realizedVol, ivHvRead,
 } from "./lib/metrics";
-import Divergence from "./components/Divergence";
 import Journal from "./components/Journal";
+import TrackRecord from "./components/TrackRecord";
+import NewsBoard from "./components/NewsBoard";
+import { buildOptionStopEstimate } from "./lib/orders";
+
+// Account size the Ideas engine sizes for — per browser, editable in the
+// Ideas header; the server falls back to ACCOUNT_SIZE, then $1,000.
+const readAccount = () => {
+  try { const v = Number(localStorage.getItem("cockpit_account")); if (v > 0) return v; } catch {}
+  return 1000;
+};
 
 const money = (v) => v === Infinity ? "Unlimited ▲" : v === -Infinity ? "UNLIMITED" :
   (v < 0 ? "-$" : "$") + Math.abs(v).toFixed(Math.abs(v) >= 1000 ? 0 : 2);
+// For a max_loss/max_profit figure that came back over JSON: null there is
+// ambiguous (it means either "not computed" or "genuinely uncapped" — the
+// server can't send a literal Infinity through JSON), so an explicit
+// unlimited flag settles it instead of guessing from the number alone.
+const moneyU = (v, unlimited) => unlimited ? "Unlimited" : money(v);
 const pct = (v) => v == null ? "—" : (v * 100).toFixed(1) + "%";
 const f2 = (v) => v == null || v === "" ? "—" : Number(v).toFixed(2);
 
@@ -105,68 +119,53 @@ function RealityPanel({ data, symbol }) {
   );
 }
 
-/* Market-wide top movers. "News movers" = fresh headlines cross-priced against
-   Tradier extended-session trades, ranked by |pre/post-market move| — catches
-   news-driven gaps (the Moderna-at-8am case) before any session gainers list.
-   "Last session" = FMP gainers/losers filtered to tradeable names (≥$5, common
-   stock, no leveraged ETFs). Tap a symbol to load its chain. */
-function TopMovers({ onPick }) {
+/* Penny stocks ($0.10-$5) get their own card, not folded into Top Movers,
+   because they're a different risk category rather than just "cheaper
+   stocks" — thin float, wide spreads, promotion/pump-and-dump patterns, and
+   dilution (a company selling new shares into its own rally) dominate here
+   more than direction does. Every candidate is run through the same reality
+   check (RVOL, catalyst classification, halt bands) shown on the Watchlist,
+   reused via RealityPanel — this is exactly the context that separates a
+   real move from a promoted one. */
+function PennyStocks({ onPick }) {
   const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
 
   useEffect(() => {
     let on = true;
-    const load = () => getJSON("/api/movers").then((d) => { if (on) setData(d.available ? d : null); }).catch(() => {});
+    const load = () => getJSON("/api/penny")
+      .then((d) => { if (on) { setData(d); setErr(""); } })
+      .catch((e) => { if (on) setErr(e.message); });
     load();
     const t = setInterval(load, 300000);
     return () => { on = false; clearInterval(t); };
   }, []);
 
-  if (!data) return null;
-  const { gainers, losers } = data.session;
-  // FMP's gainers/losers track the live session while it is open, so the
-  // heading must not claim "last session" during regular hours.
-  const sessionLabel = data.marketState === "open" ? "Today" : "Last session";
-  const row = (m, chgPctRaw, extra) => {
-    // A missing/garbled percentage from the feed must not render as "NaN%".
-    const chgPct = Number.isFinite(Number(chgPctRaw)) ? Number(chgPctRaw) : null;
-    return (
-    <div key={m.symbol} style={{ padding: "7px 0", borderBottom: "1px solid var(--line)" }}>
-      <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap", fontFamily: "var(--mono)", fontSize: 13 }}>
-        <button className="chip" style={{ padding: "2px 8px", fontWeight: 700 }} onClick={() => onPick(m.symbol)}>{m.symbol}</button>
-        <span className={chgPct == null ? "muted" : chgPct < 0 ? "down" : "up"} style={{ fontWeight: 600 }}>
-          {chgPct == null ? "—" : `${chgPct >= 0 ? "+" : ""}${chgPct.toFixed(1)}%`}
-        </span>
-        {extra}
-      </div>
-      {m.headline && (
-        <div className="muted" style={{ fontSize: 12.5, marginTop: 3 }}>
-          “{m.headline.title}” <span style={{ opacity: 0.7 }}>— {m.headline.site}{m.headline.publishedDate ? `, ${String(m.headline.publishedDate).slice(0, 16)}` : ""}</span>
-        </div>
-      )}
-    </div>
-    );
-  };
+  if (!data || !data.available || !data.candidates.length) return null;
+
   return (
     <div className="card">
-      <span className="label">Top movers · tap a symbol for its chain · filtered: ≥$5, common stocks, no leveraged ETFs</span>
-      {data.extended.length > 0 && (
-        <>
-          <div className="mono" style={{ fontSize: 12, fontWeight: 700, margin: "4px 0 2px" }}>News movers · extended hours</div>
-          {data.extended.map((m) => row(m, m.extChangePct, <span className="muted">ext ${f2(m.ext)}</span>))}
-        </>
-      )}
-      {gainers.length > 0 && (
-        <>
-          <div className="mono" style={{ fontSize: 12, fontWeight: 700, margin: "10px 0 2px" }}>{sessionLabel} · gainers</div>
-          {gainers.slice(0, 5).map((m) => row(m, m.changePct, <span className="muted">${f2(m.price)} · {m.name?.slice(0, 40)}</span>))}
-        </>
-      )}
-      {losers.length > 0 && (
-        <>
-          <div className="mono" style={{ fontSize: 12, fontWeight: 700, margin: "10px 0 2px" }}>{sessionLabel} · losers</div>
-          {losers.slice(0, 5).map((m) => row(m, m.changePct, <span className="muted">${f2(m.price)} · {m.name?.slice(0, 40)}</span>))}
-        </>
-      )}
+      <span className="label">Penny stocks · today's $0.10–$5 movers, reality-checked before anything else</span>
+      <div className="warn" style={{ marginBottom: 4, fontSize: 12.5 }}>
+        A different risk category, not just "cheaper stocks": thin float, wide spreads, promotion / pump-and-dump patterns, and
+        dilution (a company selling new shares into its own rally) are the dominant risks here — more than direction. Most of
+        these have no usable options chain; treat any idea as shares only, small size, with a hard stop.
+      </div>
+      {err && <div className="err">{err}</div>}
+      {data.candidates.map((c) => (
+        <div key={c.symbol} style={{ padding: "10px 0", borderBottom: "1px solid var(--line)" }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap", fontFamily: "var(--mono)", fontSize: 13 }}>
+            <button className="chip" style={{ padding: "2px 8px", fontWeight: 700 }} onClick={() => onPick(c.symbol)}>{c.symbol}</button>
+            <span className={c.changePct >= 0 ? "up" : "down"} style={{ fontWeight: 600 }}>
+              {c.changePct >= 0 ? "+" : ""}{c.changePct?.toFixed(1)}%
+            </span>
+            <span className="muted">${f2(c.price)} · {c.name?.slice(0, 40)}</span>
+          </div>
+          <div style={{ marginTop: 6 }}>
+            <RealityPanel data={c} symbol={c.symbol} />
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -328,12 +327,26 @@ function Watchlist({ onPick }) {
           <span className="live" style={clock?.state === "closed" ? { background: "var(--faint)" } : undefined} />
           {clock?.state === "closed" ? "Market closed · polling paused" : "Live · refreshes every 30s"}
         </span>
-        <div style={{ display: "flex", gap: 6 }}>
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <span className="mono muted" style={{ fontSize: 11 }} title="Every symbol here gets the full treatment (quotes, option chains, news) on every Ideas refresh — a long list is the main reason that tab loads slowly.">
+            {syms.length} on list
+          </span>
           <input className="in" style={{ width: 90 }} placeholder="add" value={add}
             onChange={(e) => setAdd(e.target.value.toUpperCase())}
             onKeyDown={(e) => { if (e.key === "Enter" && add.trim()) { setSyms([...new Set([...syms, add.trim()])]); setAdd(""); } }} />
+          {syms.length > DEFAULT_SYMS.length && (
+            <button className="chip" title={`Back to the base list: ${DEFAULT_SYMS.join(", ")}`}
+              onClick={() => { if (confirm(`Reset watchlist to the base ${DEFAULT_SYMS.length} symbols (${DEFAULT_SYMS.join(", ")})? This removes everything you've added.`)) setSyms(DEFAULT_SYMS); }}>
+              Reset to base list
+            </button>
+          )}
         </div>
       </div>
+      {syms.length > DEFAULT_SYMS.length + 6 && (
+        <div className="warn" style={{ marginBottom: 10, fontSize: 12.5 }}>
+          {syms.length} symbols on your watchlist — every one of them is fully re-scanned on each Ideas refresh, which is the main cause of a slow load. Trim symbols you're done watching, or use &quot;Reset to base list&quot; above.
+        </div>
+      )}
       {err && <div className="err">{err}</div>}
       <table>
         <thead><tr>
@@ -382,7 +395,7 @@ function Watchlist({ onPick }) {
         </tbody>
       </table>
     </div>
-    <TopMovers onPick={onPick} />
+    <PennyStocks onPick={onPick} />
     {closed && <OvernightBrief syms={syms} />}
     </>
   );
@@ -414,7 +427,6 @@ function ChainRisk({ symbol, setSymbol }) {
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
   const [legs, setLegs] = useState([]);
-  const [userMove, setUserMove] = useState("");
   const [ivInfo, setIvInfo] = useState(null);
   const [hv, setHv] = useState(null);          // { hv20, hv60 } realized vol
   const [autoEvents, setAutoEvents] = useState([]); // earnings + macro from FMP
@@ -498,7 +510,6 @@ function ChainRisk({ symbol, setSymbol }) {
   const strikes = useMemo(() => toRows(chain), [chain]);
   const em = useMemo(() => expectedMove(strikes, spot), [strikes, spot]);
   const walls = useMemo(() => oiWalls(strikes), [strikes]);
-  const verdict = em && userMove !== "" ? moveVerdict(parseFloat(userMove), em.emPct * 100) : null;
 
   const symEvents = events[loadedSym] || [];
   const allEvents = [...autoEvents, ...symEvents];
@@ -587,15 +598,6 @@ function ChainRisk({ symbol, setSymbol }) {
               )}
             </div>
           )}
-          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 12 }}>
-            <span className="mono" style={{ fontSize: 12.5 }}>Your expected move %:</span>
-            <input className="in" style={{ width: 80 }} placeholder="e.g. 5" inputMode="decimal"
-              value={userMove} onChange={(e) => setUserMove(e.target.value.replace(/[^0-9.]/g, ""))} />
-            {verdict && (
-              <span className={verdict.tone === "bull" ? "up" : verdict.tone === "bear" ? "down" : "muted"}
-                style={{ fontSize: 13, fontWeight: 600 }}>{verdict.text}</span>
-            )}
-          </div>
           {walls && (
             <div className="mono" style={{ fontSize: 12.5, marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--line)" }}>
               {walls.callWall && <>Call wall <b>{walls.callWall.strike}</b> (OI {walls.callWall.oi.toLocaleString()})</>}
@@ -715,27 +717,432 @@ function ChainRisk({ symbol, setSymbol }) {
   );
 }
 
+const RISK_COLOR = { LOW: "var(--bull)", MEDIUM: "#7A5C15", HIGH: "var(--bear)" };
+const CONVICTION_DOTS = (n) => "●".repeat(Math.max(0, Math.min(5, n || 0))) + "○".repeat(5 - Math.max(0, Math.min(5, n || 0)));
+
+// Shared preview → send-to-Tradier status/controls, driven by the calling
+// component's own state machine. Two explicit steps always, because "Stage"
+// alone (a Tradier preview) never creates an order Tradier will show you
+// anywhere — that confused more than one person. Preview first (no side
+// effect at all), then a separate click actually sends the order into the
+// Tradier sandbox account.
+function OrderFlowStatus({ status, msg, previewLabel, onPreview, onConfirmPreview, onPlace, onConfirmPlace, onDiscard }) {
+  if (status === "placed") return <div className="safe" style={{ marginTop: 8, fontSize: 12.5, padding: "8px 10px" }}>✓ {msg}</div>;
+  if (status === "needs_ack_preview") {
+    return (
+      <div className="warn" style={{ marginTop: 8, fontSize: 12.5, padding: "8px 10px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span>{msg}</span>
+        <button className="chip" onClick={onConfirmPreview}>Confirm &amp; preview</button>
+      </div>
+    );
+  }
+  if (status === "needs_ack_place") {
+    return (
+      <div className="warn" style={{ marginTop: 8, fontSize: 12.5, padding: "8px 10px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span>{msg}</span>
+        <button className="chip" onClick={onConfirmPlace}>Confirm &amp; send to Tradier</button>
+      </div>
+    );
+  }
+  if (status === "previewed") {
+    return (
+      <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+        <div className="mono muted" style={{ fontSize: 12 }}>{msg}</div>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button className="chip" onClick={onPlace} disabled={status === "placing"}>
+            {status === "placing" ? "Sending…" : "Send to Tradier (paper)"}
+          </button>
+          <button className="chip" onClick={onDiscard}>Discard</button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div style={{ marginTop: 8 }}>
+      <button className="chip" onClick={onPreview} disabled={status === "previewing"}>
+        {status === "previewing" ? "Checking risk…" : previewLabel}
+      </button>
+      {status === "error" && <div className="err" style={{ marginTop: 6, fontSize: 12.5 }}>{msg}</div>}
+    </div>
+  );
+}
+
+// OPTION ideas: single long call/put, qty 1 contract, using the contract the
+// suggestions route already resolved to a real OCC symbol + live bid/ask.
+async function submitLegOrder(url, idea, ack = {}, stopPrice = null) {
+  const leg = idea.leg;
+  if (!leg?.occ) throw new Error("No resolved contract for this idea.");
+  const body = {
+    legs: [{ action: "buy", type: idea.action === "CALL" ? "call" : "put", strike: String(leg.strike), premium: String(leg.mid ?? leg.ask ?? 0), qty: 1, occ: leg.occ }],
+    closing: false,
+    ideaId: idea.id ?? null, // links the journal entry back to this idea's full plan/context
+    ...(stopPrice > 0 ? { stop: { price: stopPrice } } : {}),
+    ...ack,
+  };
+  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const d = await r.json();
+  if (!r.ok) {
+    const err = new Error(d.error || "Request failed");
+    err.needsSpreadAck = d.needs_spread_ack; err.worstSpread = d.worst_spread;
+    err.needsAck = d.needs_ack; err.figure = d.figure;
+    throw err;
+  }
+  return d;
+}
+
+function OptionStageButton({ idea }) {
+  const estStop = idea.invalidation != null && idea.leg?.delta != null
+    ? buildOptionStopEstimate({ entryPremium: idea.leg.mid ?? idea.leg.ask, entryUnderlying: idea.entryPrice, invalidation: idea.invalidation, delta: idea.leg.delta })
+    : null;
+  const [stopOn, setStopOn] = useState(false); // default OFF — see caveat text below
+  const [stopPx, setStopPx] = useState(estStop != null ? estStop.toFixed(2) : "");
+  const [state, setState] = useState({ status: "idle", ack: {} });
+  if (idea.vehicle !== "OPTION" || !idea.leg?.occ) return null;
+  const locked = state.status === "placing" || state.status === "placed";
+  const activeStop = stopOn && Number(stopPx) > 0 ? Number(stopPx) : null;
+
+  const preview = async (ack = state.ack) => {
+    setState((s) => ({ ...s, status: "previewing" }));
+    try {
+      const d = await submitLegOrder("/api/order/stage", idea, ack, activeStop);
+      const stopNote = d.computed?.stop_attached ? ` · stop-market attached at $${Number(d.computed.stop_price).toFixed(2)} premium (GTC)` : "";
+      setState({ status: "previewed", ack, msg: `Preview only, nothing sent to Tradier yet — max loss ${moneyU(d.computed?.max_loss, d.computed?.unlimited_loss)} · max profit ${moneyU(d.computed?.max_profit, d.computed?.unlimited_profit)}${stopNote}` });
+    } catch (e) {
+      if (e.needsSpreadAck) setState({ status: "needs_ack_preview", ack, msg: `${e.message} Preview anyway?` });
+      else setState({ status: "error", ack, msg: e.message });
+    }
+  };
+  const place = async (ack = state.ack) => {
+    setState((s) => ({ ...s, status: "placing" }));
+    try {
+      const d = await submitLegOrder("/api/order/place", idea, ack, activeStop);
+      const stopNote = d.computed?.stop_attached ? ` A protective stop is resting GTC at $${Number(d.computed.stop_price).toFixed(2)} premium.` : "";
+      setState({ status: "placed", ack, msg: `Sent to Tradier (paper) — order #${d.order?.id ?? "?"}, status ${d.order?.status ?? "submitted"}.${stopNote} Check the Orders tab in your Tradier sandbox account.` });
+    } catch (e) {
+      if (e.needsSpreadAck) setState({ status: "needs_ack_place", ack, msg: `${e.message} Send anyway?` });
+      else setState({ status: "error", ack, msg: e.message });
+    }
+  };
+
+  return (
+    <div style={{ marginTop: 8 }}>
+      {estStop != null && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 3, marginBottom: 6 }}>
+          <label className="mono muted" style={{ fontSize: 12, display: "flex", gap: 6, alignItems: "center" }}>
+            <input type="checkbox" checked={stopOn} disabled={locked} onChange={(e) => setStopOn(e.target.checked)} />
+            Attach a GTC stop-market at
+            <input className="in" style={{ width: 66, padding: "2px 5px", fontSize: 12 }} inputMode="decimal" value={stopPx} disabled={locked || !stopOn}
+              onChange={(e) => setStopPx(e.target.value.replace(/[^0-9.]/g, ""))} />
+            premium (est.)
+          </label>
+          <div className="muted" style={{ fontSize: 10.5, lineHeight: 1.4 }}>
+            Estimated from the ${money(idea.invalidation)} underlying stop via this contract's delta — drifts as delta changes, and can trigger early on a stale/wide option quote even if {idea.symbol} itself never hits ${money(idea.invalidation)}. Off by default for that reason.
+          </div>
+        </div>
+      )}
+      <OrderFlowStatus status={state.status} msg={state.msg} previewLabel="Preview this idea (no order sent)"
+        onPreview={() => preview()} onConfirmPreview={() => preview({ ...state.ack, ack_wide_spread: true })}
+        onPlace={() => place()} onConfirmPlace={() => place({ ...state.ack, ack_wide_spread: true })}
+        onDiscard={() => setState({ status: "idle", ack: {} })} />
+    </div>
+  );
+}
+
+// SHARES ideas: no resolved contract to default from, so the trader picks a
+// quantity and limit price. Defaults to a nominal ~$500 position and the spot
+// price at generation time — both editable before either button does anything.
+function ShareStageButton({ idea }) {
+  const entry = Number(idea.entryPrice);
+  const hasInvalidation = idea.invalidation != null;
+  // Default quantity comes from the server's risk-based sizing (1% of the
+  // account to the stop, capped at 25% of the account) — rounded to whole
+  // shares because the Tradier paper sandbox can't do fractional; on
+  // Robinhood you can enter the fractional figure shown in the sizing badge.
+  const sized = idea.sizing?.vehicle === "SHARES" ? idea.sizing.shares : null;
+  const [qty, setQty] = useState(String(sized > 0 ? Math.max(1, Math.round(sized)) : (entry > 0 ? Math.max(1, Math.round(250 / entry)) : 10)));
+  const [price, setPrice] = useState(entry > 0 ? entry.toFixed(2) : "");
+  const [stopOn, setStopOn] = useState(hasInvalidation); // on by default — exact, not an estimate, unlike options
+  const [stopPx, setStopPx] = useState(hasInvalidation ? Number(idea.invalidation).toFixed(2) : "");
+  const [state, setState] = useState({ status: "idle", ack: {} });
+  if (idea.vehicle !== "SHARES") return null;
+  const locked = state.status === "placing" || state.status === "placed";
+  const activeStop = stopOn && Number(stopPx) > 0 ? Number(stopPx) : null;
+
+  const submit = async (url, ack) => {
+    const body = {
+      equity: {
+        symbol: idea.symbol, side: idea.action === "SELL" ? "sell" : "buy", quantity: Number(qty), price: Number(price),
+        stop: activeStop ?? idea.invalidation ?? undefined, attachStop: activeStop != null,
+      },
+      closing: false,
+      ideaId: idea.id ?? null, // links the journal entry back to this idea's full plan/context
+      ...ack,
+    };
+    const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || "Request failed");
+    return d;
+  };
+  const preview = async () => {
+    setState((s) => ({ ...s, status: "previewing" }));
+    try {
+      const d = await submit("/api/order/stage", {});
+      const risk = d.computed?.est_risk_at_stop;
+      const stopNote = d.computed?.stop_attached ? ` · GTC stop attached at $${Number(d.computed.stop_price).toFixed(2)}` : (risk != null ? ` · est. risk to stop ${money(-risk)}` : "");
+      setState({ status: "previewed", msg: `Preview only, nothing sent to Tradier yet — ${qty} sh @ $${Number(price).toFixed(2)}${stopNote}` });
+    } catch (e) {
+      setState({ status: "error", msg: e.message });
+    }
+  };
+  const place = async () => {
+    setState((s) => ({ ...s, status: "placing" }));
+    try {
+      const d = await submit("/api/order/place", {});
+      const stopNote = d.computed?.stop_attached ? ` A protective stop is resting GTC at $${Number(d.computed.stop_price).toFixed(2)}.` : "";
+      setState({ status: "placed", msg: `Sent to Tradier (paper) — order #${d.order?.id ?? "?"}, status ${d.order?.status ?? "submitted"}.${stopNote} Check the Orders tab in your Tradier sandbox account.` });
+    } catch (e) {
+      setState({ status: "error", msg: e.message });
+    }
+  };
+
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+        <span className="mono muted" style={{ fontSize: 12 }}>{idea.action === "SELL" ? "Short" : "Buy"}</span>
+        <input className="in" style={{ width: 60, padding: "3px 6px", fontSize: 12 }} inputMode="numeric" value={qty} disabled={locked}
+          onChange={(e) => setQty(e.target.value.replace(/[^0-9]/g, ""))} />
+        <span className="mono muted" style={{ fontSize: 12 }}>sh @ $</span>
+        <input className="in" style={{ width: 80, padding: "3px 6px", fontSize: 12 }} inputMode="decimal" value={price} disabled={locked}
+          onChange={(e) => setPrice(e.target.value.replace(/[^0-9.]/g, ""))} />
+        <span className="mono muted" style={{ fontSize: 12 }}>limit</span>
+      </div>
+      {hasInvalidation && (
+        <label className="mono muted" style={{ fontSize: 12, display: "flex", gap: 6, alignItems: "center", marginTop: 6 }}>
+          <input type="checkbox" checked={stopOn} disabled={locked} onChange={(e) => setStopOn(e.target.checked)} />
+          Attach a real GTC stop at
+          <input className="in" style={{ width: 70, padding: "2px 5px", fontSize: 12 }} inputMode="decimal" value={stopPx} disabled={locked || !stopOn}
+            onChange={(e) => setStopPx(e.target.value.replace(/[^0-9.]/g, ""))} />
+          (exact — same units as the plan's stop, recommended)
+        </label>
+      )}
+      <OrderFlowStatus status={state.status} msg={state.msg} previewLabel="Preview this idea (no order sent)"
+        onPreview={preview} onConfirmPreview={preview} onPlace={place} onConfirmPlace={place}
+        onDiscard={() => setState({ status: "idle" })} />
+    </div>
+  );
+}
+
+function RegimeBanner() {
+  const [regime, setRegime] = useState(null);
+  useEffect(() => { getJSON("/api/regime").then(setRegime).catch(() => {}); }, []);
+  if (!regime?.available) return null;
+  const { spy, qqq, vix, rotation } = regime;
+  return (
+    <div className="mono muted" style={{ fontSize: 12, marginBottom: 12, paddingBottom: 10, borderBottom: "1px solid var(--line)" }}>
+      Regime — SPY <span className={spy.chgPct >= 0 ? "up" : "down"}>{spy.chgPct >= 0 ? "+" : ""}{spy.chgPct?.toFixed(1)}%</span> ({spy.trend})
+      {" · "}QQQ <span className={qqq.chgPct >= 0 ? "up" : "down"}>{qqq.chgPct >= 0 ? "+" : ""}{qqq.chgPct?.toFixed(1)}%</span> ({qqq.trend})
+      {" · "}VIX {vix.last?.toFixed(1)} ({vix.read.split(" — ")[0]}) · {rotation}
+    </div>
+  );
+}
+
+// Ideas auto-refresh only at the moments the desk rulebook actually calls
+// for a fresh read — never on a fixed poll: 8:30 ET (pre-market plan) and the
+// two prime trading windows, 9:45 and 14:30 ET. Deliberately nothing at
+// 11:00 (that's the lunch-chop "manage, don't hunt for new setups" window).
+const IDEAS_SCHEDULE_ET = [8 * 60 + 30, 9 * 60 + 45, 14 * 60 + 30]; // minutes since ET midnight
+
+function etMinutesNow(now = new Date()) {
+  const et = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
+  return et.getHours() * 60 + et.getMinutes() + et.getSeconds() / 60;
+}
+function msUntilNextIdeasSlot(now = new Date()) {
+  const cur = etMinutesNow(now);
+  const next = IDEAS_SCHEDULE_ET.find((m) => m > cur);
+  const untilMinutes = next != null ? next - cur : (1440 - cur) + IDEAS_SCHEDULE_ET[0];
+  return Math.max(1000, untilMinutes * 60000);
+}
+const IDEAS_SCHEDULE_LABEL = "8:30, 9:45 & 2:30pm ET";
+
+// A good setup showing up at 9:47 does you no good if you see it at noon.
+// Browser desktop notifications + a synthesized chime (no sound file to
+// ship) are the whole mechanism — no server, no accounts, works the moment
+// permission is granted. Real limits, stated plainly rather than hidden:
+// this only fires while a browser tab with this app open somewhere on this
+// machine is alive, and only at the existing Ideas refresh schedule
+// (8:30/9:45/2:30 ET or a manual click) — there is no background process
+// checking in between.
+const ALERT_MIN_CONVICTION = 4;
+
+function playAlertChime() {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    const ctx = new Ctx();
+    const now = ctx.currentTime;
+    [880, 1320].forEach((freq, i) => {
+      const osc = ctx.createOscillator(), gain = ctx.createGain();
+      osc.type = "sine"; osc.frequency.value = freq;
+      const t0 = now + i * 0.15;
+      gain.gain.setValueAtTime(0.0001, t0);
+      gain.gain.exponentialRampToValueAtTime(0.2, t0 + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.3);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(t0); osc.stop(t0 + 0.35);
+    });
+  } catch {}
+}
+
+function notifyGoodIdeas(ideas) {
+  if (typeof window === "undefined" || !("Notification" in window) || Notification.permission !== "granted") return;
+  const good = (ideas || []).filter((i) => i.action !== "WAIT" && Number(i.conviction) >= ALERT_MIN_CONVICTION && i.risk && i.risk !== "HIGH");
+  if (!good.length) return;
+  playAlertChime();
+  good.slice(0, 3).forEach((idea) => {
+    const body = idea.vehicle === "OPTION"
+      ? `${idea.action} ${idea.leg?.strike ?? idea.strike ?? ""} ${idea.expiration ?? ""} · conviction ${idea.conviction}/5 · ${idea.risk}`
+      : `${idea.action} shares · conviction ${idea.conviction}/5 · ${idea.risk}`;
+    try {
+      const n = new Notification(`${idea.emoji || "💡"} ${idea.symbol} — good setup`, { body, tag: idea.id });
+      n.onclick = () => window.focus();
+    } catch {}
+  });
+}
+
+function AlertsToggle() {
+  const [perm, setPerm] = useState("unsupported");
+  useEffect(() => {
+    if (typeof window !== "undefined" && "Notification" in window) setPerm(Notification.permission);
+  }, []);
+  if (perm === "unsupported") return null;
+  if (perm === "granted") return <span className="mono muted" style={{ fontSize: 11, alignSelf: "center" }} title={`Notifies for conviction ${ALERT_MIN_CONVICTION}+ / non-HIGH-risk ideas on refresh`}>🔔 Alerts on</span>;
+  if (perm === "denied") return <span className="mono muted" style={{ fontSize: 11, alignSelf: "center" }} title="Blocked in this browser's site settings for this page">🔕 Alerts blocked</span>;
+  return (
+    <button className="chip" onClick={async () => {
+      const r = await Notification.requestPermission();
+      setPerm(r);
+      if (r === "granted") playAlertChime();
+    }}>Enable alerts 🔔</button>
+  );
+}
+
+// variant "mover": actionable big mover, red — a real signal, high urgency.
+// variant "flag": big mover the Cockpit is passing on (action WAIT), amber —
+// worth seeing (something big happened) without reading as a buy/sell signal.
+function IdeaCard({ idea, isLast, asOf, showPro, variant }) {
+  const staleAt = asOf && idea.staleMinutes ? asOf + idea.staleMinutes * 60000 : null;
+  const isStale = staleAt != null && Date.now() > staleAt;
+  const boxed = variant != null;
+  const flagStyle = { border: "1.5px solid rgba(163,120,32,.45)", borderRadius: 3, background: "rgba(163,120,32,.08)" };
+  const moverStyle = { border: "1.5px solid var(--bear)", borderRadius: 3, background: "rgba(154,71,54,.07)" };
+  return (
+    <div style={{
+      padding: boxed ? "12px" : "12px 0", margin: boxed ? "0 0 10px" : 0,
+      borderBottom: boxed ? "none" : (isLast ? "none" : "1px solid var(--line)"),
+      opacity: isStale ? 0.55 : 1,
+      ...(variant === "mover" ? moverStyle : variant === "flag" ? flagStyle : {}),
+    }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+        <span style={{ fontWeight: 600 }}>
+          {variant === "mover" && <span className="down" style={{ fontWeight: 700, marginRight: 6 }} title={`${idea.todayChangePct >= 0 ? "+" : ""}${idea.todayChangePct?.toFixed(0)}% today`}>🔴 BIG MOVER</span>}
+          {variant === "flag" && <span style={{ fontWeight: 700, marginRight: 6, color: "#7A5C15" }} title={`${idea.todayChangePct >= 0 ? "+" : ""}${idea.todayChangePct?.toFixed(0)}% today — flagged, not a buy`}>⚠️ FLAGGED, NOT A BUY</span>}
+          {idea.emoji} {idea.symbol} · {idea.action}
+          {idea.vehicle === "OPTION" ? ` ${idea.leg?.strike ?? idea.strike ?? ""} ${idea.expiration ?? ""}` : idea.vehicle === "SHARES" ? " shares" : ""}
+          {idea.todayChangePct != null && (
+            <span className={idea.todayChangePct >= 0 ? "up" : "down"} style={{ marginLeft: 8, fontWeight: 600 }}>
+              {idea.todayChangePct >= 0 ? "+" : ""}{idea.todayChangePct.toFixed(1)}% today
+            </span>
+          )}
+        </span>
+        <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {idea.conviction != null && (
+            <span className="mono muted" title={`Conviction ${idea.conviction}/5`} style={{ fontSize: 11, letterSpacing: 1 }}>{CONVICTION_DOTS(idea.conviction)}</span>
+          )}
+          <span className="badge" style={{ color: RISK_COLOR[idea.risk] || "var(--muted)", borderColor: RISK_COLOR[idea.risk] || "var(--line)" }}>
+            {idea.risk || "—"}
+          </span>
+        </span>
+      </div>
+      {idea.triggered != null && (
+        <div style={{ marginTop: 5 }}>
+          <span className="badge" style={idea.triggered
+            ? { color: "var(--bull)", borderColor: "var(--bull)" }
+            : { color: "#7A5C15", borderColor: "rgba(163,120,32,.5)" }}>
+            {idea.triggered
+              ? "✓ Entry condition already met — this is live, not just a watch"
+              : `⏳ NOT triggered yet — still needs to go ${idea.triggerDirection} ${money(idea.triggerPrice)} first`}
+          </span>
+        </div>
+      )}
+      {(idea.invalidation != null || idea.target != null || idea.entryTrigger) && (
+        <div className="mono muted" style={{ fontSize: 12, marginTop: 5 }}>
+          {idea.entryTrigger && <>Entry: {idea.entryTrigger}{" · "}</>}
+          {idea.invalidation != null && <>Stop (stock) <span className="down">{money(idea.invalidation)}</span></>}
+          {idea.invalidation != null && idea.target != null && " → "}
+          {idea.target != null && <>Target (stock) <span className="up">{money(idea.target)}</span></>}
+          {idea.catalyst && <span> · {idea.catalyst}</span>}
+          {staleAt && <span> · {isStale ? "stale" : `stale by ${new Date(staleAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`}</span>}
+        </div>
+      )}
+      {idea.vehicle === "OPTION" && idea.leg?.delta != null && (idea.invalidation != null || idea.target != null) && (() => {
+        const entryPx = idea.leg.mid ?? idea.leg.ask;
+        const atLevel = (level) => level != null && entryPx != null
+          ? Math.max(0.01, entryPx + idea.leg.delta * (level - idea.entryPrice))
+          : null;
+        const stopPrem = atLevel(idea.invalidation);
+        const targetPrem = atLevel(idea.target);
+        return (
+          <div className="mono muted" style={{ fontSize: 12, marginTop: 2 }}>
+            For a stop/limit order on the CONTRACT itself (Robinhood, etc. want this in the option's own price, not the stock's):
+            {" "}{stopPrem != null && <>stop ≈ <span className="down">${stopPrem.toFixed(2)}</span></>}
+            {stopPrem != null && targetPrem != null && " → "}
+            {targetPrem != null && <>target ≈ <span className="up">${targetPrem.toFixed(2)}</span></>}
+            {" "}<span style={{ opacity: 0.75 }}>(estimate from delta {idea.leg.delta.toFixed(2)} at entry — drifts as delta itself changes; re-check before relying on it)</span>
+          </div>
+        );
+      })()}
+      <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>{showPro ? (idea.why_pro || idea.why_plain || idea.why) : (idea.why_plain || idea.why)}</div>
+      {idea.sizing?.note && (
+        <div className="mono" style={{ fontSize: 12, marginTop: 6 }}>
+          <span className="badge" style={idea.affordable === false
+            ? { color: "var(--bear)", borderColor: "var(--bear)" }
+            : idea.sizing.comfortable === false
+            ? { color: "#7A5C15", borderColor: "rgba(163,120,32,.5)" }
+            : { color: "var(--bull)", borderColor: "var(--bull)" }}>
+            {idea.affordable === false ? "Bigger than this account's comfort zone" : "Sized for your account"}: {idea.sizing.note}
+          </span>
+        </div>
+      )}
+      {idea.vehicle === "OPTION" && idea.affordable === false && (
+        <div className="muted" style={{ fontSize: 11.5, marginTop: 4, lineHeight: 1.4 }}>
+          Can't afford this strike? Don't swap to a cheaper, further-out strike on the same idea — a different strike is a different trade with a different breakeven, and the stop/target above won't apply to it. Buy fewer contracts if the sizing allows, look for a cheaper underlying, or use shares instead.
+        </div>
+      )}
+      <OptionStageButton idea={idea} />
+      <ShareStageButton idea={idea} />
+    </div>
+  );
+}
+
 function Ideas() {
-  const [suggestions, setSuggestions] = useState("");
+  const [ideas, setIdeas] = useState([]);
+  const [asOf, setAsOf] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
+  const [showPro, setShowPro] = useState(false);
+  const [account, setAccount] = useState(1000);
+  useEffect(() => { setAccount(readAccount()); }, []);
   const clock = useMarketClock();
   const closed = marketClosed(clock);
+  // React Strict Mode (dev only) intentionally fires a fresh mount's effects
+  // twice to surface non-idempotent ones. Without this guard that meant two
+  // independent, billed /api/suggestions calls (each a real Anthropic call)
+  // on every open of this tab, whichever finished last silently overwriting
+  // the other — same idea, two different generations, seconds apart, with no
+  // Refresh click in sight. A real remount (leaving and reopening the tab)
+  // gets a fresh ref and still loads normally.
+  const bootedRef = useRef(false);
 
-  // Load once on mount. Auto-refresh cadence follows the market: 60s while
-  // open; 10 min in pre/post-market (extended prices still move, but slower —
-  // and each refresh is a paid Claude call); fully paused when closed, since a
-  // closed market produces identical input every time. Manual Refresh always works.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { load(); }, []);
-  useEffect(() => {
-    if (clock?.state === "closed") return;
-    const t = setInterval(load, closed ? 600000 : 60000);
-    return () => clearInterval(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [closed, clock?.state]);
-
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       let syms = DEFAULT_SYMS;
@@ -743,15 +1150,62 @@ function Ideas() {
         const saved = JSON.parse(localStorage.getItem("cockpit_watch"));
         if (Array.isArray(saved) && saved.length) syms = saved;
       } catch {}
-      const d = await getJSON(`/api/suggestions?symbols=${syms.join(",")}`);
-      setSuggestions(d.suggestions);
+      const d = await getJSON(`/api/suggestions?symbols=${syms.join(",")}&account=${readAccount()}`);
+      setIdeas(d.ideas || []);
+      setAsOf(d.timestamp ? new Date(d.timestamp).getTime() : Date.now());
       setErr("");
+      notifyGoodIdeas(d.ideas);
     } catch (e) {
       setErr(e.message);
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
+
+  // Load once on open. After that, refresh ONLY on the click of Refresh or at
+  // the next scheduled slot above — no interval polling. Market fully closed
+  // (weekend/holiday) suspends scheduling entirely until it reopens.
+  useEffect(() => {
+    if (asOf == null) {
+      if (bootedRef.current) return;
+      bootedRef.current = true;
+      load();
+      return;
+    }
+    if (!clock || clock.state === "closed") return;
+    const t = setTimeout(load, msUntilNextIdeasSlot());
+    return () => clearTimeout(t);
+  }, [clock?.state, asOf, load]);
+
+  // Bigger bets aren't hidden or converted to shares anymore — they're the
+  // same real CALL/PUT ideas, just sorted below anything that actually fits
+  // the stated account size, so the safer setups read first without losing
+  // the ones that don't fit yet.
+  // Big movers (real move today, computed from the actual quote, not
+  // self-reported by the model) get pulled to their own section at the very
+  // top — a MEDS-style 480% outlier or a 24%+ mover deserves to be seen
+  // immediately, not buried at whatever position risk-sorting happened to
+  // put it. Split into two: an actionable mover (red, "BIG MOVER") is a real
+  // signal; a WAIT on a huge mover — e.g. a 271% no-news microfloat spike the
+  // Cockpit deliberately declined — used to fall silently into the generic
+  // WAIT pile at the bottom, unreadable as anything other than "nothing
+  // happened." It gets its own amber "flagged, not a buy" section instead,
+  // so a move that big is never invisible even when the call is to skip it.
+  // Order below: red movers, then flagged-but-skipped movers, then
+  // actionable ideas sized for the account, then actionable ideas too big
+  // for it, then every remaining (non-mover) WAIT lumped at the very bottom
+  // — a routine WAIT is "nothing to do right now" no matter which bucket its
+  // underlying would otherwise fall into, so it shouldn't be interleaved
+  // with the ideas actually worth reading first.
+  const BIG_MOVER_PCT = 15;
+  const isBigMoveToday = (idea) => idea.todayChangePct != null && Math.abs(idea.todayChangePct) >= BIG_MOVER_PCT;
+  const isWait = (idea) => idea.action === "WAIT";
+  const bigMovers = ideas.filter((idea) => isBigMoveToday(idea) && !isWait(idea));
+  const flaggedMovers = ideas.filter((idea) => isBigMoveToday(idea) && isWait(idea));
+  const rest = ideas.filter((idea) => !isBigMoveToday(idea));
+  const sizedIdeas = rest.filter((idea) => !isWait(idea) && !(idea.vehicle === "OPTION" && idea.affordable === false));
+  const biggerIdeas = rest.filter((idea) => !isWait(idea) && idea.vehicle === "OPTION" && idea.affordable === false);
+  const waitIdeas = rest.filter(isWait);
 
   return (
     <div className="card">
@@ -759,27 +1213,74 @@ function Ideas() {
         <div className="warn" style={{ marginBottom: 12 }}>
           {clock.state === "closed"
             ? <>Market closed — ideas below are based on the last session&apos;s close plus overnight news, framed as plans for the next open.
-                Prices can gap at the open, so re-check before acting. Auto-refresh is paused; the Refresh button still works.</>
+                Prices can gap at the open, so re-check before acting.</>
             : <>{clock.state === "premarket" ? "Premarket" : "After hours"} — ideas factor in live extended-hours prices and fresh news from the Overnight Brief,
-                framed as plans for the next regular session. Option quotes stay stale until the open. Auto-refresh every 10 min; Refresh for the latest.</>}
+                framed as plans for the next regular session. Option quotes stay stale until the open.</>}
         </div>
       )}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+      <RegimeBanner />
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
         <span className="label" style={{ margin: 0 }}>
           <span className="live" style={closed ? { background: "var(--faint)" } : undefined} />
-          {clock?.state === "closed" ? "Ideas · auto-refresh paused (market closed)"
-            : closed ? "Ideas · extended hours · refreshes every 10 min"
-            : "Ideas · refreshes every 60s"}
+          Ideas{asOf ? <span className="muted" style={{ textTransform: "none", letterSpacing: 0 }}> · as of {new Date(asOf).toLocaleTimeString()} · auto-refreshes {IDEAS_SCHEDULE_LABEL}</span> : ""}
         </span>
-        <button className="btn" onClick={load} disabled={loading}>{loading ? "Loading..." : "Refresh"}</button>
+        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+          <label className="mono muted" style={{ fontSize: 11, display: "flex", gap: 4, alignItems: "center" }} title="Ideas are sized for this account: which cheaper names get scanned, whether a contract fits (hard cap 10%), and how many shares (1% risk to the stop). Takes effect on the next refresh.">
+            Account $
+            <input className="in" style={{ width: 74, padding: "2px 5px", fontSize: 12 }} inputMode="numeric" value={account}
+              onChange={(e) => { const v = Number(e.target.value.replace(/[^0-9]/g, "")) || 0; setAccount(v); try { localStorage.setItem("cockpit_account", String(v)); } catch {} }} />
+          </label>
+          <AlertsToggle />
+          <button className="chip" onClick={() => setShowPro((v) => !v)}>{showPro ? "Plain view" : "Pro view"}</button>
+          <button className="btn" onClick={load} disabled={loading}>{loading ? "Loading..." : "Refresh"}</button>
+        </div>
       </div>
       {err && <div className="err">{err}</div>}
-      {suggestions && (
-        <div style={{ fontFamily: "var(--mono)", fontSize: "13px", lineHeight: "1.8", whiteSpace: "pre-wrap", color: "var(--ink)" }}>
-          {suggestions}
+      {bigMovers.length > 0 && (
+        <div style={{ marginBottom: 14 }}>
+          <span className="label down" style={{ margin: "0 0 8px", display: "block" }}>🔴 Big movers · {BIG_MOVER_PCT}%+ today — a real outlier, not routine noise</span>
+          {bigMovers.map((idea, i) => (
+            <IdeaCard key={idea.id ?? `${idea.symbol}-mover-${i}`} idea={idea} isLast={true} asOf={asOf} showPro={showPro} variant="mover" />
+          ))}
         </div>
       )}
-      {!suggestions && !loading && <div className="muted">Click Refresh to get trading ideas from Claude AI</div>}
+      {flaggedMovers.length > 0 && (
+        <div style={{ marginBottom: 14 }}>
+          <span className="label" style={{ margin: "0 0 8px", display: "block", color: "#7A5C15" }}>⚠️ Flagged movers · {BIG_MOVER_PCT}%+ today, but no clean setup — checked, not chased</span>
+          <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
+            A real move, but the Cockpit couldn't back it with fresh news or another good reason to trade it — usually a thin-float spike on stale or missing news. Shown here so a big move is never invisible, even when the call is to skip it.
+          </div>
+          {flaggedMovers.map((idea, i) => (
+            <IdeaCard key={idea.id ?? `${idea.symbol}-flag-${i}`} idea={idea} isLast={true} asOf={asOf} showPro={showPro} variant="flag" />
+          ))}
+        </div>
+      )}
+      {sizedIdeas.map((idea, i) => (
+        <IdeaCard key={idea.id ?? `${idea.symbol}-${i}`} idea={idea} isLast={i === sizedIdeas.length - 1 && !biggerIdeas.length && !waitIdeas.length} asOf={asOf} showPro={showPro} />
+      ))}
+      {biggerIdeas.length > 0 && (
+        <div style={{ margin: "18px 0 10px", paddingTop: 14, borderTop: "1px solid var(--line)" }}>
+          <span className="label" style={{ margin: 0 }}>Bigger bets · not sized for your ${account.toLocaleString()} account</span>
+          <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+            Same real ideas as before, on names whose contracts cost more than the account's comfort cap. Still fully actionable — just extra caution warranted on size.
+          </div>
+        </div>
+      )}
+      {biggerIdeas.map((idea, i) => (
+        <IdeaCard key={idea.id ?? `${idea.symbol}-big-${i}`} idea={idea} isLast={i === biggerIdeas.length - 1 && !waitIdeas.length} asOf={asOf} showPro={showPro} />
+      ))}
+      {waitIdeas.length > 0 && (
+        <div style={{ margin: "18px 0 10px", paddingTop: 14, borderTop: "1px solid var(--line)" }}>
+          <span className="label" style={{ margin: 0 }}>Watching · no clear setup right now</span>
+          <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+            Nothing actionable on these today — kept here so you can see they were checked, not skipped.
+          </div>
+        </div>
+      )}
+      {waitIdeas.map((idea, i) => (
+        <IdeaCard key={idea.id ?? `${idea.symbol}-wait-${i}`} idea={idea} isLast={i === waitIdeas.length - 1} asOf={asOf} showPro={showPro} />
+      ))}
+      {!ideas.length && !loading && <div className="muted">Click Refresh to get trading ideas from Claude AI</div>}
     </div>
   );
 }
@@ -814,14 +1315,16 @@ export default function Page() {
       <p className="sub">Live quotes and chains from your Tradier account, with defined-risk math built in.</p>
       <div className="tabs">
         <button className={"tab" + (tab === "watch" ? " on" : "")} onClick={() => setTab("watch")}>Watchlist</button>
+        <button className={"tab" + (tab === "news" ? " on" : "")} onClick={() => setTab("news")}>News</button>
         <button className={"tab" + (tab === "chain" ? " on" : "")} onClick={() => setTab("chain")}>Chain &amp; Risk</button>
-        <button className={"tab" + (tab === "div" ? " on" : "")} onClick={() => setTab("div")}>Divergence</button>
+        <button className={"tab" + (tab === "track" ? " on" : "")} onClick={() => setTab("track")}>Track Record</button>
         <button className={"tab" + (tab === "journal" ? " on" : "")} onClick={() => setTab("journal")}>Journal</button>
         <button className={"tab" + (tab === "ideas" ? " on" : "")} onClick={() => setTab("ideas")}>Ideas</button>
       </div>
       {tab === "watch" && <Watchlist onPick={pick} />}
+      {tab === "news" && <NewsBoard onPick={pick} />}
       {tab === "chain" && <ChainRisk symbol={symbol} setSymbol={setSymbol} />}
-      {tab === "div" && <Divergence />}
+      {tab === "track" && <TrackRecord />}
       {tab === "journal" && <Journal />}
       {tab === "ideas" && <Ideas />}
       <div className="foot">

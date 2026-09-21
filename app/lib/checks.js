@@ -15,6 +15,28 @@ export function rvol(volume, averageVolume) {
   return v / a;
 }
 
+// Minutes elapsed since the 9:30 ET open, clamped to the 390-minute regular
+// session. Used to time-adjust RVOL — comparing today's PARTIAL volume to a
+// FULL prior-day average understates RVOL all morning (it reads ~0.2x at
+// 10:00 on a perfectly ordinary day, which looks like "thin, fake move" when
+// it is nothing of the sort).
+export function elapsedSessionMinutes(now = new Date()) {
+  const et = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
+  const mins = et.getHours() * 60 + et.getMinutes() - 9 * 60 - 30;
+  return Math.max(1, Math.min(390, mins));
+}
+
+// RVOL adjusted for how much of the session has elapsed. Outside the regular
+// session (or when the state is unknown) the adjustment isn't meaningful, so
+// callers should pass sessionOpen=false and get the plain ratio back.
+export function rvolTimeAdjusted(volume, averageVolume, { sessionOpen = true, now = new Date() } = {}) {
+  const v = Number(volume), a = Number(averageVolume);
+  if (!(v >= 0) || !(a > 0)) return null;
+  if (!sessionOpen) return v / a;
+  const frac = elapsedSessionMinutes(now) / 390;
+  return v / (a * frac);
+}
+
 // Share of the tradeable float that changed hands. >1 means the entire float
 // turned over — the hallmark of a genuine squeeze.
 export function floatRotation(volume, floatShares) {
@@ -43,7 +65,7 @@ const CATALYSTS = [
   { kind: "dilution", weight: "bearish", re: /\b(public offering|pricing of|registered direct|convertible note|shelf registration|at-the-market|atm program|dilut|secondary offering|private placement)/i },
   { kind: "analyst action", weight: "low", re: /\b(upgrade|downgrade|price target|initiated coverage|reiterat|raises target|cuts target|analyst)/i },
   { kind: "clinical/FDA", weight: "high", re: /\b(fda|phase [123]|clinical|trial|breakthrough|efficacy|endpoint|vaccine|therap|drug|indication|orphan|pdufa|approval for)/i },
-  { kind: "M&A", weight: "high", re: /\b(acquir|merger|merge|takeover|buyout|stake in|tender offer|bid for|going private)/i },
+  { kind: "M&A", weight: "high", re: /\b(acquir|merger|merge|takeover|buyout|stake in|tender offer|bid for|going private|letter of intent|non-binding|definitive agreement|strategic transaction|interest in the|% interest in|joint venture)/i },
   { kind: "earnings/guidance", weight: "high", re: /\b(earnings|quarterly results|q[1-4] (results|earnings)|beats|misses|revenue|guidance|outlook|forecast|profit warning)/i },
   { kind: "contract/partnership", weight: "medium", re: /\b(contract|partnership|collaborat|agreement|awarded|order worth|supply deal|licens)/i },
   { kind: "leadership/restructuring", weight: "medium", re: /\b(ceo|cfo|resign|steps down|appoint|layoff|restructur|bankrupt|chapter 11)/i },

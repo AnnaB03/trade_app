@@ -59,11 +59,17 @@ export function gateB(legs, ack) {
     : { ok: false, required: true, figure, msg: `Short puts: max loss ${usd(figure)}. Tick the acknowledgement to proceed.` };
 }
 
-/* Gate C — max loss (same math as the Risk panel) vs MAX_LOSS_PER_TRADE cap */
+/* Gate C — max loss (same math as the Risk panel) vs MAX_LOSS_PER_TRADE cap.
+   cap === Infinity means no cap is configured (the default while this build
+   is paper-only) — always passes, with a message that says so rather than
+   the nonsensical "within the $Infinity cap". */
 export function gateC(legs, cap, gateBRes) {
   const a = analyze(legs);
   if (!a) return { ok: false, cap, maxLoss: null, msg: "could not compute risk" };
   const riskFigure = gateBRes?.required ? gateBRes.figure : Math.abs(a.maxL);
+  if (!Number.isFinite(cap)) {
+    return { ok: true, cap, maxLoss: riskFigure, msg: `Max loss ${usd(riskFigure)} — no per-trade cap set (paper trading)` };
+  }
   return riskFigure > cap
     ? { ok: false, cap, maxLoss: riskFigure, msg: `Blocked: max loss ${usd(riskFigure)} exceeds the ${usd(cap)} per-trade cap (MAX_LOSS_PER_TRADE).` }
     : { ok: true, cap, maxLoss: riskFigure, msg: `Max loss ${usd(riskFigure)} within the ${usd(cap)} cap` };
@@ -139,3 +145,55 @@ export function buildOrderForm(legs, { closing = false, limitPrice = null, previ
 
 // P&L of a round trip in dollars: cash in/out is −net×100 at each end
 export const roundTripPnl = (entryNet, exitNet) => -(Number(entryNet) + Number(exitNet)) * 100;
+
+/* Bracket (OTO — one-triggers-other) order: the entry, plus a protective
+   stop that Tradier holds GTC and only submits once the entry actually
+   fills. Single long leg only, matching this app's whole design (a plan to
+   buy one call/put or one equity position, never a spread). Stop-MARKET,
+   not stop-limit — once a protective stop is meant to trigger, getting OUT
+   is the point; a stop-limit can fail to fill entirely if price gaps past
+   the limit, which is exactly when protection matters most.
+
+   Options: stopPrice here is a PREMIUM level (the option's own price), not
+   the underlying's — see buildOptionStopEstimate below for how that gets
+   estimated from an underlying invalidation level. That estimate, not
+   Tradier, is the part that can be wrong. */
+export function buildBracketOptionForm(legs, { stopPrice, limitPrice = null, preview = false } = {}) {
+  if (legs.length !== 1) throw new Error("Bracket orders support a single leg only.");
+  const l = legs[0];
+  const underlying = parseOcc(l.occ).underlying;
+  const net = netPremium(legs);
+  const entryPx = limitPrice != null && limitPrice !== "" ? Math.abs(Number(limitPrice)) : Math.abs(net);
+  const form = {
+    class: "oto", symbol: underlying,
+    "option_symbol[0]": l.occ, "side[0]": "buy_to_open", "quantity[0]": String(l.qty), "type[0]": "limit", "price[0]": entryPx.toFixed(2), "duration[0]": "day",
+    "option_symbol[1]": l.occ, "side[1]": "sell_to_close", "quantity[1]": String(l.qty), "type[1]": "stop", "stop[1]": Number(stopPrice).toFixed(2), "duration[1]": "gtc",
+  };
+  if (preview) form.preview = "true";
+  return { form, underlying, net, side_map: { [l.occ]: "buy_to_open" } };
+}
+
+// Equity version — stopPrice is the stock's own price, an EXACT match to an
+// idea's invalidation level (no delta-estimation step needed, unlike options).
+export function buildBracketEquityForm({ symbol, side, quantity, price, stopPrice, preview = false }) {
+  const exitSide = side === "buy" ? "sell" : "buy_to_cover";
+  const form = {
+    class: "oto",
+    "symbol[0]": symbol, "side[0]": side, "quantity[0]": String(quantity), "type[0]": "limit", "price[0]": Number(price).toFixed(2), "duration[0]": "day",
+    "symbol[1]": symbol, "side[1]": exitSide, "quantity[1]": String(quantity), "type[1]": "stop", "stop[1]": Number(stopPrice).toFixed(2), "duration[1]": "gtc",
+  };
+  if (preview) form.preview = "true";
+  return { form };
+}
+
+// Estimate the option PREMIUM a stop needs, from an underlying invalidation
+// level — first-order (delta-only), so it drifts as delta itself moves and
+// ignores gamma/theta/vol changes between now and whenever it might trigger.
+// Never a guarantee; shown to the trader as an editable starting point, not
+// submitted silently.
+export function buildOptionStopEstimate({ entryPremium, entryUnderlying, invalidation, delta }) {
+  if (!(entryPremium > 0) || entryUnderlying == null || invalidation == null || delta == null) return null;
+  const moveInUnderlying = invalidation - entryUnderlying; // signed
+  const est = entryPremium + Number(delta) * moveInUnderlying;
+  return Math.max(0.01, est);
+}

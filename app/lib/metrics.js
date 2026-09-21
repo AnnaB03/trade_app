@@ -61,13 +61,6 @@ export function expectedMove(rows, spot) {
   return { atmStrike: atm.strike, em, emPct: em / spot, low: spot - em, high: spot + em };
 }
 
-export function moveVerdict(userPct, impliedPct) {
-  if (userPct == null || impliedPct == null || !(impliedPct > 0)) return null;
-  if (userPct > impliedPct * 1.25) return { tone: "bull", text: "You expect MORE movement than priced → long premium / debit spreads favored" };
-  if (userPct < impliedPct * 0.75) return { tone: "bear", text: "You expect LESS movement than priced → short premium / credit spreads favored" };
-  return { tone: "flat", text: "Your view ≈ market's — no vol edge; direction is the only edge here" };
-}
-
 /* Feature 2 — IV snapshot: average mid_iv across the 6 strikes nearest ATM (3 calls + 3 puts) */
 export function ivSnapshot(rows, spot) {
   if (spot == null || !rows?.length) return null;
@@ -131,18 +124,6 @@ export const daysUntil = (dateStr) => {
 // events you'd hold through: today ≤ event date ≤ position expiration
 export const eventsHeldThrough = (events, exp) =>
   (events || []).filter((ev) => ev.date && exp && ev.date <= exp && daysUntil(ev.date) >= 0);
-
-/* Feature 3 — Divergence: normalize both to −1…+1, divergence = price_norm − sent_norm */
-export function divergence(price30Pct, sentiment) {
-  if (price30Pct == null || sentiment == null) return null;
-  const priceNorm = Math.max(-15, Math.min(15, Number(price30Pct))) / 15;
-  const sentNorm = (Number(sentiment) - 50) / 50;
-  const score = priceNorm - sentNorm;
-  const label = score <= -0.6 ? "CROWD HOT / TAPE WEAK — euphoria unconfirmed (caution / fade-watch)"
-    : score >= 0.6 ? "TAPE STRONG / CROWD COLD — wall of worry (continuation-watch)"
-    : "aligned";
-  return { score, label, priceNorm, sentNorm };
-}
 
 /* Feature 7 — Option liquidity: bid–ask spread as a fraction of mid.
    The spread is what you pay the market maker to get in AND out; wide spreads
