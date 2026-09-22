@@ -932,37 +932,67 @@ function ShareStageButton({ idea }) {
   );
 }
 
+// Label for the SPY-wide opening-drive read in the regime banner. Mirrors
+// app/api/openingDriveLib.js's openingDriveText but rendered as a small JSX
+// fragment instead of a plain string, so the direction can be colored.
+function driveLabel(drive) {
+  if (!drive || drive.state === "n/a") return null;
+  if (drive.state === "pending") return <span className="muted">open drive pending until 10:00 ET</span>;
+  const up = drive.drivePct >= 0;
+  return (
+    <span>
+      open drive <span className={up ? "up" : "down"}>{up ? "+" : ""}{drive.drivePct?.toFixed(1)}%</span> ({drive.state})
+    </span>
+  );
+}
+
 function RegimeBanner() {
   const [regime, setRegime] = useState(null);
   useEffect(() => { getJSON("/api/regime").then(setRegime).catch(() => {}); }, []);
   if (!regime?.available) return null;
-  const { spy, qqq, vix, rotation } = regime;
+  const { spy, qqq, vix, rotation, spyDrive } = regime;
+  const drive = driveLabel(spyDrive);
   return (
     <div className="mono muted" style={{ fontSize: 12, marginBottom: 12, paddingBottom: 10, borderBottom: "1px solid var(--line)" }}>
       Regime — SPY <span className={spy.chgPct >= 0 ? "up" : "down"}>{spy.chgPct >= 0 ? "+" : ""}{spy.chgPct?.toFixed(1)}%</span> ({spy.trend})
       {" · "}QQQ <span className={qqq.chgPct >= 0 ? "up" : "down"}>{qqq.chgPct >= 0 ? "+" : ""}{qqq.chgPct?.toFixed(1)}%</span> ({qqq.trend})
       {" · "}VIX {vix.last?.toFixed(1)} ({vix.read.split(" — ")[0]}) · {rotation}
+      {drive && <>{" · "}{drive}</>}
     </div>
   );
 }
 
 // Ideas auto-refresh only at the moments the desk rulebook actually calls
-// for a fresh read — never on a fixed poll: 8:30 ET (pre-market plan) and the
-// two prime trading windows, 9:45 and 14:30 ET. Deliberately nothing at
-// 11:00 (that's the lunch-chop "manage, don't hunt for new setups" window).
-const IDEAS_SCHEDULE_ET = [8 * 60 + 30, 9 * 60 + 45, 14 * 60 + 30]; // minutes since ET midnight
+// for a fresh read — never on a fixed poll: 8:30 ET (pre-market plan) and two
+// prime trading windows. Deliberately nothing at 11:00 (that's the
+// lunch-chop "manage, don't hunt for new setups" window).
+//
+// The mid-morning slot used to be a flat 9:45. It now tracks when the
+// "opening drive" signal (docs/opening-drive-plan.md — the symbol's own
+// 9:30-10:00 move, the one lead-lag read that survived analysis) actually
+// exists: refreshing at 9:45 would pay for a model call that can't see it
+// yet. On sandbox (delayed) data, Tradier's feed lags ~15 minutes, so the
+// 10:00 print isn't reliably in hand until ~10:15 — that slot moves later
+// still in that case (see app/api/status for how "delayed" is reported).
+function midSlotEt(dataMode) { return dataMode === "delayed" ? 10 * 60 + 17 : 10 * 60 + 2; }
+function ideasScheduleEt(dataMode) {
+  return [8 * 60 + 30, midSlotEt(dataMode), 14 * 60 + 30]; // minutes since ET midnight, always increasing
+}
+function ideasScheduleLabel(dataMode) {
+  return `8:30, ${dataMode === "delayed" ? "10:17" : "10:02"} & 2:30pm ET`;
+}
 
 function etMinutesNow(now = new Date()) {
   const et = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
   return et.getHours() * 60 + et.getMinutes() + et.getSeconds() / 60;
 }
-function msUntilNextIdeasSlot(now = new Date()) {
+function msUntilNextIdeasSlot(dataMode, now = new Date()) {
+  const schedule = ideasScheduleEt(dataMode);
   const cur = etMinutesNow(now);
-  const next = IDEAS_SCHEDULE_ET.find((m) => m > cur);
-  const untilMinutes = next != null ? next - cur : (1440 - cur) + IDEAS_SCHEDULE_ET[0];
+  const next = schedule.find((m) => m > cur);
+  const untilMinutes = next != null ? next - cur : (1440 - cur) + schedule[0];
   return Math.max(1000, untilMinutes * 60000);
 }
-const IDEAS_SCHEDULE_LABEL = "8:30, 9:45 & 2:30pm ET";
 
 // A good setup showing up at 9:47 does you no good if you see it at noon.
 // Browser desktop notifications + a synthesized chime (no sound file to
@@ -1073,6 +1103,16 @@ function IdeaCard({ idea, isLast, asOf, showPro, variant }) {
           </span>
         </div>
       )}
+      {(idea.driveAligned === "with" || idea.driveAligned === "against") && (
+        <div style={{ marginTop: 5 }}>
+          <span className="badge" title={`This symbol's 9:30-10:00 ET move was ${idea.openingDriveState || ""}${idea.openingDrivePct != null ? ` (${idea.openingDrivePct >= 0 ? "+" : ""}${idea.openingDrivePct.toFixed(1)}%)` : ""}. See the Track Record tab's "By opening drive" split for whether this has actually mattered.`}
+            style={idea.driveAligned === "with"
+              ? { color: "var(--bull)", borderColor: "var(--bull)" }
+              : { color: "var(--bear)", borderColor: "var(--bear)" }}>
+            {idea.driveAligned === "with" ? "↗ with the open" : "↘ against the open"}
+          </span>
+        </div>
+      )}
       {(idea.invalidation != null || idea.target != null || idea.entryTrigger) && (
         <div className="mono muted" style={{ fontSize: 12, marginTop: 5 }}>
           {idea.entryTrigger && <>Entry: {idea.entryTrigger}{" · "}</>}
@@ -1131,6 +1171,11 @@ function Ideas() {
   const [showPro, setShowPro] = useState(false);
   const [account, setAccount] = useState(1000);
   useEffect(() => { setAccount(readAccount()); }, []);
+  // Only used to pick the mid-morning refresh slot (see ideasScheduleEt) —
+  // defaults to "realtime" until the first /api/status response lands, which
+  // just means the very first render assumes the earlier (10:02) slot.
+  const [dataMode, setDataMode] = useState("realtime");
+  useEffect(() => { getJSON("/api/status").then((s) => setDataMode(s.data === "delayed" ? "delayed" : "realtime")).catch(() => {}); }, []);
   const clock = useMarketClock();
   const closed = marketClosed(clock);
   // React Strict Mode (dev only) intentionally fires a fresh mount's effects
@@ -1173,9 +1218,9 @@ function Ideas() {
       return;
     }
     if (!clock || clock.state === "closed") return;
-    const t = setTimeout(load, msUntilNextIdeasSlot());
+    const t = setTimeout(load, msUntilNextIdeasSlot(dataMode));
     return () => clearTimeout(t);
-  }, [clock?.state, asOf, load]);
+  }, [clock?.state, asOf, load, dataMode]);
 
   // Bigger bets aren't hidden or converted to shares anymore — they're the
   // same real CALL/PUT ideas, just sorted below anything that actually fits
@@ -1222,7 +1267,7 @@ function Ideas() {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
         <span className="label" style={{ margin: 0 }}>
           <span className="live" style={closed ? { background: "var(--faint)" } : undefined} />
-          Ideas{asOf ? <span className="muted" style={{ textTransform: "none", letterSpacing: 0 }}> · as of {new Date(asOf).toLocaleTimeString()} · auto-refreshes {IDEAS_SCHEDULE_LABEL}</span> : ""}
+          Ideas{asOf ? <span className="muted" style={{ textTransform: "none", letterSpacing: 0 }}> · as of {new Date(asOf).toLocaleTimeString()} · auto-refreshes {ideasScheduleLabel(dataMode)}</span> : ""}
         </span>
         <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
           <label className="mono muted" style={{ fontSize: 11, display: "flex", gap: 4, alignItems: "center" }} title="Ideas are sized for this account: which cheaper names get scanned, whether a contract fits (hard cap 10%), and how many shares (1% risk to the stop). Takes effect on the next refresh.">

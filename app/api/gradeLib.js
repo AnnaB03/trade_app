@@ -46,11 +46,43 @@ export function gradeAt(idea, currentPrice) {
   return { at: new Date().toISOString(), price: px, movePct, correct, r, hitTarget, hitInvalidation };
 }
 
-// Checkpoints, by age since the idea was created.
+// ~4pm ET on a given date, as a UTC instant. Fixed 21:00Z, same approximation
+// finalDueAt below already uses for an option's expiration close — off by an
+// hour during EST, accepted for the same reason: "close enough for a
+// checkpoint" without pulling in a full timezone-DST table.
+function etCloseOn(dateStr) {
+  return new Date(`${dateStr}T21:00:00Z`).getTime();
+}
+
+// Same-session close, for an idea created during the regular session — the
+// opening-drive read (app/api/openingDriveLib.js) is a same-day claim, and
+// the existing h1/d1 checkpoints straddle the close without ever landing on
+// it. Ideas created outside the regular session (closed/premarket/postmarket)
+// have no meaningful "this session's close" and are excluded via appliesTo.
+export function eodDueAt(idea) {
+  const created = new Date(idea.createdAt).getTime();
+  if (!Number.isFinite(created)) return null;
+  const dateStr = new Date(created).toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+  return etCloseOn(dateStr);
+}
+
+// Checkpoints. Most are a fixed age (afterMs); one (eod) is due at a computed
+// wall-clock instant (dueAtFn) instead, and may not apply to every idea
+// (appliesTo). isCheckpointDue below is the one place that understands both.
 export const CHECKPOINTS = [
   { key: "h1", afterMs: 60 * 60 * 1000, label: "+1 hour" },
+  { key: "eod", dueAtFn: eodDueAt, appliesTo: (idea) => idea.marketState === "open", label: "same-day close" },
   { key: "d1", afterMs: 24 * 60 * 60 * 1000, label: "+1 day" },
 ];
+
+export function isCheckpointDue(cp, idea, now = Date.now()) {
+  if (cp.appliesTo && !cp.appliesTo(idea)) return false;
+  if (cp.dueAtFn) {
+    const due = cp.dueAtFn(idea);
+    return due != null && now >= due;
+  }
+  return now - new Date(idea.createdAt).getTime() >= cp.afterMs;
+}
 
 // The "final" checkpoint is expiration-aware: an option idea grades final at
 // its expiration date; a shares idea grades final 5 calendar days out (a

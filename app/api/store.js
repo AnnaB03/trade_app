@@ -17,6 +17,7 @@
    environment — list/append/update is the whole contract to keep. */
 import fs from "fs";
 import path from "path";
+import { isCheckpointDue } from "./gradeLib";
 
 const DIR = path.join(process.cwd(), "data");
 
@@ -82,8 +83,7 @@ export const updateIdea = (id, patch) => ideasStore.update(id, patch);
 export function dueForGrading(checkpoints, now = Date.now()) {
   return listIdeas().filter((idea) => {
     if (!["CALL", "PUT", "BUY", "SELL"].includes(idea.action)) return false;
-    const age = now - new Date(idea.createdAt).getTime();
-    return checkpoints.some((cp) => age >= cp.afterMs && !idea.grades?.[cp.key]);
+    return checkpoints.some((cp) => isCheckpointDue(cp, idea, now) && !idea.grades?.[cp.key]);
   });
 }
 

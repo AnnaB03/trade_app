@@ -8,11 +8,13 @@ import { getMovers } from "../moversLib";
 import { computeReality } from "../realityLib";
 import { dailyBars } from "../historyCache";
 import { marketRegime, regimeText } from "../regimeLib";
+import { openingDrive, openingDriveText } from "../openingDriveLib";
 import { calendarEffects, calendarEffectsText } from "../calendarRulesLib";
-import { classifyCatalyst, headlineAgeHours, ageRead, rvolTimeAdjusted } from "../../lib/checks";
+import { classifyCatalyst, headlineAgeHours, ageRead, rvolTimeAdjusted, driveAlignment } from "../../lib/checks";
 import { toRows, expectedMove, ivSnapshot, oiWalls, realizedVol, ivHvRead, optMid } from "../../lib/metrics";
 import { listIdeas, appendIdea } from "../store";
-import { computeCalibration, calibrationText } from "../calibrationLib";
+import { computeCalibration, calibrationText, driveGateActive } from "../calibrationLib";
+import { directionOf } from "../gradeLib";
 import { accountLimits, accountText, sizeIdea } from "../sizingLib";
 import { affordableCandidates } from "../affordableLib";
 
@@ -237,6 +239,10 @@ export async function GET(req) {
       const prevClose = Number(q.prevclose) || (priorBar ? Number(priorBar.close) : null);
       const todayOpen = Number(q.open) || null;
       const gapPct = prevClose > 0 && todayOpen > 0 ? ((todayOpen - prevClose) / prevClose) * 100 : null;
+      // Opening drive (9:30-10:00 ET) — the one lead-lag signal that survived
+      // analysis (docs/opening-drive-plan.md). Never blocks the refresh: any
+      // failure resolves to state "n/a" inside openingDrive itself.
+      const drive = await openingDrive(sym, { sessionDate: todayStr, clockState: clock.state, gapPct }).catch(() => null);
       const rvolAdj = rvolTimeAdjusted(q.volume, q.average_volume, { sessionOpen: clock.state === "open" });
       const closes = bars.map((b) => Number(b.close)).filter((v) => v > 0);
       const hv20 = realizedVol(closes, 20);
@@ -255,7 +261,7 @@ export async function GET(req) {
       const last = Number(q.last) || null;
       const offHighPct = todayHigh > 0 && last != null ? ((last - todayHigh) / todayHigh) * 100 : null;
       const offLowPct = todayLow > 0 && last != null ? ((last - todayLow) / todayLow) * 100 : null;
-      structureBySym[sym] = { prevClose, todayOpen, gapPct, priorHigh: priorBar ? Number(priorBar.high) : null, priorLow: priorBar ? Number(priorBar.low) : null, rvolAdj, hv20, todayHigh, todayLow, offHighPct, offLowPct };
+      structureBySym[sym] = { prevClose, todayOpen, gapPct, priorHigh: priorBar ? Number(priorBar.high) : null, priorLow: priorBar ? Number(priorBar.low) : null, rvolAdj, hv20, todayHigh, todayLow, offHighPct, offLowPct, drive };
     }));
 
     // Build prompt for Claude
@@ -271,6 +277,8 @@ export async function GET(req) {
           if (s.offLowPct != null && s.offLowPct >= 0.15) tags.push(`${s.offLowPct.toFixed(1)}% ABOVE TODAY'S LOW — already bounced, weakens a fresh PUT`);
           bits.push(`today's range $${s.todayLow.toFixed(2)}-$${s.todayHigh.toFixed(2)}${tags.length ? ", " + tags.join(" · ") : ", sitting at an extreme of today's range"}`);
         }
+        const driveTxt = openingDriveText(s.drive);
+        if (driveTxt) bits.push(driveTxt);
         if (s.rvolAdj != null) bits.push(`RVOL(time-adj) ${s.rvolAdj.toFixed(2)}x`);
         // A missing average-volume baseline (thin/obscure names) used to mean
         // this line just went silent — no RVOL, no flag, nothing. Silence
@@ -410,6 +418,7 @@ ${calendarData}
 REQUIREMENTS:
 1. Decide like a professional. Use the regime, the track record, IV vs realized vol, RVOL, gap, prior-day range, today's own high/low, OI walls, and catalyst weight — whichever are relevant — in your actual reasoning (why_pro). Then separately write why_plain in everyday words a beginner understands, no jargon (or explain any term you must use in the same sentence). why_pro can and should use real terms (theta, IV crush, delta, RVOL, gamma, etc.); why_plain may not.
 1b. This cuts both ways — check whichever applies to the idea you're building. A symbol trading meaningfully OFF its own high for the day is showing FADING intraday momentum, not confirmed strength, even while still green versus yesterday's close with elevated RVOL: a fresh CALL/BUY needs a specific reason the fade is over (e.g. it just reclaimed a level), or should be WAIT/lower conviction. Symmetrically, a symbol trading meaningfully ABOVE its own low for the day has already BOUNCED, not confirmed weakness, even while still red versus yesterday's close: a fresh PUT/SELL betting on continued downside needs a specific reason the bounce fails (e.g. it's rolling back over from a lower high), or should be WAIT/lower conviction. Chasing a move that already happened and is reversing — in either direction — is the "buying strength (or selling weakness) after the easy part is done" trap.
+1c. A MARKET DATA line may show an "opening drive" — the symbol's own 9:30-10:00 ET move, sized against its usual first-30-minute range. This app's own data found that a STRONG drive (up or down) modestly predicts which way the rest of that session goes; a FLAT drive or one still "pending" (before 10:00 ET) says nothing and must not be cited. For an INTRADAY idea (staleMinutes under ~240) on a symbol with a strong drive: treat that direction as the default, and require a specific, data-backed reason (a level reclaimed, a catalyst that hit after 10:00) before proposing the opposite direction — otherwise use WAIT or conviction ≤ 2 for a countertrend idea. This does not apply to multi-day swing ideas, and never before 10:00 ET. Your own calibration below, once it has enough graded history, will say whether "with the drive" ideas are actually outperforming here — weigh that over this instruction if the two disagree.
 2. Cover EVERY symbol listed under MARKET DATA above — never skip one, including index symbols like SPX and any symbol tagged "NO OPTIONS LISTED." Most will also appear under OPTION CHAINS; for the ones that don't (the tag says so right on their MARKET DATA line), vehicle must be "SHARES" or null — there is no chain to resolve an OPTION against, so do not propose one. But do NOT manufacture a trade: if a symbol has no clear directional setup right now, use action "WAIT" for it (vehicle null). An honest "nothing here today" is more useful than a forced idea, and you will not be penalized for saying it.
 3. For an actionable idea, set "vehicle" to "OPTION" or "SHARES" based on which fits the SETUP — not the account size. Affordability is no longer a gate on whether you may give an options idea: the app itself flags and separately sorts any option whose contract costs more than this account's comfort cap, so a real, well-reasoned options idea on an expensive name should still be given in full, not suppressed or silently swapped for shares. Every expiration line above still shows "ATM contract ≈ $X → fits / too expensive" — use that as CONTEXT for conviction and for one honest line in why_pro when it's a big chunk of the account, not as a reason to withhold the idea. Choose OPTION when the setup is sharp and news/event-driven and IV is not already rich vs realized vol (IV/HV20 well under ~1.25). Prefer SHARES when: IV/HV20 is rich (options are expensive relative to how much the stock actually moves), the setup is a slower multi-day swing, or you'd want a debit/credit spread but this app cannot place multi-leg orders yet — say so in why_pro. Never propose more than ONE contract.
 4. For OPTION ideas, "strike" MUST be exactly one of the ATM strikes listed for that symbol/expiration above, and "expiration" MUST be exactly one of the exact dates listed for that symbol. Pick the tier deliberately: a sharp, fast-resolving move fits near (~1wk); a slower setup fits mid (~3wk) or far (~6-7wk).
@@ -518,6 +527,25 @@ action is one of BUY, SELL, CALL, PUT, WAIT (BUY/SELL pair with vehicle SHARES; 
       idea.affordable = fits;
     }
 
+    // Phase 4 of docs/opening-drive-plan.md: a hard cap on countertrend
+    // intraday ideas, but ONLY once this app's own ledger has enough graded
+    // evidence (calibration computed above, from ideas BEFORE this refresh).
+    // driveGateActive requires n>=30 in both "with" and "against" AND a
+    // real win-rate gap — see calibrationLib.js. Self-activating: there is
+    // nothing to flip by hand, it turns on the moment the data supports it.
+    const gateActive = driveGateActive(calibration);
+    for (const idea of ideas) {
+      const drive = structureBySym[idea.symbol]?.drive;
+      idea.driveAligned = driveAlignment(directionOf(idea), drive);
+      idea.openingDriveState = drive?.state ?? null;
+      idea.openingDrivePct = drive?.drivePct ?? null;
+      idea.spyDriveState = regime?.available ? (regime.spyDrive?.state ?? null) : null;
+      if (gateActive && idea.driveAligned === "against" && Number(idea.staleMinutes) < 240 && idea.conviction != null) {
+        idea.conviction = Math.min(idea.conviction, 2);
+        idea.why_plain = `${idea.why_plain || ""} This app's own track record shows ideas that fight the morning's opening trend do worse, so conviction is capped here.`.trim();
+      }
+    }
+
     const RISK_ORDER = { LOW: 0, MEDIUM: 1, HIGH: 2 };
     ideas.sort((a, b) => (RISK_ORDER[a.risk] ?? 3) - (RISK_ORDER[b.risk] ?? 3));
 
@@ -539,6 +567,10 @@ action is one of BUY, SELL, CALL, PUT, WAIT (BUY/SELL pair with vehicle SHARES; 
         entryPrice: lastBySym[idea.symbol] ?? pennyPriceBySym[idea.symbol] ?? null,
         regimeTrend: regime?.available ? regime.spy.trend : null,
         marketState: clock.state,
+        openingDriveState: idea.openingDriveState ?? null,
+        openingDrivePct: idea.openingDrivePct ?? null,
+        spyDriveState: idea.spyDriveState ?? null,
+        driveAligned: idea.driveAligned ?? null,
       });
       // Client-visible so a "Send to Tradier" click can link the resulting
       // journal entry straight back to this idea's full context — see

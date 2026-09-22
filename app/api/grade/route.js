@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { tradier, asArray } from "../tradier";
 import { listIdeas, updateIdea } from "../store";
-import { CHECKPOINTS, gradeAt, isFinalDue } from "../gradeLib";
+import { CHECKPOINTS, gradeAt, isFinalDue, isCheckpointDue } from "../gradeLib";
 import { computeCalibration } from "../calibrationLib";
 
 /* Runs a grading pass over every idea due for a checkpoint (h1, d1, or its
@@ -36,8 +36,7 @@ export async function GET(req) {
     const now = Date.now();
     const due = ideas.filter((idea) => {
       if (!["CALL", "PUT", "BUY", "SELL"].includes(idea.action)) return false;
-      const age = now - new Date(idea.createdAt).getTime();
-      const cpDue = CHECKPOINTS.some((cp) => age >= cp.afterMs && !idea.grades?.[cp.key]);
+      const cpDue = CHECKPOINTS.some((cp) => isCheckpointDue(cp, idea, now) && !idea.grades?.[cp.key]);
       return cpDue || isFinalDue(idea, now);
     });
 
@@ -52,9 +51,8 @@ export async function GET(req) {
       const g = gradeAt(idea, px);
       if (!g) continue;
       const patch = { grades: { ...idea.grades } };
-      const age = now - new Date(idea.createdAt).getTime();
       for (const cp of CHECKPOINTS) {
-        if (age >= cp.afterMs && !idea.grades?.[cp.key]) patch.grades[cp.key] = g;
+        if (isCheckpointDue(cp, idea, now) && !idea.grades?.[cp.key]) patch.grades[cp.key] = g;
       }
       if (isFinalDue(idea, now)) patch.grades.final = g;
       updateIdea(idea.id, patch);

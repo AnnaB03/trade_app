@@ -1,5 +1,16 @@
 # Build plan: "Opening drive" signal in the Ideas tab
 
+> **Status: built.** Phases 1-3 are live in the app (see the files listed in
+> each phase below for what actually shipped, which matches this plan with
+> one documented simplification: the `typical` baseline uses history-based
+> median or a flat 0.6% default — the middle "implied move" fallback rung
+> was skipped for v1 rather than reordering the suggestions route's fetch
+> sequence). Phase 4's cap is implemented and self-activating, but inert
+> until the ledger has n≥30 graded ideas in both "with" and "against" — see
+> `driveGateActive` in `app/api/calibrationLib.js`. Phase 0's backtest script
+> is provided but has not been run against a live Tradier token in this
+> environment; run it before trusting Phase 1-3 numerically.
+
 ## 1. What this is, and what it is not
 
 Two rounds of analysis (Sep 2026, FMP daily and 30-minute bars) established:

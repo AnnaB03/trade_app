@@ -109,6 +109,14 @@ export default function TrackRecord() {
             <GroupTable title="By catalyst" rows={c.byCatalyst} />
             <GroupTable title="By symbol" rows={c.bySymbol} />
             <GroupTable title="By market regime (SPY trend)" rows={c.byRegimeTrend} />
+            <GroupTable title="By opening drive (with/against the 9:30-10:00 move)" rows={c.byOpeningDrive} />
+            {c.byOpeningDrive?.length > 0 && (
+              <div className="muted" style={{ fontSize: 11.5, marginTop: 6, lineHeight: 1.5 }}>
+                "with" = the idea's direction agreed with the symbol's own opening drive when it was made; "against" fought it.
+                Below n=30 in both, this is just informational — the Ideas tab only starts capping countertrend conviction once
+                there's enough graded history to justify it (see docs/opening-drive-plan.md).
+              </div>
+            )}
           </>
         )}
       </div>

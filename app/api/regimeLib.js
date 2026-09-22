@@ -5,6 +5,7 @@
    Uses only Tradier (quotes + daily history) — no extra API key needed. */
 import { tradier, asArray } from "./tradier";
 import { dailyCloses } from "./historyCache";
+import { openingDrive, openingDriveText } from "./openingDriveLib";
 
 const sma = (closes, n) => {
   if (closes.length < n) return null;
@@ -46,10 +47,11 @@ async function symbolBlock(symbol) {
 
 export async function marketRegime() {
   try {
-    const [spy, qqq, iwm, vixQuote, vixCloses] = await Promise.all([
+    const [spy, qqq, iwm, vixQuote, vixCloses, spyDrive] = await Promise.all([
       symbolBlock("SPY"), symbolBlock("QQQ"), symbolBlock("IWM"),
       tradier(`/markets/quotes?symbols=VIX`).then((d) => asArray(d?.quotes?.quote)?.[0] || {}).catch(() => ({})),
       dailyCloses("VIX", 10),
+      openingDrive("SPY").catch(() => null),
     ]);
     const vix = Number(vixQuote.last) || (vixCloses.length ? vixCloses[vixCloses.length - 1] : null);
     const vix5dAgo = vixCloses.length >= 6 ? vixCloses[vixCloses.length - 6] : null;
@@ -65,6 +67,7 @@ export async function marketRegime() {
       spy, qqq, iwm,
       vix: { last: vix, chg5d: vixChg5d, read: vixRegime(vix) },
       rotation,
+      spyDrive: spyDrive || null,
     };
   } catch (e) {
     return { available: false, reason: String(e.message || e) };
@@ -75,10 +78,12 @@ export async function marketRegime() {
 export function regimeText(r) {
   if (!r?.available) return "Market regime: unavailable.";
   const f = (n) => n == null ? "?" : n.toFixed(1);
+  const driveTxt = openingDriveText(r.spyDrive);
   return [
     `SPY $${f(r.spy.last)} (${r.spy.chgPct >= 0 ? "+" : ""}${f(r.spy.chgPct)}% today) — ${r.spy.trend} (vs 20/50/200-day SMA).`,
     `QQQ $${f(r.qqq.last)} (${r.qqq.chgPct >= 0 ? "+" : ""}${f(r.qqq.chgPct)}% today) — ${r.qqq.trend}.`,
     `VIX ${f(r.vix.last)} (5-day chg ${r.vix.chg5d != null ? (r.vix.chg5d >= 0 ? "+" : "") + f(r.vix.chg5d) + "%" : "?"}) — ${r.vix.read}.`,
     `Size rotation: ${r.rotation}.`,
-  ].join(" ");
+    driveTxt ? `SPY ${driveTxt} — see rule 1c and the "By opening drive" line in the track record below for whether this predicts anything yet; never use it before 10:00 ET.` : null,
+  ].filter(Boolean).join(" ");
 }

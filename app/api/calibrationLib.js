@@ -54,6 +54,11 @@ export function computeCalibration(ideas, { sinceDays = 60 } = {}) {
     byCatalyst: groupStats(rows, (i) => i.catalyst || null),
     bySymbol: groupStats(rows, (i) => i.symbol || null),
     byRegimeTrend: groupStats(rows, (i) => i.regimeTrend || null),
+    // "with"/"against"/"flat" the symbol's own 9:30-10:00 opening drive at
+    // the moment the idea was made (see app/api/openingDriveLib.js). This is
+    // the evidence Phase 4 (driveGateActive, below) needs before any hard
+    // rule is allowed to act on it.
+    byOpeningDrive: groupStats(rows, (i) => i.driveAligned || null),
     byHour: groupStats(rows, (i) => {
       const h = new Date(i.createdAt).getUTCHours();
       // Bucket into ET-ish 2-hour windows for readability (rough, no DST math needed for a bucket label).
@@ -75,6 +80,24 @@ export function calibrationText(calib) {
     fmtGroup("By catalyst", calib.byCatalyst),
     fmtGroup("By symbol", calib.bySymbol),
     fmtGroup("By market regime", calib.byRegimeTrend),
+    fmtGroup("By opening drive", calib.byOpeningDrive),
   ].filter(Boolean);
   return lines.join("\n");
+}
+
+/* ---------- Phase 4: the hard gate, data-driven not scheduled ----------
+   Do NOT cap conviction on an against-the-drive idea until this app's own
+   ledger has enough graded evidence that it actually matters. Requires at
+   least 30 graded ideas in BOTH "with" and "against" (the same n-floor
+   groupStats already applies at n>=3 is far too low to act on), and a real
+   gap in win rate before it flips on. Self-activates the moment the ledger
+   crosses the threshold; there is nothing to toggle by hand. */
+const GATE_MIN_N = 30;
+const GATE_MIN_GAP = 0.10; // 10 percentage points
+
+export function driveGateActive(calib) {
+  const groups = Object.fromEntries((calib?.byOpeningDrive || []).map((g) => [g.key, g]));
+  const withG = groups.with, against = groups.against;
+  if (!withG || !against || withG.n < GATE_MIN_N || against.n < GATE_MIN_N) return false;
+  return withG.winRate - against.winRate >= GATE_MIN_GAP;
 }

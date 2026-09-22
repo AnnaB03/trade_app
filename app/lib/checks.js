@@ -171,3 +171,38 @@ export function inDoubledWindow(now = new Date()) {
   const mins = et.getHours() * 60 + et.getMinutes();
   return (mins >= 570 && mins < 585) || (mins >= 935 && mins <= 960);
 }
+
+/* ---------- 4. Opening drive (9:30-10:00 ET) ----------
+   Two rounds of analysis (see docs/opening-drive-plan.md) found no signal in
+   "yesterday predicts today's open/gap", but did find a modest one in
+   "the first 30 minutes predicts the rest of the session" (pooled
+   correlation ~0.25 across NVDA/AAPL/TSLA, 228 sessions). This is the pure,
+   unit-testable half of that read — turning a raw % move into a labeled
+   strength, given the symbol's own typical first-30-minute size. Fetching
+   the actual bars and the historical baseline lives in openingDriveLib.js;
+   kept separate so the thresholds here can be tested with no network. */
+
+// strength = how many "typical first-30-minute moves" today's move is.
+// Below 0.5x is noise-level for this symbol; at/above 1x is a real push.
+export function classifyDrive(drivePct, typical) {
+  if (drivePct == null || !Number.isFinite(drivePct)) return { strength: null, state: "n/a" };
+  const t = typical > 0 ? typical : 0.6; // flat fallback: ~median first-30 move across liquid large caps
+  const strength = Math.abs(drivePct) / t;
+  if (strength < 0.5) return { strength, state: "flat" };
+  if (drivePct > 0) return { strength, state: strength >= 1 ? "strong up" : "mild up" };
+  return { strength, state: strength >= 1 ? "strong down" : "mild down" };
+}
+
+// Does a proposed idea's direction agree with the symbol's opening drive?
+// actionDirection: +1 (CALL/BUY), -1 (PUT/SELL), 0/null (WAIT) — see gradeLib.directionOf.
+// drive: the object classifyDrive/openingDrive produces, or null.
+// Returns "with" | "against" | "flat" | null (null = no opinion: drive not
+// resolved yet, unavailable, or the idea has no direction).
+export function driveAlignment(actionDirection, drive) {
+  if (!drive || drive.state === "n/a" || drive.state === "pending") return null;
+  if (drive.state === "flat") return "flat";
+  if (!actionDirection || drive.drivePct == null) return null;
+  const driveSign = drive.drivePct > 0 ? 1 : drive.drivePct < 0 ? -1 : 0;
+  if (!driveSign) return "flat";
+  return actionDirection === driveSign ? "with" : "against";
+}
