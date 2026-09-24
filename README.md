@@ -56,6 +56,12 @@ without it (most features degrade gracefully rather than break).
   only: Claude never sees the sweep setups, so the comparison stays fair. Engine: `app/lib/sweep.js`; routes: `/api/sweeps`,
   `/api/sweeps/autotrade` (`?dryRun=true`), `/api/sweeps/compare`.
 
+Both paper autopilots trade every qualifying suggestion, expensive ones
+included: options over the account's affordability cap and share positions
+over the 25% cap are placed anyway (paper money), with the sizing figure
+still shown. Add `?allowUnaffordable=false` to either autotrade route to
+put the cap back.
+
 Autopilot trades now close themselves out in the Journal. Fills, bracket
 stop-outs, and entry limits that expired unfilled are read back from the
 Tradier sandbox (`app/api/journalReconcile.js`).

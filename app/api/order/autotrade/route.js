@@ -19,8 +19,11 @@ import { liveQuote, placeOption, placeShares } from "../autotradeLib";
    - never auto-acknowledges a gate warning (wide spread, big-risk ack) —
      those exist to make a human stop and look, so an idea that trips one is
      skipped and reported, never forced through
-   - skips options over the account's affordability hard cap by default
-     (matches the app's own sizing philosophy) unless allowUnaffordable=true
+   - does NOT skip options or share positions over the account's
+     affordability caps: this is paper money, and the point is to see how
+     every suggestion plays out, expensive ones included. The sizing badge
+     still shows the figure. Pass allowUnaffordable=false to re-enable the
+     cap (e.g. rehearsing size discipline on a real-sized account).
 
    Trigger checking is LIVE, not batch-cached — this is the fix for a real
    gap: this route used to trust the `triggered` flag computed once, back
@@ -50,7 +53,7 @@ function latestBatch(ideas) {
 export async function GET(req) {
   const params = new URL(req.url).searchParams;
   const dryRun = params.get("dryRun") === "true";
-  const allowUnaffordable = params.get("allowUnaffordable") === "true";
+  const allowUnaffordable = params.get("allowUnaffordable") !== "false"; // paper: on by default
   const minConviction = Number(params.get("minConviction")) || MIN_CONVICTION;
 
   try {

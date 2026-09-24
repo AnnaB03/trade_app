@@ -28,6 +28,9 @@ export async function GET(req) {
   const minConviction = Number(p.get("minConviction")) || MIN_CONVICTION;
   const symbols = p.get("symbols") ? p.get("symbols").split(",") : DEFAULT_SWEEP_SYMS;
   const account = Number(p.get("account")) > 0 ? Number(p.get("account")) : (Number(process.env.ACCOUNT_SIZE) > 0 ? Number(process.env.ACCOUNT_SIZE) : 1000);
+  // Paper money: an expensive name whose single share is most of the account
+  // still gets traded (rounded up to 1 share), unless explicitly turned off.
+  const allowUnaffordable = p.get("allowUnaffordable") !== "false";
   const only = p.get("strategies") ? p.get("strategies").split(",") : ["sweep_limit", "sweep_reclaim"];
 
   let marketState = "unknown";
@@ -51,12 +54,6 @@ export async function GET(req) {
         const dup = findOpenJournalEntry((r) => r.symbol === idea.symbol);
         if (dup) { results.push({ ...tag, placed: false, reason: `Already have an open paper position/order in ${idea.symbol} (${dup.strategy || "ai"}, from ${dup.createdAt}) — not stacking another.` }); continue; }
 
-        // The shared placeShares rounds a fractional size UP to 1 whole share
-        // (the sandbox needs whole shares). On a pricey name that one share can
-        // be most of a small account — skip it rather than blow the 25% cap.
-        const maxPosition = account * 0.25;
-        if (idea.entryPrice > maxPosition) { results.push({ ...tag, placed: false, reason: `One share (~$${idea.entryPrice.toFixed(0)}) is over the 25% position cap ($${maxPosition.toFixed(0)}) for a $${account} account.` }); continue; }
-
         let toPlace = idea;
         if (idea.strategy === "sweep_reclaim") {
           const live = await liveQuote(idea.symbol);
@@ -64,7 +61,7 @@ export async function GET(req) {
           if (!(live > idea.setup.level)) { results.push({ ...tag, placed: false, reason: `Live $${live} is back under the $${idea.setup.level} level — reclaim failed.` }); continue; }
           toPlace = { ...idea, entryPrice: live };
         }
-        const r = await placeShares(toPlace, { dryRun, allowUnaffordable: false });
+        const r = await placeShares(toPlace, { dryRun, allowUnaffordable });
         results.push({ ...tag, ...r });
       }
     }

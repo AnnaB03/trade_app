@@ -218,7 +218,7 @@ export default function Sweeps({ autopilot }) {
           {autopilot.on
             ? autopilot.isOpen ? "Checks every 5 min while this app is open in a browser." : "On. Waiting for the regular session to open."
             : "Off. Scans still log suggestions to the ledger, but nothing gets bought."}
-          {" "}One open position per symbol across both strategies. Every order is a limit with a bracket stop, sized 1% risk / 25% cap like Ideas.
+          {" "}One open position per symbol across both strategies. Every order is a limit with a bracket stop, sized 1% risk to the stop like Ideas; on paper an expensive name still trades (rounded up to 1 share) even when that's over the 25% cap.
         </div>
         {last && (
           <div style={{ marginTop: 10 }}>

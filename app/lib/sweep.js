@@ -23,10 +23,10 @@
 
 // Default watch list for the Sweeps tab. Uber by request; the rest from
 // running backtest() over ~15 liquid names and keeping the ones where at
-// least one variant had positive expectancy AND one share fits a $1k
-// account's 25% position cap (SPY, MU, AMD tested fine but cost too much a
-// share). See README. Editable in the tab.
-export const DEFAULT_SWEEP_SYMS = ["UBER", "LYFT", "SOFI", "PLTR", "NVDA", "INTC", "BAC", "HOOD"];
+// least one variant had positive expectancy. Expensive names (SPY, MU) are
+// in: this is paper money, and one share is still a real test of the setup.
+// See README. Editable in the tab.
+export const DEFAULT_SWEEP_SYMS = ["UBER", "LYFT", "SOFI", "PLTR", "SPY", "NVDA", "MU", "INTC", "BAC", "AMD", "HOOD"];
 
 export const K = 3;                  // swing pivot half-width, in bars
 export const LOOKBACK = 60;          // how far back a level can come from
