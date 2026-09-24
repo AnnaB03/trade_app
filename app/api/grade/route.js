@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { tradier, asArray } from "../tradier";
 import { listIdeas, updateIdea } from "../store";
-import { CHECKPOINTS, gradeAt, isFinalDue } from "../gradeLib";
+import { CHECKPOINTS, gradeAt, isFinalDue, isGradable, gradeStart } from "../gradeLib";
+import { resolvePendingLimits } from "../sweepsLib";
 import { computeCalibration } from "../calibrationLib";
 
 /* Runs a grading pass over every idea due for a checkpoint (h1, d1, or its
@@ -32,11 +33,14 @@ export async function GET(req) {
     // was never the limit — this only fixes what got served back out.
     const days = Math.min(30, Math.max(2, Number(new URL(req.url).searchParams.get("days")) || 3));
     const windowStart = Date.now() - days * 86400000;
+    // Sweep limit ideas waiting on a touch get resolved (filled / unfilled)
+    // before grading, so a fill is graded from its own start time.
+    try { await resolvePendingLimits(); } catch {}
     const ideas = listIdeas();
     const now = Date.now();
     const due = ideas.filter((idea) => {
-      if (!["CALL", "PUT", "BUY", "SELL"].includes(idea.action)) return false;
-      const age = now - new Date(idea.createdAt).getTime();
+      if (!isGradable(idea)) return false;
+      const age = now - gradeStart(idea);
       const cpDue = CHECKPOINTS.some((cp) => age >= cp.afterMs && !idea.grades?.[cp.key]);
       return cpDue || isFinalDue(idea, now);
     });
@@ -52,7 +56,7 @@ export async function GET(req) {
       const g = gradeAt(idea, px);
       if (!g) continue;
       const patch = { grades: { ...idea.grades } };
-      const age = now - new Date(idea.createdAt).getTime();
+      const age = now - gradeStart(idea);
       for (const cp of CHECKPOINTS) {
         if (age >= cp.afterMs && !idea.grades?.[cp.key]) patch.grades[cp.key] = g;
       }

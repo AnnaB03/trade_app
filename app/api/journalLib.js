@@ -15,7 +15,8 @@ import { gradeAt } from "./gradeLib";
 export function realizedPnl(entry, exitFillPrice) {
   const mult = entry.vehicle === "OPTION" ? 100 : 1;
   const qty = Number(entry.entryQuantity) || 0;
-  const entryPx = Number(entry.entryLimitPrice);
+  // A reconciled fill (see journalReconcile.js) beats the submitted limit.
+  const entryPx = Number(entry.entryFillPrice ?? entry.entryLimitPrice);
   const exitPx = Number(exitFillPrice);
   if (!(qty > 0) || !Number.isFinite(entryPx) || !Number.isFinite(exitPx)) return { pnl: null, pnlPct: null };
   const longMult = entry.side === "sell_short" ? -1 : 1; // the OPTION vehicle is always long in this build
@@ -51,6 +52,9 @@ export function journalOpen({ ideaId, thesis, vehicle, symbol, occ, strike, opti
   return appendJournalEntry({
     ideaId: idea?.id ?? null,
     source: idea ? "idea" : "manual",
+    // Which playbook produced it, for the strategy comparison: "ai" for an
+    // Ideas-tab suggestion, sweep_limit / sweep_reclaim for the sweep detector.
+    strategy: idea ? (idea.strategy || "ai") : null,
     symbol, vehicle,
     occ: occ ?? null, strike: strike ?? null, expiration: expiration ?? idea?.expiration ?? null, optionType: optionType ?? null,
     side: side ?? "buy",

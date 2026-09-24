@@ -51,6 +51,7 @@ export function computeCalibration(ideas, { sinceDays = 60 } = {}) {
     nTotal: rows.length,
     nGraded: graded.length,
     overall,
+    byStrategy: groupStats(rows, (i) => i.strategy || "ai"),
     byCatalyst: groupStats(rows, (i) => i.catalyst || null),
     bySymbol: groupStats(rows, (i) => i.symbol || null),
     byRegimeTrend: groupStats(rows, (i) => i.regimeTrend || null),

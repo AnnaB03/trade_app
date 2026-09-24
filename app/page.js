@@ -8,6 +8,7 @@ import {
 import Journal from "./components/Journal";
 import TrackRecord from "./components/TrackRecord";
 import NewsBoard from "./components/NewsBoard";
+import Sweeps, { useSweepAutopilot } from "./components/Sweeps";
 import { buildOptionStopEstimate } from "./lib/orders";
 
 // Account size the Ideas engine sizes for — per browser, editable in the
@@ -1290,6 +1291,9 @@ export default function Page() {
   const [symbol, setSymbol] = useState("");
   const [status, setStatus] = useState(null);
   const pick = (s) => { setSymbol(s); setTab("chain"); };
+  const clock = useMarketClock();
+  // Page-level so it keeps running on any tab, not just Sweeps.
+  const sweepAutopilot = useSweepAutopilot(clock?.state ?? "unknown");
 
   useEffect(() => {
     getJSON("/api/status").then(setStatus).catch(() => {});
@@ -1320,6 +1324,7 @@ export default function Page() {
         <button className={"tab" + (tab === "track" ? " on" : "")} onClick={() => setTab("track")}>Track Record</button>
         <button className={"tab" + (tab === "journal" ? " on" : "")} onClick={() => setTab("journal")}>Journal</button>
         <button className={"tab" + (tab === "ideas" ? " on" : "")} onClick={() => setTab("ideas")}>Ideas</button>
+        <button className={"tab" + (tab === "sweeps" ? " on" : "")} onClick={() => setTab("sweeps")}>Sweeps{sweepAutopilot.on ? " ●" : ""}</button>
       </div>
       {tab === "watch" && <Watchlist onPick={pick} />}
       {tab === "news" && <NewsBoard onPick={pick} />}
@@ -1327,6 +1332,7 @@ export default function Page() {
       {tab === "track" && <TrackRecord />}
       {tab === "journal" && <Journal />}
       {tab === "ideas" && <Ideas />}
+      {tab === "sweeps" && <Sweeps autopilot={sweepAutopilot} />}
       <div className="foot">
         Informational only — not financial advice. Real-time data requires a funded Tradier brokerage account; without one the feed is delayed.
         Risk figures assume holding to expiration and ignore commissions, assignment, and slippage — confirm in your broker before trading.

@@ -222,7 +222,7 @@ export async function GET(req) {
     // Track record so far, fed back into the prompt so the model can see
     // where its own past calls have actually worked. Needs no extra fetch —
     // reads the local idea ledger (see app/api/store.js).
-    const calibration = computeCalibration(listIdeas());
+    const calibration = computeCalibration(listIdeas().filter((i) => !i.strategy)); // the model's own record, not the sweep detector's
     const calibTxt = calibrationText(calibration);
 
     // Per-symbol intraday structure: gap vs prior close, prior day's range,

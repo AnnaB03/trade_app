@@ -158,6 +158,7 @@ function PositionsPanel() {
   );
 }
 
+const STRATEGY_TAG = { ai: "AI idea", sweep_limit: "sweep · limit", sweep_reclaim: "sweep · reclaim" };
 const GRADE_TONE = (v) => v == null ? "muted" : v >= 0 ? "up" : "down";
 
 function AutoJournalPanel() {
@@ -193,9 +194,9 @@ function AutoJournalPanel() {
                 <td style={{ textAlign: "left", fontWeight: 600 }}>{e.symbol}</td>
                 <td style={{ textAlign: "left" }} title={e.thesis || ""}>
                   {e.vehicle === "OPTION" ? `${e.optionType ?? ""} ${e.strike ?? ""} ${e.expiration ?? ""}` : "shares"}
-                  {e.source === "idea" && <span className="badge" style={{ fontSize: 10, marginLeft: 6, padding: "1px 5px" }}>from idea</span>}
+                  {e.source === "idea" && <span className="badge" style={{ fontSize: 10, marginLeft: 6, padding: "1px 5px" }}>{STRATEGY_TAG[e.strategy || "ai"] || "from idea"}</span>}
                 </td>
-                <td className={e.status === "open" ? "" : "muted"}>{e.status}</td>
+                <td className={e.status === "open" ? "" : "muted"} title={e.status === "unfilled" ? "The entry limit expired without filling — logged so fill rate is measurable" : ""}>{e.status}</td>
                 <td style={{ textAlign: "left", fontSize: 12.5 }} className="muted">{e.exitReason || "—"}</td>
                 <td className={GRADE_TONE(e.pnl)} style={{ fontWeight: 600 }}>{e.pnl != null ? usd(e.pnl) : "—"}</td>
                 <td className={GRADE_TONE(e.rMultiple)}>{e.rMultiple != null ? (e.rMultiple >= 0 ? "+" : "") + e.rMultiple.toFixed(2) : "—"}</td>

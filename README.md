@@ -39,6 +39,25 @@ without it (most features degrade gracefully rather than break).
   position. On a small account most expensive names resolve to shares or WAIT
   by design.
 
+- **Sweeps** — a liquidity-sweep ("stop-hunt") detector, run as two separate
+  strategies so they can be compared: **limit** (a resting buy just under an
+  unswept daily swing low, where stops cluster, stop 1 ATR lower) and
+  **reclaim** (price trades under that low, then closes back above it; buy,
+  stop under the sweep low). Daily and intraday (5-min) reclaims are both
+  detected. Each symbol also gets its own ~2-year daily backtest and a 0–100
+  fit score, so the list can be judged by evidence. Setups are logged to the
+  same ledger as AI ideas and graded the same way. A resting limit counts only
+  once price actually reaches it, so its fill rate is measured too. A paper
+  **autopilot** (toggle in the tab, every 5 min during regular hours while
+  the app is open) buys them through the same order path as the AI
+  autotrade. A comparison table puts AI ideas and both sweep variants side
+  by side. Engine: `app/lib/sweep.js`; routes: `/api/sweeps`,
+  `/api/sweeps/autotrade` (`?dryRun=true`), `/api/sweeps/compare`.
+
+Autopilot trades now close themselves out in the Journal. Fills, bracket
+stop-outs, and entry limits that expired unfilled are read back from the
+Tradier sandbox (`app/api/journalReconcile.js`).
+
 ## Data
 
 - **Tradier** — quotes, chains, history, extended-hours prints, sandbox orders.

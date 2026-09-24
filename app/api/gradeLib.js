@@ -57,9 +57,20 @@ export const CHECKPOINTS = [
 // reasonable swing horizon since it carries no expiry of its own).
 export function finalDueAt(idea) {
   if (idea.expiration) return new Date(idea.expiration + "T21:00:00Z").getTime(); // ~4pm ET
-  return new Date(idea.createdAt).getTime() + 5 * 24 * 60 * 60 * 1000;
+  return gradeStart(idea) + 5 * 24 * 60 * 60 * 1000;
+}
+
+// When an idea's grading clock starts. Normally its creation; a resting-limit
+// sweep idea starts when price actually reached its limit (see sweepsLib.js).
+export function gradeStart(idea) {
+  return new Date(idea.gradeFrom || idea.createdAt).getTime();
+}
+
+// Not a trade (yet, or ever): a limit that hasn't filled, or never did.
+export function isGradable(idea) {
+  return ["CALL", "PUT", "BUY", "SELL"].includes(idea.action) && !idea.pendingFill && !idea.unfilled;
 }
 
 export function isFinalDue(idea, now = Date.now()) {
-  return !idea.grades?.final && now >= finalDueAt(idea);
+  return isGradable(idea) && !idea.grades?.final && now >= finalDueAt(idea);
 }
