@@ -8,7 +8,7 @@ import {
 import Journal from "./components/Journal";
 import TrackRecord from "./components/TrackRecord";
 import NewsBoard from "./components/NewsBoard";
-import Sweeps, { useSweepAutopilot } from "./components/Sweeps";
+import Sweeps, { useSweepAutopilot, readSweepSyms } from "./components/Sweeps";
 import { buildOptionStopEstimate } from "./lib/orders";
 
 // Account size the Ideas engine sizes for — per browser, editable in the
@@ -1124,6 +1124,59 @@ function IdeaCard({ idea, isLast, asOf, showPro, variant }) {
   );
 }
 
+/* Sweep setups on the Ideas tab — display only. These come from the
+   rule-based detector (app/lib/sweep.js), not from Claude, and the AI never
+   sees them, so the AI-vs-sweeps comparison stays clean. Same card and same
+   manual "send to paper" button as an AI idea; the ledger id links a placed
+   order's journal entry back to the setup. The scan is cheap (no LLM) and
+   dedupes per setup per day, so loading it here doesn't double-log. */
+function SweepSetups({ showPro, refreshKey }) {
+  const [setups, setSetups] = useState(null);
+  const [asOf, setAsOf] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
+  const load = useCallback(async () => {
+    setLoading(true); setErr("");
+    try {
+      const d = await getJSON(`/api/sweeps?symbols=${readSweepSyms().join(",")}&account=${readAccount()}`);
+      const all = (d.symbols || []).flatMap((r) => r.setups || []);
+      // Only what the detector itself would trade: passed its filters, logged,
+      // and (for a limit) not already traded through today.
+      setSetups(all.filter((s) => s.id && s.setup?.ok && !(s.strategy === "sweep_limit" && s.filled))
+        .map((s) => ({ ...s, emoji: s.strategy === "sweep_limit" ? "🪤" : "🧲" }))
+        .sort((a, b) => (b.conviction ?? 0) - (a.conviction ?? 0)));
+      setAsOf(new Date(d.asOf).getTime());
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  useEffect(() => { load(); }, [load, refreshKey]);
+
+  return (
+    <div className="card">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+        <span className="label" style={{ margin: 0 }}>
+          Sweep setups · from the detector, not Claude{asOf ? <span className="muted" style={{ textTransform: "none", letterSpacing: 0 }}> · as of {new Date(asOf).toLocaleTimeString()}</span> : ""}
+        </span>
+        <button className="chip" onClick={load} disabled={loading}>{loading ? "Scanning…" : "Rescan"}</button>
+      </div>
+      <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+        🪤 limit = a resting buy just under a swing low where stops sit (fills only if price dips there today). 🧲 reclaim = price swept that low and closed back above it.
+        Kept apart from the AI ideas on purpose so the Sweeps tab can compare the two fairly. The symbol list and backtests live in the Sweeps tab.
+      </div>
+      {err && <div className="err" style={{ marginTop: 8 }}>{err}</div>}
+      {setups && !setups.length && !loading && (
+        <div className="muted" style={{ fontSize: 13, marginTop: 8 }}>No sweep setups on your list right now.</div>
+      )}
+      {(setups || []).map((idea, i) => (
+        <IdeaCard key={idea.id} idea={idea} isLast={i === setups.length - 1} asOf={asOf} showPro={showPro} />
+      ))}
+    </div>
+  );
+}
+
 function Ideas() {
   const [ideas, setIdeas] = useState([]);
   const [asOf, setAsOf] = useState(null);
@@ -1209,6 +1262,7 @@ function Ideas() {
   const waitIdeas = rest.filter(isWait);
 
   return (
+    <>
     <div className="card">
       {closed && (
         <div className="warn" style={{ marginBottom: 12 }}>
@@ -1283,6 +1337,8 @@ function Ideas() {
       ))}
       {!ideas.length && !loading && <div className="muted">Click Refresh to get trading ideas from Claude AI</div>}
     </div>
+    <SweepSetups showPro={showPro} refreshKey={asOf} />
+    </>
   );
 }
 

@@ -51,7 +51,9 @@ without it (most features degrade gracefully rather than break).
   **autopilot** (toggle in the tab, every 5 min during regular hours while
   the app is open) buys them through the same order path as the AI
   autotrade. A comparison table puts AI ideas and both sweep variants side
-  by side. Engine: `app/lib/sweep.js`; routes: `/api/sweeps`,
+  by side. Live sweep setups also appear on the Ideas tab in their own
+  section, with the same "send to paper" button. That section is display
+  only: Claude never sees the sweep setups, so the comparison stays fair. Engine: `app/lib/sweep.js`; routes: `/api/sweeps`,
   `/api/sweeps/autotrade` (`?dryRun=true`), `/api/sweeps/compare`.
 
 Autopilot trades now close themselves out in the Journal. Fills, bracket
