@@ -10,6 +10,7 @@ import TrackRecord from "./components/TrackRecord";
 import NewsBoard from "./components/NewsBoard";
 import ScalperPanel from "./components/ScalperPanel";
 import MoversRadar from "./components/MoversRadar";
+import Sweeps, { useSweepAutopilot, readSweepSyms } from "./components/Sweeps";
 import { buildOptionStopEstimate } from "./lib/orders";
 
 // Account size the Ideas engine sizes for — per browser, editable in the
@@ -1033,25 +1034,21 @@ function AlertsToggle() {
 }
 
 // variant "mover": actionable big mover, red — a real signal, high urgency.
-// variant "flag": big mover the Cockpit is passing on (action WAIT), amber —
-// worth seeing (something big happened) without reading as a buy/sell signal.
 function IdeaCard({ idea, isLast, asOf, showPro, variant }) {
   const staleAt = asOf && idea.staleMinutes ? asOf + idea.staleMinutes * 60000 : null;
   const isStale = staleAt != null && Date.now() > staleAt;
   const boxed = variant != null;
-  const flagStyle = { border: "1.5px solid rgba(163,120,32,.45)", borderRadius: 3, background: "rgba(163,120,32,.08)" };
   const moverStyle = { border: "1.5px solid var(--bear)", borderRadius: 3, background: "rgba(154,71,54,.07)" };
   return (
     <div style={{
       padding: boxed ? "12px" : "12px 0", margin: boxed ? "0 0 10px" : 0,
       borderBottom: boxed ? "none" : (isLast ? "none" : "1px solid var(--line)"),
       opacity: isStale ? 0.55 : 1,
-      ...(variant === "mover" ? moverStyle : variant === "flag" ? flagStyle : {}),
+      ...(variant === "mover" ? moverStyle : {}),
     }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
         <span style={{ fontWeight: 600 }}>
           {variant === "mover" && <span className="down" style={{ fontWeight: 700, marginRight: 6 }} title={`${idea.todayChangePct >= 0 ? "+" : ""}${idea.todayChangePct?.toFixed(0)}% today`}>🔴 BIG MOVER</span>}
-          {variant === "flag" && <span style={{ fontWeight: 700, marginRight: 6, color: "#7A5C15" }} title={`${idea.todayChangePct >= 0 ? "+" : ""}${idea.todayChangePct?.toFixed(0)}% today — flagged, not a buy`}>⚠️ FLAGGED, NOT A BUY</span>}
           {idea.emoji} {idea.symbol} · {idea.action}
           {idea.vehicle === "OPTION" ? ` ${idea.leg?.strike ?? idea.strike ?? ""} ${idea.expiration ?? ""}` : idea.vehicle === "SHARES" ? " shares" : ""}
           {idea.todayChangePct != null && (
@@ -1130,6 +1127,59 @@ function IdeaCard({ idea, isLast, asOf, showPro, variant }) {
   );
 }
 
+/* Sweep setups on the Ideas tab — display only. These come from the
+   rule-based detector (app/lib/sweep.js), not from Claude, and the AI never
+   sees them, so the AI-vs-sweeps comparison stays clean. Same card and same
+   manual "send to paper" button as an AI idea; the ledger id links a placed
+   order's journal entry back to the setup. The scan is cheap (no LLM) and
+   dedupes per setup per day, so loading it here doesn't double-log. */
+function SweepSetups({ showPro, refreshKey }) {
+  const [setups, setSetups] = useState(null);
+  const [asOf, setAsOf] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
+  const load = useCallback(async () => {
+    setLoading(true); setErr("");
+    try {
+      const d = await getJSON(`/api/sweeps?symbols=${readSweepSyms().join(",")}&account=${readAccount()}`);
+      const all = (d.symbols || []).flatMap((r) => r.setups || []);
+      // Only what the detector itself would trade: passed its filters, logged,
+      // and (for a limit) not already traded through today.
+      setSetups(all.filter((s) => s.id && s.setup?.ok && !(s.strategy === "sweep_limit" && s.filled))
+        .map((s) => ({ ...s, emoji: s.strategy === "sweep_limit" ? "🪤" : "🧲" }))
+        .sort((a, b) => (b.conviction ?? 0) - (a.conviction ?? 0)));
+      setAsOf(new Date(d.asOf).getTime());
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  useEffect(() => { load(); }, [load, refreshKey]);
+
+  return (
+    <div className="card">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+        <span className="label" style={{ margin: 0 }}>
+          Sweep setups · from the detector, not Claude{asOf ? <span className="muted" style={{ textTransform: "none", letterSpacing: 0 }}> · as of {new Date(asOf).toLocaleTimeString()}</span> : ""}
+        </span>
+        <button className="chip" onClick={load} disabled={loading}>{loading ? "Scanning…" : "Rescan"}</button>
+      </div>
+      <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+        🪤 limit = a resting buy just under a swing low where stops sit (fills only if price dips there today). 🧲 reclaim = price swept that low and closed back above it.
+        Kept apart from the AI ideas on purpose so the Sweeps tab can compare the two fairly. The symbol list and backtests live in the Sweeps tab.
+      </div>
+      {err && <div className="err" style={{ marginTop: 8 }}>{err}</div>}
+      {setups && !setups.length && !loading && (
+        <div className="muted" style={{ fontSize: 13, marginTop: 8 }}>No sweep setups on your list right now.</div>
+      )}
+      {(setups || []).map((idea, i) => (
+        <IdeaCard key={idea.id} idea={idea} isLast={i === setups.length - 1} asOf={asOf} showPro={showPro} />
+      ))}
+    </div>
+  );
+}
+
 function Ideas() {
   const [ideas, setIdeas] = useState([]);
   const [asOf, setAsOf] = useState(null);
@@ -1188,33 +1238,27 @@ function Ideas() {
   // same real CALL/PUT ideas, just sorted below anything that actually fits
   // the stated account size, so the safer setups read first without losing
   // the ones that don't fit yet.
-  // Big movers (real move today, computed from the actual quote, not
-  // self-reported by the model) get pulled to their own section at the very
-  // top — a MEDS-style 480% outlier or a 24%+ mover deserves to be seen
-  // immediately, not buried at whatever position risk-sorting happened to
-  // put it. Split into two: an actionable mover (red, "BIG MOVER") is a real
-  // signal; a WAIT on a huge mover — e.g. a 271% no-news microfloat spike the
-  // Cockpit deliberately declined — used to fall silently into the generic
-  // WAIT pile at the bottom, unreadable as anything other than "nothing
-  // happened." It gets its own amber "flagged, not a buy" section instead,
-  // so a move that big is never invisible even when the call is to skip it.
-  // Order below: red movers, then flagged-but-skipped movers, then
-  // actionable ideas sized for the account, then actionable ideas too big
-  // for it, then every remaining (non-mover) WAIT lumped at the very bottom
-  // — a routine WAIT is "nothing to do right now" no matter which bucket its
-  // underlying would otherwise fall into, so it shouldn't be interleaved
-  // with the ideas actually worth reading first.
+  // WAIT ideas are dropped entirely from this tab — a WAIT is "nothing to
+  // do," and that analysis already lives on the Watchlist (reality checks)
+  // and Track Record (calibration) tabs. Keeping them here just buried the
+  // real actionable ideas under a pile of non-trades. This tab is now
+  // BUY/SELL/CALL/PUT only. Big movers (real move today, computed from the
+  // actual quote, not self-reported by the model) still get pulled to their
+  // own section at the very top when actionable — a MEDS-style 480% outlier
+  // or a 24%+ mover deserves to be seen immediately, not buried at whatever
+  // position risk-sorting happened to put it. A WAIT on a big mover is just
+  // a WAIT now: dropped, not flagged — the Watchlist's reality check is
+  // where "why is this moving and is it real" lives.
   const BIG_MOVER_PCT = 15;
   const isBigMoveToday = (idea) => idea.todayChangePct != null && Math.abs(idea.todayChangePct) >= BIG_MOVER_PCT;
-  const isWait = (idea) => idea.action === "WAIT";
-  const bigMovers = ideas.filter((idea) => isBigMoveToday(idea) && !isWait(idea));
-  const flaggedMovers = ideas.filter((idea) => isBigMoveToday(idea) && isWait(idea));
-  const rest = ideas.filter((idea) => !isBigMoveToday(idea));
-  const sizedIdeas = rest.filter((idea) => !isWait(idea) && !(idea.vehicle === "OPTION" && idea.affordable === false));
-  const biggerIdeas = rest.filter((idea) => !isWait(idea) && idea.vehicle === "OPTION" && idea.affordable === false);
-  const waitIdeas = rest.filter(isWait);
+  const actionable = ideas.filter((idea) => idea.action !== "WAIT");
+  const bigMovers = actionable.filter(isBigMoveToday);
+  const rest = actionable.filter((idea) => !isBigMoveToday(idea));
+  const sizedIdeas = rest.filter((idea) => !(idea.vehicle === "OPTION" && idea.affordable === false));
+  const biggerIdeas = rest.filter((idea) => idea.vehicle === "OPTION" && idea.affordable === false);
 
   return (
+    <>
     <div className="card">
       {closed && (
         <div className="warn" style={{ marginBottom: 12 }}>
@@ -1251,19 +1295,8 @@ function Ideas() {
           ))}
         </div>
       )}
-      {flaggedMovers.length > 0 && (
-        <div style={{ marginBottom: 14 }}>
-          <span className="label" style={{ margin: "0 0 8px", display: "block", color: "#7A5C15" }}>⚠️ Flagged movers · {BIG_MOVER_PCT}%+ today, but no clean setup — checked, not chased</span>
-          <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
-            A real move, but the Cockpit couldn't back it with fresh news or another good reason to trade it — usually a thin-float spike on stale or missing news. Shown here so a big move is never invisible, even when the call is to skip it.
-          </div>
-          {flaggedMovers.map((idea, i) => (
-            <IdeaCard key={idea.id ?? `${idea.symbol}-flag-${i}`} idea={idea} isLast={true} asOf={asOf} showPro={showPro} variant="flag" />
-          ))}
-        </div>
-      )}
       {sizedIdeas.map((idea, i) => (
-        <IdeaCard key={idea.id ?? `${idea.symbol}-${i}`} idea={idea} isLast={i === sizedIdeas.length - 1 && !biggerIdeas.length && !waitIdeas.length} asOf={asOf} showPro={showPro} />
+        <IdeaCard key={idea.id ?? `${idea.symbol}-${i}`} idea={idea} isLast={i === sizedIdeas.length - 1 && !biggerIdeas.length} asOf={asOf} showPro={showPro} />
       ))}
       {biggerIdeas.length > 0 && (
         <div style={{ margin: "18px 0 10px", paddingTop: 14, borderTop: "1px solid var(--line)" }}>
@@ -1274,21 +1307,16 @@ function Ideas() {
         </div>
       )}
       {biggerIdeas.map((idea, i) => (
-        <IdeaCard key={idea.id ?? `${idea.symbol}-big-${i}`} idea={idea} isLast={i === biggerIdeas.length - 1 && !waitIdeas.length} asOf={asOf} showPro={showPro} />
+        <IdeaCard key={idea.id ?? `${idea.symbol}-big-${i}`} idea={idea} isLast={i === biggerIdeas.length - 1} asOf={asOf} showPro={showPro} />
       ))}
-      {waitIdeas.length > 0 && (
-        <div style={{ margin: "18px 0 10px", paddingTop: 14, borderTop: "1px solid var(--line)" }}>
-          <span className="label" style={{ margin: 0 }}>Watching · no clear setup right now</span>
-          <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-            Nothing actionable on these today — kept here so you can see they were checked, not skipped.
-          </div>
+      {!actionable.length && !loading && (
+        <div className="muted">
+          {ideas.length ? "Nothing actionable on this refresh — every idea came back WAIT. Check the Watchlist for the reality checks behind that, or Refresh again." : "Click Refresh to get trading ideas from Claude AI"}
         </div>
       )}
-      {waitIdeas.map((idea, i) => (
-        <IdeaCard key={idea.id ?? `${idea.symbol}-wait-${i}`} idea={idea} isLast={i === waitIdeas.length - 1} asOf={asOf} showPro={showPro} />
-      ))}
-      {!ideas.length && !loading && <div className="muted">Click Refresh to get trading ideas from Claude AI</div>}
     </div>
+    <SweepSetups showPro={showPro} refreshKey={asOf} />
+    </>
   );
 }
 
@@ -1297,6 +1325,9 @@ export default function Page() {
   const [symbol, setSymbol] = useState("");
   const [status, setStatus] = useState(null);
   const pick = (s) => { setSymbol(s); setTab("chain"); };
+  const clock = useMarketClock();
+  // Page-level so it keeps running on any tab, not just Sweeps.
+  const sweepAutopilot = useSweepAutopilot(clock?.state ?? "unknown");
 
   useEffect(() => {
     getJSON("/api/status").then(setStatus).catch(() => {});
@@ -1329,6 +1360,7 @@ export default function Page() {
         <button className={"tab" + (tab === "ideas" ? " on" : "")} onClick={() => setTab("ideas")}>Ideas</button>
         <button className={"tab" + (tab === "scalper" ? " on" : "")} onClick={() => setTab("scalper")}>Scalper</button>
         <button className={"tab" + (tab === "movers" ? " on" : "")} onClick={() => setTab("movers")}>Movers Radar</button>
+        <button className={"tab" + (tab === "sweeps" ? " on" : "")} onClick={() => setTab("sweeps")}>Sweeps{sweepAutopilot.on ? " ●" : ""}</button>
       </div>
       {/* Every panel below stays mounted at all times — only display:none
           toggles which one shows. Switching tabs used to unmount/remount
@@ -1345,6 +1377,7 @@ export default function Page() {
       <div hidden={tab !== "ideas"}><Ideas /></div>
       <div hidden={tab !== "scalper"}><ScalperPanel visible={tab === "scalper"} /></div>
       <div hidden={tab !== "movers"}><MoversRadar onPick={pick} visible={tab === "movers"} /></div>
+      <div hidden={tab !== "sweeps"}><Sweeps autopilot={sweepAutopilot} /></div>
       <div className="foot">
         Informational only — not financial advice. Real-time data requires a funded Tradier brokerage account; without one the feed is delayed.
         Risk figures assume holding to expiration and ignore commissions, assignment, and slippage — confirm in your broker before trading.

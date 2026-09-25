@@ -106,6 +106,7 @@ export default function TrackRecord() {
             <div className="muted" style={{ fontSize: 11.5, marginTop: 10, lineHeight: 1.5 }}>
               Grading samples the price AT the checkpoint, not the path to get there — a trade that breached its stop and later recovered can grade as a "win" here even though a real stop order would have closed it at a loss first. Worth a skeptical read on any volatile, thin-float name.
             </div>
+            <GroupTable title="By strategy (ai = Ideas tab; sweep_* = Sweeps tab)" rows={c.byStrategy} />
             <GroupTable title="By catalyst" rows={c.byCatalyst} />
             <GroupTable title="By symbol" rows={c.bySymbol} />
             <GroupTable title="By market regime (SPY trend)" rows={c.byRegimeTrend} />
@@ -148,6 +149,8 @@ export default function TrackRecord() {
                           {i.invalidation != null && i.target != null && (
                             <span className="muted"> · stop {money(i.invalidation)} → target {money(i.target)}</span>
                           )}
+                          {i.pendingFill && <span className="badge" style={{ fontSize: 10, marginLeft: 6, padding: "1px 5px" }} title="Resting limit — only graded once price reaches it">limit not reached</span>}
+                          {i.unfilled && <span className="badge" style={{ fontSize: 10, marginLeft: 6, padding: "1px 5px" }} title="Price never reached the limit that day — not a trade, never graded">never filled</span>}
                         </td>
                         <td className="muted" style={{ fontSize: 12 }}>{i.catalyst || "—"}</td>
                         <td className="mono">{i.conviction ?? "—"}</td>

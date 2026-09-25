@@ -81,8 +81,8 @@ export const updateIdea = (id, patch) => ideasStore.update(id, patch);
 // checkpoints: [{ key, afterMs }] — e.g. { key: "h1", afterMs: 3600000 }
 export function dueForGrading(checkpoints, now = Date.now()) {
   return listIdeas().filter((idea) => {
-    if (!["CALL", "PUT", "BUY", "SELL"].includes(idea.action)) return false;
-    const age = now - new Date(idea.createdAt).getTime();
+    if (!["CALL", "PUT", "BUY", "SELL"].includes(idea.action) || idea.pendingFill || idea.unfilled) return false;
+    const age = now - new Date(idea.gradeFrom || idea.createdAt).getTime();
     return checkpoints.some((cp) => age >= cp.afterMs && !idea.grades?.[cp.key]);
   });
 }

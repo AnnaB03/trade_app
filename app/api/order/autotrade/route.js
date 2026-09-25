@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { vetOrder, vetEquityOrder, submitOrder } from "../common";
 import { tradier, asArray } from "../../tradier";
 import { listIdeas, listJournal } from "../../store";
 import { journalOpen } from "../../journalLib";
@@ -21,6 +20,10 @@ import { buildOptionStopEstimate } from "../../../lib/orders";
      that already has a position open — a different strike, a different
      target — is a different trade and is allowed to open alongside it.
      Only identical, no-new-information repeats get skipped.
+   - only ever acts on AI-generated ideas — the separate liquidity-sweep
+     detector logs into the same ledger (tagged with `strategy`) and has its
+     own autopilot at /api/sweeps/autotrade; a sweep scan landing last must
+     never become this route's "latest idea" for a symbol.
 
    NOT gated here, on purpose, because there's no real dollar cost to
    protect in a hard-locked paper account:
@@ -274,7 +277,11 @@ export async function GET(req) {
   const minConviction = Number(params.get("minConviction")) || MIN_CONVICTION;
 
   try {
-    const all = listIdeas();
+    // AI ideas only — the separate liquidity-sweep detector logs into the
+    // same ledger (tagged `strategy`) and has its own autopilot at
+    // /api/sweeps/autotrade; a sweep scan landing last must never become
+    // this route's "latest idea" for a symbol.
+    const all = listIdeas().filter((i) => !i.strategy);
     const batch = latestPerSymbol(all);
     if (!batch.length) return NextResponse.json({ error: "No ideas in the ledger yet — refresh the Ideas tab first." }, { status: 404 });
     const openJournal = listJournal().filter((r) => r.status === "open");
