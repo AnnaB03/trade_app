@@ -13,6 +13,11 @@ import { gradeAt } from "./gradeLib";
 // sandbox order may still be pending), so this is "P&L if filled at your
 // limit," labeled as such in the UI.
 export function realizedPnl(entry, exitFillPrice) {
+  // exitFillPrice == null means "no real fill known" (e.g. an orphaned
+  // position reconciled with nothing to close) — Number(null) is 0, not
+  // NaN, so without this check a missing price would silently compute as
+  // a fabricated 100% loss instead of "P&L unknown."
+  if (exitFillPrice == null) return { pnl: null, pnlPct: null };
   const mult = entry.vehicle === "OPTION" ? 100 : 1;
   const qty = Number(entry.entryQuantity) || 0;
   const entryPx = Number(entry.entryLimitPrice);

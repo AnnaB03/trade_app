@@ -30,6 +30,19 @@ export async function tradeFetch(path, { method = "GET", form } = {}) {
     const e = d?.errors?.error;
     throw new Error(`Tradier ${res.status}: ${Array.isArray(e) ? e.join("; ") : e || text.slice(0, 200)}`);
   }
+  // Tradier can return HTTP 200 with an `errors` body instead of a non-2xx
+  // status — confirmed live: a contract the real-time market-data feed
+  // quotes just fine (e.g. a newly-listed expiration) can still be
+  // "Undefined symbol" to the SANDBOX order book, which has its own,
+  // laggier symbol master. Every caller here only ever looked for `.order`
+  // and treated its absence as "no data" rather than "rejected" — silently
+  // reporting a rejected order as placed, with a real (wrong) journal entry
+  // to match. Checking here means every caller gets a real thrown error
+  // instead, with no need to duplicate this check at each call site.
+  if (d?.errors) {
+    const e = d.errors.error;
+    throw new Error(`Tradier rejected the order: ${Array.isArray(e) ? e.join("; ") : e || "unknown error"}`);
+  }
   return d ?? {};
 }
 

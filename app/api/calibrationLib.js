@@ -67,11 +67,20 @@ export function calibrationText(calib) {
   if (!calib || calib.nGraded < 5) {
     return `Track record: only ${calib?.nGraded ?? 0} graded ideas so far in the last 60 days — not enough yet to calibrate on. Treat this as day one.`;
   }
+  // A group under this many graded ideas is still noisy enough that a
+  // single string of bad luck (or, since grading is point-in-time not
+  // path-aware, a stop that was hit and recovered before the checkpoint —
+  // see gradeLib.js) can produce a number that reads as a verdict but isn't
+  // one. Tagged "provisional" past this threshold instead of stated flatly —
+  // confirmed live: a QQQ "46%, n=28" line was cited as the reason for 16
+  // straight index WAITs on a day the tape itself was a clean trend.
+  const PROVISIONAL_BELOW_N = 40;
   const fmtGroup = (label, rows) => rows.length
-    ? `${label}: ` + rows.slice(0, 4).map((r) => `${r.key} ${(r.winRate * 100).toFixed(0)}% (n=${r.n}${r.avgR != null ? `, avgR ${r.avgR.toFixed(2)}` : ""})`).join("; ")
+    ? `${label}: ` + rows.slice(0, 4).map((r) => `${r.key} ${(r.winRate * 100).toFixed(0)}% (n=${r.n}${r.avgR != null ? `, avgR ${r.avgR.toFixed(2)}` : ""})${r.n < PROVISIONAL_BELOW_N ? " [provisional — small sample, don't treat as settled]" : ""}`).join("; ")
     : null;
   const lines = [
     calib.overall ? `Overall track record: ${(calib.overall.winRate * 100).toFixed(0)}% directionally correct over ${calib.overall.n} graded ideas${calib.overall.avgR != null ? `, avg R ${calib.overall.avgR.toFixed(2)}` : ""}.` : null,
+    "Note on all groups below: grading is point-in-time (price at a fixed checkpoint), not path-aware — it can miss a stop that was hit and later recovered. A group under n=40 is marked [provisional]: real signal to weigh, not a hard veto on an otherwise good setup with today's actual data behind it.",
     fmtGroup("By catalyst", calib.byCatalyst),
     fmtGroup("By symbol", calib.bySymbol),
     fmtGroup("By market regime", calib.byRegimeTrend),

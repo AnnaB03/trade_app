@@ -42,7 +42,16 @@ export async function upcomingEarnings(symbol) {
   return out;
 }
 
-// High-impact US macro releases, next 45 days:
+// FMP rates Fed-official speeches "Medium" impact, not "High" — that
+// dropped them entirely, which matters a lot more for an intraday SPY/SPX
+// trade than for a swing idea: a Fed speaker can move the index a point in
+// seconds, and back-to-back speeches (e.g. two Fed governors 15 minutes
+// apart) are exactly the kind of window a scalper needs flagged. Confirmed
+// live: Williams/Jefferson/Barkin/Barr/Hammack speeches this week were all
+// invisible to the app before this fix.
+const FED_SPEECH_RE = /\bfed\b.*\bspeech\b/i;
+
+// High-impact US macro releases, PLUS Medium-impact Fed speeches, next 45 days:
 // [{ label, date (ET), timeET, kind: "macro" }]
 export async function macroEvents() {
   const hit = getCached("macro");
@@ -51,14 +60,14 @@ export async function macroEvents() {
   const rows = await fmpGet("economic-calendar", { from: iso(from), to: iso(to) });
   const seen = new Set();
   const out = (Array.isArray(rows) ? rows : [])
-    .filter((e) => e?.country === "US" && e?.impact === "High" && e?.date)
+    .filter((e) => e?.country === "US" && e?.date && (e?.impact === "High" || (e?.impact === "Medium" && FED_SPEECH_RE.test(e?.event || ""))))
     .map((e) => {
       const { dateET, timeET } = utcToET(e.date);
-      return { label: e.event, date: dateET, timeET, kind: "macro" };
+      return { label: e.event, date: dateET, timeET, kind: "macro", isFedSpeech: FED_SPEECH_RE.test(e.event || "") };
     })
     .filter((e) => (seen.has(e.label + e.date) ? false : (seen.add(e.label + e.date), true)))
     .sort((a, b) => (a.date < b.date ? -1 : 1))
-    .slice(0, 12);
+    .slice(0, 20);
   cache.set("macro", { at: Date.now(), data: out });
   return out;
 }

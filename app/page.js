@@ -8,6 +8,8 @@ import {
 import Journal from "./components/Journal";
 import TrackRecord from "./components/TrackRecord";
 import NewsBoard from "./components/NewsBoard";
+import ScalperPanel from "./components/ScalperPanel";
+import MoversRadar from "./components/MoversRadar";
 import { buildOptionStopEstimate } from "./lib/orders";
 
 // Account size the Ideas engine sizes for — per browser, editable in the
@@ -57,8 +59,13 @@ const DEFAULT_SYMS = ["SPY", "SPX", "QQQ", "NVDA", "TSLA", "AMD"];
 // them. Each is merged into an already-saved watchlist exactly once, so new defaults
 // reach existing users without resurrecting symbols they deliberately deleted.
 // When adding another, append it here and bump WATCH_VERSION to match.
-const WATCH_VERSION = 1;
-const ADDED_SYMS = [{ v: 1, sym: "SPX" }];
+const WATCH_VERSION = 2;
+// XSP = 1/10th-size, cash-settled SPX mini (~$170/contract vs SPX's ~$1,700).
+// Added because SPX itself is structurally untradeable on a small account —
+// every SPX idea WAITed 16/16 on 2026-09-21 citing "contracts are multiples
+// of this account's cap." SPX stays on the list for regime context; XSP is
+// the instrument actually sized for the account.
+const ADDED_SYMS = [{ v: 1, sym: "SPX" }, { v: 2, sym: "XSP" }];
 
 /* The three checks that separate a real move from a trap, per symbol:
    volume reality (RVOL + float rotation), whether news justifies the move
@@ -1320,13 +1327,24 @@ export default function Page() {
         <button className={"tab" + (tab === "track" ? " on" : "")} onClick={() => setTab("track")}>Track Record</button>
         <button className={"tab" + (tab === "journal" ? " on" : "")} onClick={() => setTab("journal")}>Journal</button>
         <button className={"tab" + (tab === "ideas" ? " on" : "")} onClick={() => setTab("ideas")}>Ideas</button>
+        <button className={"tab" + (tab === "scalper" ? " on" : "")} onClick={() => setTab("scalper")}>Scalper</button>
+        <button className={"tab" + (tab === "movers" ? " on" : "")} onClick={() => setTab("movers")}>Movers Radar</button>
       </div>
-      {tab === "watch" && <Watchlist onPick={pick} />}
-      {tab === "news" && <NewsBoard onPick={pick} />}
-      {tab === "chain" && <ChainRisk symbol={symbol} setSymbol={setSymbol} />}
-      {tab === "track" && <TrackRecord />}
-      {tab === "journal" && <Journal />}
-      {tab === "ideas" && <Ideas />}
+      {/* Every panel below stays mounted at all times — only display:none
+          toggles which one shows. Switching tabs used to unmount/remount
+          (the `tab === "x" && <X/>` pattern), which threw away all state
+          and re-ran every fetch from scratch on the way back: for Ideas
+          that meant re-triggering the full ~60s, billed AI call on every
+          single tab switch. Keeping components alive fixes that for all of
+          them at once, not just Ideas/Scalper. */}
+      <div hidden={tab !== "watch"}><Watchlist onPick={pick} /></div>
+      <div hidden={tab !== "news"}><NewsBoard onPick={pick} /></div>
+      <div hidden={tab !== "chain"}><ChainRisk symbol={symbol} setSymbol={setSymbol} /></div>
+      <div hidden={tab !== "track"}><TrackRecord /></div>
+      <div hidden={tab !== "journal"}><Journal /></div>
+      <div hidden={tab !== "ideas"}><Ideas /></div>
+      <div hidden={tab !== "scalper"}><ScalperPanel visible={tab === "scalper"} /></div>
+      <div hidden={tab !== "movers"}><MoversRadar onPick={pick} visible={tab === "movers"} /></div>
       <div className="foot">
         Informational only — not financial advice. Real-time data requires a funded Tradier brokerage account; without one the feed is delayed.
         Risk figures assume holding to expiration and ignore commissions, assignment, and slippage — confirm in your broker before trading.

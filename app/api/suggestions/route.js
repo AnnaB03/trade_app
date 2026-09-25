@@ -15,18 +15,20 @@ import { listIdeas, appendIdea } from "../store";
 import { computeCalibration, calibrationText } from "../calibrationLib";
 import { accountLimits, accountText, sizeIdea } from "../sizingLib";
 import { affordableCandidates } from "../affordableLib";
+import { touchNotable, isNotable } from "../watchExtrasLib";
 
 // How many news-driven top movers (beyond the watchlist) to analyze per refresh.
-// Capped to keep the Claude call and the option-chain fan-out bounded. Kept
-// small on purpose — each one adds a full quote+expirations+chains fan-out
-// (see EXP_TIERS below), and every extra symbol here was the direct cause of
-// a slow Ideas refresh (each is a handful of Tradier round trips, and they
-// all fire in parallel on top of whatever's on the watchlist).
-const TRENDING_CAP = 2;
+// Was cut to 2 for speed, which turned out to buy almost nothing (profiling
+// showed the AI call, not the data fetch, was ~97% of a refresh's time — see
+// the effort note below) while starving coverage: real 30-50% movers past
+// the 2nd-most-extreme name (SVRN, GRAL, CRML, SMX, CUE and others on
+// 2026-09-21) were never even looked at. Restored, since the real lever for
+// speed was model effort, not symbol count.
+const TRENDING_CAP = 6;
 // Penny candidates ($0.10-$5) get their own small cap — each one costs an
 // extra FMP profile/float/news round trip (computeReality), and a handful of
 // well-checked candidates beats a long list of raw, unverified movers.
-const PENNY_CAP = 2;
+const PENNY_CAP = 4;
 // Cheaper, liquid, optionable names added for a small account — the default
 // watchlist is all $200+ underlyings whose contracts cost most of a ~$1k
 // account. Bounded like TRENDING_CAP: each one is a full chain fan-out.
@@ -237,7 +239,22 @@ export async function GET(req) {
       const prevClose = Number(q.prevclose) || (priorBar ? Number(priorBar.close) : null);
       const todayOpen = Number(q.open) || null;
       const gapPct = prevClose > 0 && todayOpen > 0 ? ((todayOpen - prevClose) / prevClose) * 100 : null;
-      const rvolAdj = rvolTimeAdjusted(q.volume, q.average_volume, { sessionOpen: clock.state === "open" });
+      // Tradier's quote-level average_volume is 0 for most micro-caps and
+      // small-caps (confirmed live on GRML/GLND during a real 100%+ move) —
+      // that silently produced "RVOL UNAVAILABLE" for exactly the names
+      // that make these moves, which rule 8b then turns into a forced WAIT
+      // regardless of how real the move actually was. A 20-day average built
+      // from the SAME daily bars already fetched above (free — no new call)
+      // covers almost every case that field misses.
+      const priorVols = priorBars.slice(-20).map((b) => Number(b.volume)).filter((v) => v > 0);
+      const avgVolFromBars = priorVols.length >= 5 ? priorVols.reduce((s, v) => s + v, 0) / priorVols.length : null;
+      const avgVolume = Number(q.average_volume) > 0 ? Number(q.average_volume) : avgVolFromBars;
+      // An index (SPX, VIX, XSP) has no share volume at all, by definition —
+      // that's not "can't confirm participation," it's "the concept doesn't
+      // apply here." Treating it as a volume gap used to force SPX to WAIT
+      // on every single refresh regardless of the tape (16/16 on 2026-09-21).
+      const isIndex = q.type === "index";
+      const rvolAdj = isIndex ? null : rvolTimeAdjusted(q.volume, avgVolume, { sessionOpen: clock.state === "open" });
       const closes = bars.map((b) => Number(b.close)).filter((v) => v > 0);
       const hv20 = realizedVol(closes, 20);
       // TODAY's own high/low, distinct from the prior-day range above — this
@@ -255,7 +272,7 @@ export async function GET(req) {
       const last = Number(q.last) || null;
       const offHighPct = todayHigh > 0 && last != null ? ((last - todayHigh) / todayHigh) * 100 : null;
       const offLowPct = todayLow > 0 && last != null ? ((last - todayLow) / todayLow) * 100 : null;
-      structureBySym[sym] = { prevClose, todayOpen, gapPct, priorHigh: priorBar ? Number(priorBar.high) : null, priorLow: priorBar ? Number(priorBar.low) : null, rvolAdj, hv20, todayHigh, todayLow, offHighPct, offLowPct };
+      structureBySym[sym] = { prevClose, todayOpen, gapPct, priorHigh: priorBar ? Number(priorBar.high) : null, priorLow: priorBar ? Number(priorBar.low) : null, rvolAdj, isIndex, hv20, todayHigh, todayLow, offHighPct, offLowPct };
     }));
 
     // Build prompt for Claude
@@ -271,7 +288,8 @@ export async function GET(req) {
           if (s.offLowPct != null && s.offLowPct >= 0.15) tags.push(`${s.offLowPct.toFixed(1)}% ABOVE TODAY'S LOW — already bounced, weakens a fresh PUT`);
           bits.push(`today's range $${s.todayLow.toFixed(2)}-$${s.todayHigh.toFixed(2)}${tags.length ? ", " + tags.join(" · ") : ", sitting at an extreme of today's range"}`);
         }
-        if (s.rvolAdj != null) bits.push(`RVOL(time-adj) ${s.rvolAdj.toFixed(2)}x`);
+        if (s.isIndex) bits.push(`INDEX — no independent share volume (this is not a data gap; treat SPY/QQQ RVOL and the MARKET REGIME block as this index's participation proxy, and do NOT apply the RVOL-unavailable WAIT rule to it)`);
+        else if (s.rvolAdj != null) bits.push(`RVOL(time-adj) ${s.rvolAdj.toFixed(2)}x`);
         // A missing average-volume baseline (thin/obscure names) used to mean
         // this line just went silent — no RVOL, no flag, nothing. Silence
         // reads as "nothing to report," not "we can't verify this," and let
@@ -426,6 +444,7 @@ REQUIREMENTS:
 7. Do NOT add a generic disclaimer like "it loses if the price drops or stays flat" — that's true of every option trade and isn't backed by anything. Only mention a risk if it's grounded in data given to you above. If there's no such data-backed risk for that symbol, leave the risk mention out of why_plain entirely — never invent one just to sound cautious.
 8. Also cover EVERY symbol listed under PENNY STOCK CANDIDATES, as a separate category from the option-chain symbols above. For these: vehicle is ALWAYS "SHARES" or null (never "OPTION" — these do not have a usable options chain; ignore rule 3's OPTION/SHARES choice for this category). Require BOTH a real volume signal (RVOL meaningfully above 1x) AND a real, freshly-dated news catalyst before proposing anything beyond WAIT — an unexplained move on no catalyst, or a move on stale/weak news, is the single most common trap in this category and should be WAIT, said plainly in why_pro. If the news-justification read names dilution (a public offering, registered direct, ATM program, or similar), that is bearish pressure on the rally, not a reason to buy — use WAIT or a bearish idea, never a bullish one, and say why in why_plain. Conviction should rarely exceed 3 for this category even on a good setup — thin float and promotion risk cap how sure anyone can be. Size and stop matter more than usual here: invalidation should be tight (these can round-trip a large move fast), and say so.
 8b. This is NOT only a penny-stock rule — it applies at ANY price. If a symbol's data says "RVOL UNAVAILABLE" (no average-volume baseline to confirm real participation) OR if your own read of the news classifies the catalyst as stale (already priced in days ago, "days to weeks old", a rehash of old coverage) — that combination is WAIT, full stop, no matter how cleanly the stock is "holding near its high." A thin, illiquid name grinding higher on old news is a stale rally that can round-trip in minutes once the last buyer is out, regardless of whether it costs $2 or $20 a share. Do not let "it's still near its high" override a volume or news-freshness problem you've already identified in your own reasoning — if your why_pro names either red flag, the action must be WAIT, not a smaller/hedged version of the same trade.
+8c. Exception to 8b's "no fresh headline = WAIT" half, narrowly: extreme, VERIFIED RVOL (meaningfully above 10x, a real number, not "UNAVAILABLE") is itself a catalyst — a move that big on that much real volume is not "unexplained," it IS the news, even before a headline catches up. When you see this combination — RVOL genuinely ≥10x AND no headline yet, or only a stale one — a tight-risk continuation idea is allowed (never a fresh reversal bet against it), capped at conviction 3, invalidation tight enough to round-trip fast, and why_pro must say plainly that the thesis is "volume as its own catalyst, no confirming headline yet" so this is never mistaken for a news-backed idea. This does NOT relax the dilution check in rule 8, and does not apply when RVOL itself is unavailable — that combination is still a hard WAIT per 8b.
 
 Respond with ONLY a raw JSON array, no markdown code fences, no prose before or after it, and no other commentary — one object per symbol listed under MARKET DATA or PENNY STOCK CANDIDATES above, shaped exactly like:
 [{"symbol":"AAPL","emoji":"📈","action":"CALL","vehicle":"OPTION","expiration":"2026-09-20","strike":230,"entryTrigger":"...","triggerPrice":232.50,"triggerDirection":"above","invalidation":225.5,"target":238,"staleMinutes":90,"conviction":3,"catalyst":"technical breakout","risk":"MEDIUM","why_pro":"1-2 sentences, real terms ok","why_plain":"1-2 simple sentences"}]
@@ -544,6 +563,10 @@ action is one of BUY, SELL, CALL, PUT, WAIT (BUY/SELL pair with vehicle SHARES; 
       // journal entry straight back to this idea's full context — see
       // app/api/journalLib.js.
       idea.id = row.id;
+      // Keeps a manually-added "extras" symbol's staleness clock reset
+      // whenever it actually does something — see watchExtrasLib.js. A
+      // no-op for symbols not on that list (touchNotable finds nothing).
+      if (isNotable(idea)) { try { touchNotable(idea.symbol); } catch {} }
     }
 
     return NextResponse.json({ ideas, market_state: clock.state, timestamp: new Date().toISOString() });
