@@ -17,7 +17,14 @@
 
 export const RISK_PCT = 0.01;            // per-idea risk, fraction of account
 export const MAX_POSITION_PCT = 0.25;    // one position's total cost, fraction of account
-export const OPTION_PREFERRED_PCT = 0.05; // total option position cost we'd call comfortable
+// Budget for a whole option POSITION (contracts × premium), not one contract.
+// Raised from 5% deliberately: at 5% of a ~$99k account each idea committed
+// ~$4,950 and roughly three positions open per day, so the book ran at well
+// under 20% utilisation against ~$94k of option buying power. Every outcome
+// scales with this number, losses included — an explicit choice to be
+// aggressive in a paper account being used to learn, not a default to copy
+// onto real money. MAX_CONTRACTS still backstops illiquid names.
+export const OPTION_PREFERRED_PCT = 0.10;
 export const OPTION_HARD_PCT = 0.10;      // per-contract cost above this = not an option trade for this account
 // Ceiling on contract count regardless of how much budget allows. A $66
 // penny-name contract against a 5% budget on a six-figure account works out
