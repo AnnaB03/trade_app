@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { vetOrder, vetEquityOrder, submitOrder } from "../common";
 import { tradier, asArray } from "../../tradier";
 import { tradeFetch, accountId } from "../../tradeClient";
-import { listJournal, listIdeas } from "../../store";
+import { listJournal, listIdeas, updateJournalEntry } from "../../store";
 import { journalClose } from "../../journalLib";
 import { dailyBars } from "../../historyCache";
 
@@ -39,16 +39,26 @@ const DIRECTION = { CALL: 1, BUY: 1, PUT: -1, SELL: -1 };
 // $168 of a realized win evaporated waiting on a $232 stock target.
 // Winners in this book also round-trip fast (RKLB went +$118 to stopped
 // out), so banking a good gain beats holding for a better one.
-const PREMIUM_TAKE_PROFIT_PCT = 80;
+/* Middle ground between "sell at a flat number" and "hold for target".
+   A flat bar is wrong in both directions: +80% almost never triggered (the
+   best position in this book has reached +32%), while a flat +50% would have
+   dumped the NVDA $225c at ~$4.70 for +$157 when it went on to print $8.78.
+   Instead: arm a trail once a position is meaningfully up, track its peak,
+   and exit when it gives back part of that peak GAIN. Checked against the
+   two real cases:
+     NVDA $225c  $3.13 -> peak $8.78 -> trail exit ~$7.09  = +$396
+                 (flat 50% = +$157, flat 80% = +$250)
+     GLND        $2.83 -> peak $5.705 -> trail exit ~$4.84 = +$201
+                 (never triggered at all under a flat 80%)
+   Arming at 40% with a 30% giveback of the gain means an armed position can
+   only ever exit profitable (worst case ~+28%), so this never turns a winner
+   into a loser. Shares arm lower because share ideas here target +3-11%. */
+const TRAIL_ARM_PCT = { OPTION: 40, SHARES: 15 };
+const TRAIL_GIVEBACK_PCT = 30;
 
-// Shares need their own, much lower bar. Share ideas in this book aim for
-// +3% to +11%, so an 80% threshold could never fire for them — which left
-// share positions carrying no target at all (a real one: AAPL bought at
-// $250, now $341, +36% and +$91 unrealized) with literally no exit path:
-// no target to hit, no invalidation to breach, and no premium to measure.
-// 20% sits far above any real share target, so normal target exits still
-// fire first and this only catches the ones that fell through.
-const SHARE_TAKE_PROFIT_PCT = 20;
+// Absolute ceiling, separate from the trail: a position up this much is
+// banked outright rather than risking a gap on the way back down.
+const HARD_TAKE_PROFIT_PCT = { OPTION: 150, SHARES: 60 };
 
 async function underlyingQuote(symbol) {
   try {
@@ -85,7 +95,12 @@ async function optionQuote(occ) {
     const d = await tradier(`/markets/quotes?symbols=${encodeURIComponent(occ)}`);
     const q = asArray(d?.quotes?.quote)?.[0];
     const bid = Number(q?.bid), ask = Number(q?.ask);
-    return { bid, ask, mid: bid >= 0 && ask > 0 ? (bid + ask) / 2 : null, last: Number(q?.last) || null };
+    return {
+      bid, ask, mid: bid >= 0 && ask > 0 ? (bid + ask) / 2 : null, last: Number(q?.last) || null,
+      // The contract's own intraday high — lets the trail know about a spike
+      // that happened between cron runs instead of only peaks it watched live.
+      high: Number(q?.high) || null,
+    };
   } catch {
     return null;
   }
@@ -130,6 +145,34 @@ async function checkBrokerStopFill(pos) {
       return { filled: true, price };
     }
     return { filled: false };
+  } catch {
+    return null;
+  }
+}
+
+// What actually happened to a submitted order. An accepted order is NOT a
+// filled order: GLND was recorded closed at "target" with +$186.50 booked
+// while the broker still held all 100 shares and no sell order existed at
+// all. P&L must never be written from a submit response — only from a fill
+// the broker confirms. Returns null when the order can't be read, which is
+// treated as "not yet known", never as a fill.
+const ORDER_DEAD = ["expired", "canceled", "rejected", "error"];
+async function exitOrderOutcome(orderId) {
+  if (!orderId) return null;
+  try {
+    const d = await tradeFetch(`/accounts/${await accountId()}/orders/${orderId}`);
+    const o = d?.order;
+    if (!o) return null;
+    const legs = asArray(o.leg);
+    // A plain close is single-leg; read the top level, falling back to the
+    // one leg that actually reports a fill.
+    const filledLeg = legs.find((l) => Number(l.exec_quantity) > 0 && Number(l.avg_fill_price) > 0);
+    const qty = Number(o.exec_quantity) || Number(filledLeg?.exec_quantity) || 0;
+    const px = Number(o.avg_fill_price) || Number(filledLeg?.avg_fill_price) || 0;
+    if (qty > 0 && px > 0) return { filled: true, price: px, quantity: qty };
+    const status = String(o.status || legs[0]?.status || "").toLowerCase();
+    if (ORDER_DEAD.includes(status)) return { filled: false, dead: true, status };
+    return { filled: false, dead: false, status: status || "working" };
   } catch {
     return null;
   }
@@ -187,6 +230,34 @@ export async function GET(req) {
         ? (pos.optionType === "call" ? 1 : -1)
         : (pos.side === "sell_short" ? -1 : 1);
 
+      // 0. A close was already submitted for this row on an earlier run and
+      // is not yet confirmed filled. Never re-submit (that stacks duplicate
+      // sells) and never book P&L until the broker confirms a price.
+      if (pos.pendingExitOrderId) {
+        const outcome = await exitOrderOutcome(pos.pendingExitOrderId);
+        if (outcome?.filled) {
+          if (dryRun) { results.push({ symbol: pos.symbol, wouldClose: true, tag: pos.pendingExitTag || "closed", detail: `Pending close filled at $${outcome.price}` }); continue; }
+          try {
+            journalClose(pos, {
+              exitOrderId: pos.pendingExitOrderId, exitOrderStatus: "filled",
+              exitQuantity: outcome.quantity || pos.entryQuantity, exitFillPrice: outcome.price,
+              exitReason: pos.pendingExitReason || "Auto-exit close filled",
+              exitReasonTag: pos.pendingExitTag || "closed",
+              underlyingPriceAtClose: await underlyingQuote(pos.symbol),
+            });
+          } catch (e) { console.error("autoexit pending-close write failed:", e); }
+          results.push({ symbol: pos.symbol, closed: true, tag: pos.pendingExitTag || "closed", detail: `Close filled at $${outcome.price}`, exitPrice: outcome.price });
+          continue;
+        }
+        if (outcome && !outcome.dead) {
+          results.push({ symbol: pos.symbol, closed: false, reason: `close order ${pos.pendingExitOrderId} still ${outcome.status} — waiting on the fill, not re-submitting` });
+          continue;
+        }
+        // Order died without filling — clear it and let the checks below
+        // decide again from scratch.
+        if (!dryRun) { try { updateJournalEntry(pos.id, { pendingExitOrderId: null, pendingExitTag: null, pendingExitReason: null }); } catch {} }
+      }
+
       // 1. Already closed by its own real stop — reconcile, don't re-decide.
       const brokerStop = await checkBrokerStopFill(pos);
       if (brokerStop?.filled) {
@@ -243,17 +314,49 @@ export async function GET(req) {
       // Gain on what was actually paid, measured on the contract premium for
       // options and on the share price for shares.
       const markNow = pos.vehicle === "OPTION" ? livePremium : underlyingPx;
-      const takeProfitBar = pos.vehicle === "OPTION" ? PREMIUM_TAKE_PROFIT_PCT : SHARE_TAKE_PROFIT_PCT;
       const gainPct = markNow > 0 && entryPremium > 0 && dir > 0
         ? ((markNow - entryPremium) / entryPremium) * 100
         : null;
 
-      // 1b. Already up enough to bank, target or not.
-      if (gainPct != null && gainPct >= takeProfitBar) {
+      // Track the best mark this position has ever shown, so the trail has
+      // a peak to measure the giveback against. Persisted on the row because
+      // each cron run is a fresh process with no memory of the last one.
+      // Seed from the instrument's own intraday high as well as the live
+      // mark, so a spike that happened between two 15-minute runs still
+      // counts. Without this the trail only ever knows the peaks it watched
+      // live and would have been blind to the NVDA contract printing $8.78.
+      const todayHigh = pos.vehicle === "OPTION" ? oq?.high : range?.high;
+      let peakMark = Math.max(Number(pos.peakMark) || 0, Number(todayHigh) || 0);
+      if (markNow > 0 && markNow > peakMark) peakMark = markNow;
+      if (!dryRun && peakMark > (Number(pos.peakMark) || 0)) {
+        try { updateJournalEntry(pos.id, { peakMark }); } catch {}
+      }
+      const peakGainPct = peakMark > 0 && entryPremium > 0
+        ? ((peakMark - entryPremium) / entryPremium) * 100
+        : null;
+      const armBar = TRAIL_ARM_PCT[pos.vehicle] ?? TRAIL_ARM_PCT.OPTION;
+      const hardBar = HARD_TAKE_PROFIT_PCT[pos.vehicle] ?? HARD_TAKE_PROFIT_PCT.OPTION;
+
+      // 1b. Outright ceiling — big enough that it goes in the book now.
+      if (gainPct != null && gainPct >= hardBar) {
         exit = {
           tag: "take_profit",
-          detail: `Up ${gainPct.toFixed(0)}% ($${entryPremium} to $${markNow}) — banking it rather than waiting on the ${pos.target != null ? `$${pos.target} target` : "target it never had"}`,
+          detail: `Up ${gainPct.toFixed(0)}% ($${entryPremium} to $${markNow}) — past the ${hardBar}% ceiling, banking it outright`,
         };
+      }
+
+      // 1c. Trailing take-profit: armed once the position has been up at
+      // least armBar at some point, then exits on a giveback of that peak
+      // gain. Compares against the PEAK, not the entry, so a winner that
+      // rolls over is banked near its high instead of round-tripping.
+      if (!exit && peakGainPct != null && peakGainPct >= armBar && gainPct != null) {
+        const keepAtLeast = peakGainPct * (1 - TRAIL_GIVEBACK_PCT / 100);
+        if (gainPct <= keepAtLeast) {
+          exit = {
+            tag: "trail_stop",
+            detail: `Peaked at +${peakGainPct.toFixed(0)}% ($${peakMark}) and gave back to +${gainPct.toFixed(0)}% ($${markNow}) — trailing exit at ${TRAIL_GIVEBACK_PCT}% giveback, banking +${gainPct.toFixed(0)}%`,
+          };
+        }
       }
 
       // 2. Target hit — anywhere in today's range, not just the current tick.
@@ -304,6 +407,19 @@ export async function GET(req) {
         // real contract that was already closed once for real). Left
         // "open" it would fail this exact way forever; reconcile it closed
         // instead, with no invented fill price or P&L since none is known.
+        // Inventory reserved by a resting bracket stop that the sandbox will
+        // not release: the cancel returns {status:"ok"} but the stop leg
+        // stays "held", and a modify is refused with "Backoffice rejected
+        // override of the order." The shares/contracts genuinely exist and
+        // are genuinely up, but cannot be sold — so say that plainly instead
+        // of retrying forever or reconciling it away as if it were gone.
+        if (/more shares than your current long position|than your current long position/i.test(closeResult.error || "")) {
+          results.push({
+            symbol: pos.symbol, closed: false, ...exit,
+            error: "FROZEN — quantity is held by a resting bracket stop the sandbox refuses to cancel or modify, so no new sell can be placed. Only its own stop firing can exit this.",
+          });
+          continue;
+        }
         if (/does not match an open position|No open .* position found/i.test(closeResult.error || "")) {
           try {
             journalClose(pos, {
@@ -318,16 +434,40 @@ export async function GET(req) {
         results.push({ symbol: pos.symbol, closed: false, ...exit, error: closeResult.error });
         continue;
       }
-      try {
-        journalClose(pos, {
-          exitOrderId: closeResult.orderResult?.id ?? null, exitOrderStatus: closeResult.orderResult?.status ?? null,
-          exitQuantity: pos.entryQuantity, exitFillPrice: exitPrice,
-          exitReason: exit.detail, exitReasonTag: exit.tag,
-          underlyingPriceAtClose: underlyingPx,
-        });
-      } catch (e) { console.error("autoexit journal write failed:", e); }
+      // The order was ACCEPTED. That is not a fill. Confirm with the broker
+      // before writing any P&L — booking the submitted limit as though it
+      // were a fill is what produced $186.50 of GLND profit that never
+      // existed while the shares were still sitting in the account.
+      const exitOrderId = closeResult.orderResult?.id ?? null;
+      const outcome = await exitOrderOutcome(exitOrderId);
 
-      results.push({ symbol: pos.symbol, closed: true, ...exit, exitPrice, order: closeResult.orderResult });
+      if (outcome?.filled) {
+        try {
+          journalClose(pos, {
+            exitOrderId, exitOrderStatus: "filled",
+            exitQuantity: outcome.quantity || pos.entryQuantity, exitFillPrice: outcome.price,
+            exitReason: exit.detail, exitReasonTag: exit.tag,
+            underlyingPriceAtClose: underlyingPx,
+          });
+        } catch (e) { console.error("autoexit journal write failed:", e); }
+        results.push({ symbol: pos.symbol, closed: true, ...exit, exitPrice: outcome.price, order: closeResult.orderResult });
+        continue;
+      }
+
+      // Submitted but not filled yet. Remember the order so the next run
+      // confirms it instead of deciding again and stacking another sell.
+      try {
+        updateJournalEntry(pos.id, {
+          pendingExitOrderId: exitOrderId,
+          pendingExitTag: exit.tag,
+          pendingExitReason: exit.detail,
+          exitOrderStatus: outcome?.status ?? "submitted",
+        });
+      } catch (e) { console.error("autoexit pending-exit write failed:", e); }
+      results.push({
+        symbol: pos.symbol, closed: false, ...exit,
+        reason: `close submitted at $${exitPrice} (order ${exitOrderId}) but not filled yet — no P&L booked until the broker confirms`,
+      });
     }
 
     return NextResponse.json({ checked: open.length, closed: results.filter((r) => r.closed).length, results });
