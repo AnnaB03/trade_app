@@ -178,6 +178,36 @@ async function exitOrderOutcome(orderId) {
   }
 }
 
+/* How much of each symbol is already committed to a resting sell-stop.
+   In the Tradier sandbox that quantity cannot be sold by any new order, and
+   the stop can be neither cancelled (DELETE returns {status:"ok"} and the
+   leg stays put, whether addressed by parent order id or by its own leg id)
+   nor modified ("Backoffice rejected override of the order."). Submitting a
+   close anyway just produces a rejected order every run, so the reservation
+   is checked BEFORE attempting rather than discovered afterwards.
+   Status matters: a resting stop leg reads "open" as often as "held", and
+   only matching "held" missed most of the book. */
+const RESTING_STOP = new Set(["held", "open", "pending", "partially_filled"]);
+async function reservedQuantities() {
+  const map = new Map();
+  try {
+    const d = await tradeFetch(`/accounts/${await accountId()}/orders`);
+    for (const o of asArray(d?.orders?.order)) {
+      const legs = asArray(o.leg);
+      for (const l of (legs.length ? legs : [o])) {
+        if (String(l.type) !== "stop" || !/sell/.test(String(l.side ?? ""))) continue;
+        if (!RESTING_STOP.has(String(l.status))) continue;
+        const key = l.option_symbol || l.symbol;
+        if (!key) continue;
+        map.set(key, (map.get(key) || 0) + (Number(l.quantity) || 0));
+      }
+    }
+  } catch {
+    return null; // unknown — don't block exits on a failed lookup
+  }
+  return map;
+}
+
 async function cancelResting(orderId) {
   if (!orderId) return;
   try { await tradeFetch(`/accounts/${await accountId()}/orders/${orderId}`, { method: "DELETE" }); } catch {}
@@ -223,6 +253,7 @@ export async function GET(req) {
     const open = listJournal().filter((r) => r.status === "open");
     if (!open.length) return NextResponse.json({ checked: 0, closed: 0, results: [] });
     const allIdeas = listIdeas();
+    const reserved = await reservedQuantities();
     const results = [];
 
     for (const pos of open) {
@@ -386,6 +417,20 @@ export async function GET(req) {
       }
 
       if (!exit) { results.push({ symbol: pos.symbol, closed: false }); continue; }
+
+      // Decided to exit — but if the broker has this quantity reserved behind
+      // a resting stop, no sell can be placed at all. Say so once instead of
+      // firing an order that is certain to be rejected on every future run.
+      const resKey = pos.vehicle === "OPTION" ? pos.occ : pos.symbol;
+      const reservedQty = reserved?.get(resKey) ?? 0;
+      if (reserved && reservedQty >= (Number(pos.entryQuantity) || 1)) {
+        results.push({
+          symbol: pos.symbol, closed: false, ...exit,
+          error: `FROZEN — all ${reservedQty} held by a resting stop the sandbox will not cancel or modify, so no sell can be placed. Only that stop firing can exit it.`,
+        });
+        continue;
+      }
+
       if (dryRun) { results.push({ symbol: pos.symbol, wouldClose: true, ...exit }); continue; }
 
       let exitPrice, closeResult;

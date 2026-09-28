@@ -133,6 +133,22 @@ async function liveQuote(symbol) {
   }
 }
 
+/* Whether to attach a broker-side protective stop at entry.
+   OFF, because in the Tradier sandbox a resting sell-stop permanently
+   reserves the quantity: it cannot be sold by any new order, and the stop
+   can be neither cancelled (DELETE returns {status:"ok"} and the leg stays
+   resting, by parent id or leg id) nor modified ("Backoffice rejected
+   override"). The effect is one-sided and fatal to the P&L — a losing
+   position exits fine because its stop fires, while a winning position is
+   frozen and can never be sold. Measured on 2026-09-28: 8 of 9 open
+   positions were unsellable, +$379 of gains locked against +$50 reachable,
+   which is most of the explanation for a book showing 25 losses to 3 wins.
+   Exits are handled instead by autoexit, which runs every ~15 min and checks
+   invalidation on the live price plus a trailing take-profit. That trades
+   instant intraday protection for the ability to realize a gain at all.
+   Set PAPER_ATTACH_STOPS=true to restore broker-side stops. */
+const ATTACH_STOPS = process.env.PAPER_ATTACH_STOPS === "true";
+
 // Attempt one specific contract. Returns { ok: true, orderResult, vet } or
 // { ok: false, error } — never throws, so the caller can try alternates.
 async function attemptOptionOrder({ occ, strike, action, premium, stopEst, ideaId }) {
@@ -140,7 +156,7 @@ async function attemptOptionOrder({ occ, strike, action, premium, stopEst, ideaI
     legs: [{ action: "buy", type: action === "CALL" ? "call" : "put", strike: String(strike), premium: String(premium ?? 0), qty: 1, occ }],
     closing: false,
     ideaId,
-    ...(stopEst > 0 ? { stop: { price: stopEst } } : {}),
+    ...(ATTACH_STOPS && stopEst > 0 ? { stop: { price: stopEst } } : {}),
   };
   // Wide-spread and big-defined-risk acks exist to make a human pause before
   // eating real slippage/loss — nothing to protect in a paper account, so
@@ -246,7 +262,7 @@ async function placeShares(idea, { dryRun }) {
   const body = {
     equity: {
       symbol: idea.symbol, side: idea.action === "SELL" ? "sell" : "buy", quantity: qty, price: entry,
-      stop: idea.invalidation ?? undefined, attachStop: idea.invalidation != null,
+      stop: ATTACH_STOPS ? (idea.invalidation ?? undefined) : undefined, attachStop: ATTACH_STOPS && idea.invalidation != null,
     },
     closing: false,
     ideaId: idea.id,
