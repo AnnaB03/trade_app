@@ -30,11 +30,51 @@ import { dailyBars } from "../../historyCache";
 
 const DIRECTION = { CALL: 1, BUY: 1, PUT: -1, SELL: -1 };
 
+// Take a real option gain when it's there, even if the UNDERLYING never
+// reached the idea's target. Those are two different events: an option can
+// run +180% on a move plus an IV expansion while the stock is still well
+// short of target, and with only a target-based exit nothing banks it.
+// Measured cost of not having this: the NVDA $225c bought at $3.13 printed
+// $8.78 (+180%) intraday and was still open when it slid back to $7.10, so
+// $168 of a realized win evaporated waiting on a $232 stock target.
+// Winners in this book also round-trip fast (RKLB went +$118 to stopped
+// out), so banking a good gain beats holding for a better one.
+const PREMIUM_TAKE_PROFIT_PCT = 80;
+
+// Shares need their own, much lower bar. Share ideas in this book aim for
+// +3% to +11%, so an 80% threshold could never fire for them — which left
+// share positions carrying no target at all (a real one: AAPL bought at
+// $250, now $341, +36% and +$91 unrealized) with literally no exit path:
+// no target to hit, no invalidation to breach, and no premium to measure.
+// 20% sits far above any real share target, so normal target exits still
+// fire first and this only catches the ones that fell through.
+const SHARE_TAKE_PROFIT_PCT = 20;
+
 async function underlyingQuote(symbol) {
   try {
     const d = await tradier(`/markets/quotes?symbols=${encodeURIComponent(symbol)}`);
     const q = asArray(d?.quotes?.quote)?.[0];
     return q?.last != null ? Number(q.last) : null;
+  } catch {
+    return null;
+  }
+}
+
+// Target/invalidation checks need the day's high/low, not just the live
+// last price — a snapshot taken every ~15 min can easily miss a fast
+// intraday spike that crosses the level and reverts before the next check
+// runs (confirmed live: NVDA hit $233.21 against a $232 target, but by the
+// next check had pulled back to $230, so a last-price-only check never saw
+// the target get hit at all). Tradier's quote endpoint already carries the
+// day's high/low alongside last, so this costs nothing extra to fetch.
+async function underlyingDayRange(symbol) {
+  try {
+    const d = await tradier(`/markets/quotes?symbols=${encodeURIComponent(symbol)}`);
+    const q = asArray(d?.quotes?.quote)?.[0];
+    const last = q?.last != null ? Number(q.last) : null;
+    const high = q?.high != null ? Number(q.high) : last;
+    const low = q?.low != null ? Number(q.low) : last;
+    return { last, high, low };
   } catch {
     return null;
   }
@@ -185,15 +225,50 @@ export async function GET(req) {
         // path below rather than get stuck here forever.
       }
 
-      const underlyingPx = await underlyingQuote(pos.symbol);
+      const range = await underlyingDayRange(pos.symbol);
+      const underlyingPx = range?.last ?? null;
+      // Favorable direction checks the day's HIGH (calls) or LOW (puts) so a
+      // spike that already touched target isn't missed just because price
+      // has since pulled back; the adverse direction (invalidation) uses the
+      // opposite extreme for the same reason — the worst print of the day is
+      // what actually breached the level, even if price has since recovered.
+      const favorableExtreme = dir > 0 ? range?.high : range?.low;
       let exit = null;
 
-      // 2. Target hit.
-      if (pos.target != null && underlyingPx != null) {
-        const hit = dir > 0 ? underlyingPx >= pos.target : underlyingPx <= pos.target;
-        if (hit) exit = { tag: "target", detail: `Hit its $${pos.target} target (underlying now $${underlyingPx})` };
+      // Options: price the contract itself up front, both to judge the
+      // premium gain below and to reuse as the closing price further down.
+      const oq = pos.vehicle === "OPTION" ? await optionQuote(pos.occ) : null;
+      const livePremium = oq ? (oq.bid > 0 ? oq.bid : oq.mid) : null;
+      const entryPremium = Number(pos.entryFillPrice ?? pos.entryLimitPrice) || null;
+      // Gain on what was actually paid, measured on the contract premium for
+      // options and on the share price for shares.
+      const markNow = pos.vehicle === "OPTION" ? livePremium : underlyingPx;
+      const takeProfitBar = pos.vehicle === "OPTION" ? PREMIUM_TAKE_PROFIT_PCT : SHARE_TAKE_PROFIT_PCT;
+      const gainPct = markNow > 0 && entryPremium > 0 && dir > 0
+        ? ((markNow - entryPremium) / entryPremium) * 100
+        : null;
+
+      // 1b. Already up enough to bank, target or not.
+      if (gainPct != null && gainPct >= takeProfitBar) {
+        exit = {
+          tag: "take_profit",
+          detail: `Up ${gainPct.toFixed(0)}% ($${entryPremium} to $${markNow}) — banking it rather than waiting on the ${pos.target != null ? `$${pos.target} target` : "target it never had"}`,
+        };
       }
-      // 3. Invalidation breached with no stop to have caught it.
+
+      // 2. Target hit — anywhere in today's range, not just the current tick.
+      if (!exit && pos.target != null && favorableExtreme != null) {
+        const hit = dir > 0 ? favorableExtreme >= pos.target : favorableExtreme <= pos.target;
+        if (hit) exit = { tag: "target", detail: `Hit its $${pos.target} target intraday (day's ${dir > 0 ? "high" : "low"} $${favorableExtreme}, now $${underlyingPx})` };
+      }
+      // 3. Invalidation breached with no stop to have caught it. Deliberately
+      // asymmetric with the target check above: this one stays on the LIVE
+      // price, not the day's extreme. A one-tick wick through the level that
+      // has already recovered (seen live: a $228.465 low against a $228.50
+      // invalidation, price back at $230.87 within the hour) would otherwise
+      // force a realized loss on a position that is currently working and
+      // still has weeks to expiry. Catching a missed win is free; manufacturing
+      // a loss out of a recovered wick is not.
       if (!exit && pos.invalidation != null && underlyingPx != null) {
         const hit = dir > 0 ? underlyingPx <= pos.invalidation : underlyingPx >= pos.invalidation;
         if (hit) exit = { tag: "invalidation", detail: `Breached its $${pos.invalidation} invalidation with no stop resting to catch it (underlying now $${underlyingPx})` };
@@ -212,8 +287,7 @@ export async function GET(req) {
 
       let exitPrice, closeResult;
       if (pos.vehicle === "OPTION") {
-        const oq = await optionQuote(pos.occ);
-        exitPrice = oq?.bid > 0 ? oq.bid : oq?.mid;
+        exitPrice = livePremium; // already priced above for the gain check
         if (!(exitPrice > 0)) { results.push({ symbol: pos.symbol, closed: false, reason: "no live quote to close against" }); continue; }
         closeResult = await closeOption(pos, exitPrice);
       } else {
