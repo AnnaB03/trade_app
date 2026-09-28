@@ -50,7 +50,18 @@ import { buildOptionStopEstimate } from "../../../lib/orders";
    check below, since there's no live re-check that makes sense for "is this
    thesis still good," only for "has this price level been crossed." */
 
-const MIN_CONVICTION = 3;
+/* Conviction floor. Was 3, which excluded the single best-performing bucket
+   in the ledger. Measured across every graded idea, winsorizing R at ±5 the
+   way calibrationLib does for averaging:
+     conviction 2: 74% directionally correct, avgR +1.24  (n=35)
+     conviction 3: 50% correct,               avgR +0.16  (n=316)
+     conviction 4: 53% correct,               avgR +0.53  (n=17)
+   The 74%-vs-50% gap on those samples is significant (p≈0.007), so the bar
+   was filtering out the good ideas. It reads backwards, and the likely
+   explanation is that the model reserves a 2 for setups it finds unusual
+   rather than weak — but whatever the cause, the outcomes favour taking
+   them. Revisit if conviction-2 regresses as its sample grows. */
+const MIN_CONVICTION = 2;
 const MAX_BATCH_AGE_MIN = 20; // non-conditional ideas: reject a batch older than this
 const DEFAULT_TRIGGER_STALE_MIN = 120; // conditional ideas with no staleMinutes of their own
 const LOOKBACK_HOURS = 24; // how far back to search for each symbol's own latest idea
@@ -121,6 +132,39 @@ function isDuplicatePosition(idea, openEntry) {
   if (!(a > 0) && !(b > 0)) return true;
   if (!(a > 0) || !(b > 0)) return false;
   return Math.abs(a - b) / Math.max(a, b) < 0.005;
+}
+
+/* The most extreme price a symbol has traded SINCE a given moment, from
+   5-minute bars. A trigger checked only against the live last price is blind
+   between runs: this route fires roughly every 15 minutes, so a level that is
+   crossed and given back in between is never seen at all. Measured on real
+   tape — NVDA touched 233.21 in exactly ONE 5-minute bar (09:40) — a level
+   held for five minutes will usually be missed by a 15-minute poll.
+
+   Deliberately anchored to the idea's creation time rather than the session
+   high: NVDA's 231.60 level had already been crossed repeatedly in the
+   morning, hours BEFORE the idea proposing it existed, so a whole-day high
+   would "confirm" a breakout that the thesis never actually witnessed. Only
+   movement after the idea was written counts as confirming it. */
+async function extremeSince(symbol, sinceIso) {
+  try {
+    const start = new Date(sinceIso);
+    if (!(start.getTime() > 0)) return null;
+    const pad = (n) => String(n).padStart(2, "0");
+    const fmt = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    const d = await tradier(
+      `/markets/timesales?symbol=${encodeURIComponent(symbol)}&interval=5min` +
+      `&start=${encodeURIComponent(fmt(start))}&end=${encodeURIComponent(fmt(new Date()))}`
+    );
+    const bars = asArray(d?.series?.data);
+    if (!bars.length) return null;
+    const highs = bars.map((b) => Number(b.high)).filter((n) => n > 0);
+    const lows = bars.map((b) => Number(b.low)).filter((n) => n > 0);
+    if (!highs.length || !lows.length) return null;
+    return { high: Math.max(...highs), low: Math.min(...lows), bars: bars.length };
+  } catch {
+    return null;
+  }
 }
 
 async function liveQuote(symbol) {
@@ -344,8 +388,23 @@ export async function GET(req) {
         const live = liveBySym[idea.symbol];
         if (live == null) { results.push({ ...tag, placed: false, reason: "Couldn't get a live quote to check the trigger." }); continue; }
         const effectiveTrigger = easiestTrigger(all, idea, now);
-        const nowTriggered = idea.triggerDirection === "above" ? live >= effectiveTrigger : live <= effectiveTrigger;
+        const above = idea.triggerDirection === "above";
+        let nowTriggered = above ? live >= effectiveTrigger : live <= effectiveTrigger;
+
+        // Not triggered on the live tick — but it may have been crossed and
+        // given back since this idea was written, between two runs of this
+        // route. That is a real confirmation the poll simply didn't witness.
+        let crossedAt = null;
+        if (!nowTriggered) {
+          const ext = await extremeSince(idea.symbol, idea.createdAt);
+          const reached = above ? ext?.high : ext?.low;
+          if (reached != null && (above ? reached >= effectiveTrigger : reached <= effectiveTrigger)) {
+            nowTriggered = true;
+            crossedAt = reached;
+          }
+        }
         if (!nowTriggered) { results.push({ ...tag, placed: false, reason: `Not triggered — live $${live} vs needs to go ${idea.triggerDirection} $${effectiveTrigger}${effectiveTrigger !== idea.triggerPrice ? ` (easiest of recent refreshes; latest asked for $${idea.triggerPrice})` : ""}.` }); continue; }
+        if (crossedAt != null) tag.triggeredIntraday = `crossed $${effectiveTrigger} intraday (${idea.triggerDirection === "above" ? "high" : "low"} $${crossedAt} since the idea was written) though it is $${live} now`;
         // Trade off the live price, not the stale one from generation time —
         // that's what actually crossed the trigger just now.
         idea = { ...idea, entryPrice: live };
