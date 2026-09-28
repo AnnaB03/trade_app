@@ -151,9 +151,9 @@ const ATTACH_STOPS = process.env.PAPER_ATTACH_STOPS === "true";
 
 // Attempt one specific contract. Returns { ok: true, orderResult, vet } or
 // { ok: false, error } — never throws, so the caller can try alternates.
-async function attemptOptionOrder({ occ, strike, action, premium, stopEst, ideaId }) {
+async function attemptOptionOrder({ occ, strike, action, premium, stopEst, ideaId, qty = 1 }) {
   const body = {
-    legs: [{ action: "buy", type: action === "CALL" ? "call" : "put", strike: String(strike), premium: String(premium ?? 0), qty: 1, occ }],
+    legs: [{ action: "buy", type: action === "CALL" ? "call" : "put", strike: String(strike), premium: String(premium ?? 0), qty, occ }],
     closing: false,
     ideaId,
     ...(ATTACH_STOPS && stopEst > 0 ? { stop: { price: stopEst } } : {}),
@@ -199,6 +199,10 @@ async function placeOption(idea, { dryRun, openOccs }) {
   // getting re-bought every 15-minute check. Checking the realized contract
   // here, before ever submitting it, is what actually stops the stack.
   if (openOccs?.has(leg.occ)) return { placed: false, reason: `Already have an open position in ${leg.occ} — not stacking another.` };
+  // Contract count comes from the idea's own account-aware sizing (see
+  // sizingLib). Pinned at 1 it left a six-figure account putting ~$800 to
+  // work per idea, so even a +127% winner returned a few hundred dollars.
+  const contractQty = Math.max(1, Number(idea.sizing?.contracts) || 1);
   const stopEst = idea.invalidation != null && leg.delta != null
     ? buildOptionStopEstimate({ entryPremium: leg.mid ?? leg.ask, entryUnderlying: idea.entryPrice, invalidation: idea.invalidation, delta: leg.delta })
     : null;
@@ -206,7 +210,7 @@ async function placeOption(idea, { dryRun, openOccs }) {
     return { placed: false, dryRun: true, wouldPlace: { occ: leg.occ, strike: leg.strike, premium: leg.mid ?? leg.ask, stopEst } };
   }
 
-  let attempt = await attemptOptionOrder({ occ: leg.occ, strike: leg.strike, action: idea.action, premium: leg.mid ?? leg.ask, stopEst, ideaId: idea.id });
+  let attempt = await attemptOptionOrder({ occ: leg.occ, strike: leg.strike, action: idea.action, premium: leg.mid ?? leg.ask, stopEst, ideaId: idea.id, qty: contractQty });
   let usedOcc = leg.occ, usedStrike = leg.strike, substituted = false;
 
   // Tradier's sandbox order book recognizes only a narrower set of strikes
@@ -228,7 +232,7 @@ async function placeOption(idea, { dryRun, openOccs }) {
       const altStopEst = idea.invalidation != null && leg.delta != null && mid != null
         ? buildOptionStopEstimate({ entryPremium: mid, entryUnderlying: idea.entryPrice, invalidation: idea.invalidation, delta: leg.delta })
         : null;
-      const r = await attemptOptionOrder({ occ: c.occ, strike: c.strike, action: idea.action, premium: mid ?? c.ask, stopEst: altStopEst, ideaId: idea.id });
+      const r = await attemptOptionOrder({ occ: c.occ, strike: c.strike, action: idea.action, premium: mid ?? c.ask, stopEst: altStopEst, ideaId: idea.id, qty: contractQty });
       if (r.ok) { attempt = r; usedOcc = c.occ; usedStrike = c.strike; substituted = true; break; }
     }
   }
@@ -239,7 +243,7 @@ async function placeOption(idea, { dryRun, openOccs }) {
     journalOpen({
       ideaId: idea.id, thesis: null, vehicle: "OPTION", symbol: idea.symbol,
       occ: usedOcc, strike: usedStrike, optionType: idea.action === "CALL" ? "call" : "put",
-      expiration: idea.expiration, side: "buy", quantity: 1, limitPrice: Number(vet.computed.price), order: orderResult,
+      expiration: idea.expiration, side: "buy", quantity: contractQty, limitPrice: Number(vet.computed.price), order: orderResult,
     });
   } catch (e) {
     console.error("Autotrade journal write failed (order was still placed):", e);

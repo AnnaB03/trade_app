@@ -17,8 +17,13 @@
 
 export const RISK_PCT = 0.01;            // per-idea risk, fraction of account
 export const MAX_POSITION_PCT = 0.25;    // one position's total cost, fraction of account
-export const OPTION_PREFERRED_PCT = 0.05; // contract cost we'd call comfortable
-export const OPTION_HARD_PCT = 0.10;      // contract cost above this = not an option trade for this account
+export const OPTION_PREFERRED_PCT = 0.05; // total option position cost we'd call comfortable
+export const OPTION_HARD_PCT = 0.10;      // per-contract cost above this = not an option trade for this account
+// Ceiling on contract count regardless of how much budget allows. A $66
+// penny-name contract against a 5% budget on a six-figure account works out
+// to 75 contracts, which is a liquidity problem rather than a position —
+// open interest and daily volume on those strikes are often in the hundreds.
+export const MAX_CONTRACTS = 25;
 
 export function accountLimits(account) {
   const a = Number(account) > 0 ? Number(account) : 1000;
@@ -47,14 +52,25 @@ export function sizeIdea(idea, account) {
     const cost = contractCost(idea.leg);
     if (cost == null) return { sizing: null, affordable: null };
     const affordable = cost <= L.optionHardCap;
+    // Contract COUNT scales with the account instead of being pinned at 1.
+    // Pinned at 1, a six-figure account put ~$800 to work on an idea it had
+    // ~$94,000 of option buying power for — 5% utilisation — so even a +127%
+    // winner only returned a few hundred dollars. Budget is the preferred
+    // percentage of the account, with MAX_CONTRACTS as a liquidity backstop.
+    const contracts = affordable
+      ? Math.max(1, Math.min(MAX_CONTRACTS, Math.floor(L.optionPreferred / cost)))
+      : 0;
+    const positionCost = cost * contracts;
     return {
       affordable,
       sizing: {
-        vehicle: "OPTION", contracts: affordable ? 1 : 0, dollarCost: cost, dollarRisk: cost, // long option: max loss = premium
-        pctOfAccount: cost / L.account,
+        vehicle: "OPTION", contracts,
+        contractCost: cost,
+        dollarCost: positionCost, dollarRisk: positionCost, // long option: max loss = premium
+        pctOfAccount: positionCost / L.account,
         comfortable: cost <= L.optionPreferred,
         note: affordable
-          ? (cost <= L.optionPreferred ? `1 contract ≈ $${cost.toFixed(0)} (${(cost / L.account * 100).toFixed(0)}% of account)` : `1 contract ≈ $${cost.toFixed(0)} — ${(cost / L.account * 100).toFixed(0)}% of the account, above the ${(OPTION_PREFERRED_PCT * 100).toFixed(0)}% comfort line`)
+          ? `${contracts} contract${contracts === 1 ? "" : "s"} × $${cost.toFixed(0)} ≈ $${positionCost.toFixed(0)} (${(positionCost / L.account * 100).toFixed(1)}% of account)${contracts === MAX_CONTRACTS ? ` — capped at ${MAX_CONTRACTS} contracts for liquidity` : ""}`
           : `1 contract ≈ $${cost.toFixed(0)} — ${(cost / L.account * 100).toFixed(0)}% of a $${L.account.toFixed(0)} account, over the ${(OPTION_HARD_PCT * 100).toFixed(0)}% comfort cap. Still real and actionable — just size accordingly and know it's a bigger bet than this account's usual sizing.`,
       },
     };
@@ -93,9 +109,21 @@ export function sizeIdea(idea, account) {
 // One short block for the prompt.
 export function accountText(account) {
   const L = accountLimits(account);
+  // The "this is SMALL, size is the binding constraint" framing used to be
+  // unconditional. On a six-figure account that is simply false, and it
+  // actively suppressed ideas: contract cost stopped being a real limit while
+  // the prompt kept implying it was, pushing good setups on expensive names
+  // toward WAIT for no reason. Say which regime the account is actually in.
+  const small = L.account < 25000;
+  const header = small
+    ? `ACCOUNT SIZE: $${L.account.toFixed(0)}. This is SMALL — size, not thesis quality, is the binding constraint.`
+    : `ACCOUNT SIZE: $${L.account.toFixed(0)}. Contract cost is NOT the binding constraint here — nearly any liquid contract fits. Thesis quality and risk control are what matter, so do not pass on a good setup because the premium looks expensive in absolute dollars.`;
+  const optionLine = small
+    ? `OPTION contract cost limits: comfortable ≤ $${L.optionPreferred.toFixed(0)} (5%), hard cap $${L.optionHardCap.toFixed(0)} (10%). A contract costing more than the hard cap is NOT an option trade for this account no matter how good the setup — use SHARES (sized to the risk budget) or WAIT.`
+    : `OPTION sizing: position budget ≈ $${L.optionPreferred.toFixed(0)} (5% of account), spread across up to ${MAX_CONTRACTS} contracts, with a per-contract hard cap of $${L.optionHardCap.toFixed(0)} (10%). Judge the setup, not the sticker price of one contract.`;
   return [
-    `ACCOUNT SIZE: $${L.account.toFixed(0)}. This is SMALL — size, not thesis quality, is the binding constraint.`,
+    header,
     `Per-idea risk budget: $${L.riskDollars.toFixed(0)} (1%). Max cost of any one position: $${L.maxPositionDollars.toFixed(0)} (25%).`,
-    `OPTION contract cost limits: comfortable ≤ $${L.optionPreferred.toFixed(0)} (5%), hard cap $${L.optionHardCap.toFixed(0)} (10%). A contract costing more than the hard cap is NOT an option trade for this account no matter how good the setup — use SHARES (sized to the risk budget) or WAIT.`,
+    optionLine,
   ].join("\n");
 }
