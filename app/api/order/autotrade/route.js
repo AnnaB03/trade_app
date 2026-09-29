@@ -146,15 +146,31 @@ function isDuplicatePosition(idea, openEntry) {
    morning, hours BEFORE the idea proposing it existed, so a whole-day high
    would "confirm" a breakout that the thesis never actually witnessed. Only
    movement after the idea was written counts as confirming it. */
+/* How far back an intraday cross may count. The point is to catch a level
+   crossed BETWEEN two runs of this route, so the window only needs to cover
+   one cadence plus slack. Anchoring all the way back to the idea's creation
+   was wrong in a way that cost a real trade: NVDA crossed $231 hours earlier,
+   then sold off to $228.86, and the route bought the CALL anyway on the
+   strength of a cross that had already failed. For an exit, a level touched
+   at any point is a gain that really happened; for an ENTRY, a level crossed
+   and then lost is a failed breakout — the opposite of a confirmation. */
+const INTRADAY_CROSS_WINDOW_MIN = 20;
+
 async function extremeSince(symbol, sinceIso) {
   try {
-    const start = new Date(sinceIso);
+    const floor = Date.now() - INTRADAY_CROSS_WINDOW_MIN * 60000;
+    const start = new Date(Math.max(new Date(sinceIso).getTime(), floor));
     if (!(start.getTime() > 0)) return null;
     const pad = (n) => String(n).padStart(2, "0");
     const fmt = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    // Bounded: this runs once per untriggered conditional idea inside a loop,
+    // so an unbounded call lets one slow response stall the whole route past
+    // its 15-minute cron window. Missing the bars costs one intraday catch;
+    // stalling costs every check in that window.
     const d = await tradier(
       `/markets/timesales?symbol=${encodeURIComponent(symbol)}&interval=5min` +
-      `&start=${encodeURIComponent(fmt(start))}&end=${encodeURIComponent(fmt(new Date()))}`
+      `&start=${encodeURIComponent(fmt(start))}&end=${encodeURIComponent(fmt(new Date()))}`,
+      { timeoutMs: 4000 }
     );
     const bars = asArray(d?.series?.data);
     if (!bars.length) return null;

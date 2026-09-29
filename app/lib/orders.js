@@ -37,6 +37,20 @@ export function parseOcc(occ) {
 export const netPremium = (legs) =>
   legs.reduce((s, l) => s + (l.action === "buy" ? 1 : -1) * Number(l.premium) * Number(l.qty), 0);
 
+/* Per-CONTRACT limit price for a single-leg option order. netPremium is
+   qty-weighted, which is what a multi-leg net debit/credit wants but is wrong
+   for the one number Tradier reads as the price of a single contract. While
+   quantity was hardcoded to 1 the two were identical and the conflation was
+   invisible; the moment positions began sizing to the account it was not. A
+   13-contract NVDA order at a $7.20 premium was submitted with a limit of
+   $93.60 per contract — a buy limit ~13x over the ask, which forfeits all
+   price protection and gets journalled as the entry price, corrupting P&L
+   until the real fill reconciles. */
+const singleLegLimit = (leg, limitPrice) => {
+  if (limitPrice != null && limitPrice !== "") return Math.abs(Number(limitPrice));
+  return Math.abs(Number(leg.premium));
+};
+
 /* Gate A — HARD BLOCK: net call exposure = Σ(long call qty) − Σ(short call qty) */
 export function gateA(legs) {
   const netCalls = legs.reduce((s, l) => l.type === "call" ? s + (l.action === "buy" ? 1 : -1) * Number(l.qty) : s, 0);
@@ -120,7 +134,11 @@ export function buildOrderForm(legs, { closing = false, limitPrice = null, previ
     ? (l.action === "buy" ? "buy_to_close" : "sell_to_close")
     : (l.action === "buy" ? "buy_to_open" : "sell_to_open");
   const net = netPremium(legs);
-  const px = limitPrice != null && limitPrice !== "" ? Math.abs(Number(limitPrice)) : Math.abs(net);
+  // Multi-leg keeps the qty-weighted net (that is what a debit/credit means);
+  // single-leg must be the per-contract price.
+  const px = legs.length === 1
+    ? singleLegLimit(legs[0], limitPrice)
+    : (limitPrice != null && limitPrice !== "" ? Math.abs(Number(limitPrice)) : Math.abs(net));
   let form;
   if (legs.length === 1) {
     const l = legs[0];
@@ -163,7 +181,7 @@ export function buildBracketOptionForm(legs, { stopPrice, limitPrice = null, pre
   const l = legs[0];
   const underlying = parseOcc(l.occ).underlying;
   const net = netPremium(legs);
-  const entryPx = limitPrice != null && limitPrice !== "" ? Math.abs(Number(limitPrice)) : Math.abs(net);
+  const entryPx = singleLegLimit(l, limitPrice); // per contract, not qty-weighted
   const form = {
     class: "oto", symbol: underlying,
     "option_symbol[0]": l.occ, "side[0]": "buy_to_open", "quantity[0]": String(l.qty), "type[0]": "limit", "price[0]": entryPx.toFixed(2), "duration[0]": "day",
