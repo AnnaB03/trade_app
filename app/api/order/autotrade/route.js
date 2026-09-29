@@ -64,6 +64,8 @@ import { buildOptionStopEstimate } from "../../../lib/orders";
    them. Revisit if conviction-2 regresses as its sample grows. */
 const MIN_CONVICTION = 2;
 const MIN_REWARD_RISK = 1.0; // never risk more than the plan stands to make
+const DIRECTION_SIGN = { CALL: 1, BUY: 1, PUT: -1, SELL: -1 };
+const REENTRY_COOLDOWN_MIN = 45; // no re-entry on a just-exited symbol without a newer idea
 const MAX_BATCH_AGE_MIN = 20; // non-conditional ideas: reject a batch older than this
 const DEFAULT_TRIGGER_STALE_MIN = 120; // conditional ideas with no staleMinutes of their own
 const LOOKBACK_HOURS = 24; // how far back to search for each symbol's own latest idea
@@ -388,31 +390,6 @@ export async function GET(req) {
       const tag = { symbol: rawIdea.symbol, action: rawIdea.action, vehicle: rawIdea.vehicle, risk: rawIdea.risk, ideaId: rawIdea.id };
       if (!["CALL", "PUT", "BUY", "SELL"].includes(rawIdea.action)) { results.push({ ...tag, placed: false, reason: "WAIT — nothing to trade." }); continue; }
       if (Number(rawIdea.conviction) < minConviction) { results.push({ ...tag, placed: false, reason: `Conviction ${rawIdea.conviction} below the ${minConviction} bar.` }); continue; }
-      // Reward:risk sanity. Not a performance filter — a shape check. Across
-      // 383 graded ideas carrying both levels, exactly ONE was ever planned at
-      // worse than 1:1, so this almost never binds; it exists because the one
-      // that slipped through was a real position: DXST target $4.85 against a
-      // $3.92 invalidation off a $4.83 entry, risking ~19% to make ~0.4%, and
-      // at 25%-of-account sizing that was ~$4,700 of risk for ~$85 of upside.
-      // Deliberately left at 1:1 rather than the 2.5:1 the outcome data would
-      // suggest: those grades were all recorded under the old exit logic that
-      // let winners round-trip, and cutting idea supply ~46% on pre-fix
-      // evidence would be fitting to a regime that no longer exists.
-      {
-        const e = Number(rawIdea.entryPrice), t = Number(rawIdea.target), v = Number(rawIdea.invalidation);
-        const risk = Math.abs(e - v), reward = Math.abs(t - e);
-        if (e > 0 && t > 0 && v > 0 && risk > 0 && reward / risk < MIN_REWARD_RISK) {
-          results.push({ ...tag, placed: false, reason: `Reward:risk ${(reward / risk).toFixed(2)}:1 is below the ${MIN_REWARD_RISK}:1 floor — risking $${risk.toFixed(2)}/share to make $${reward.toFixed(2)}. Not taking a plan shaped that way.` });
-          continue;
-        }
-      }
-      // No risk-rating filter: HIGH is 78% of every actionable idea ever
-      // logged (90% of options specifically) — the rulebook calls a
-      // short-dated option HIGH structurally, regardless of setup quality,
-      // so excluding it here meant almost nothing but shares ever traded.
-      // That's a real dollar-risk gate with nothing to protect in a paper
-      // account; risk still shows in every result/journal entry to review.
-
       let idea = rawIdea;
       const now = Date.now();
       const hasTrigger = idea.triggerPrice != null && idea.triggerDirection;
@@ -466,6 +443,53 @@ export async function GET(req) {
         if (ageMin > MAX_BATCH_AGE_MIN) {
           results.push({ ...tag, placed: false, reason: `This idea is ${ageMin.toFixed(0)} min old — too stale to trade on without a live re-check. Refresh Ideas first.` });
           continue;
+        }
+      }
+
+      /* Reward:risk, measured against the price we are ACTUALLY paying.
+         The earlier version read rawIdea.entryPrice — the spot when the idea
+         was written — so a plan could compute as acceptable while the live
+         entry made it absurd. DXST slipped through exactly that way: target
+         $4.85 against a $3.92 invalidation is ~0.02:1 at any entry near $4,
+         yet it was bought twice. */
+      {
+        const e = Number(idea.entryPrice), t = Number(idea.target), v = Number(idea.invalidation);
+        const risk = Math.abs(e - v), reward = Math.abs(t - e);
+        const dir = DIRECTION_SIGN[idea.action] ?? 1;
+        // Already through the level that voids the thesis. Checked BEFORE the
+        // ratio, because once price is the wrong side of the invalidation the
+        // ratio flatters the trade instead of describing it: DXST at $3.87
+        // against a $3.92 invalidation scored 19.6:1 purely because the risk
+        // distance had collapsed to 5 cents — a position autoexit would close
+        // on its next pass for breaching the very level it was bought under.
+        if (e > 0 && v > 0 && (dir > 0 ? e <= v : e >= v)) {
+          results.push({ ...tag, placed: false, reason: `Live price $${e} is already ${dir > 0 ? "at or below" : "at or above"} the $${v} invalidation — the setup is void, not cheap.` });
+          continue;
+        }
+        if (e > 0 && t > 0 && v > 0 && risk > 0 && reward / risk < MIN_REWARD_RISK) {
+          results.push({ ...tag, placed: false, reason: `Reward:risk ${(reward / risk).toFixed(2)}:1 at the live entry $${e} is below the ${MIN_REWARD_RISK}:1 floor — risking $${risk.toFixed(2)}/share to make $${reward.toFixed(2)}.` });
+          continue;
+        }
+      }
+
+      /* Cooldown after an exit on this symbol. Without it, taking profit frees
+         the dedup check and a still-fresh idea re-buys the same name on the
+         very next run. Observed live on DXST: closed at take-profit, re-bought
+         immediately, trail-stopped for a loss, re-bought again — three entries
+         inside two checks while the stock fell from $5.10 to $3.87. Re-entering
+         a name we just exited needs a NEW idea, not the leftovers of the one
+         that just played out. */
+      {
+        const lastExit = listJournal()
+          .filter((r) => r.symbol === idea.symbol && r.exitAt)
+          .reduce((a, r) => (!a || new Date(r.exitAt) > new Date(a.exitAt) ? r : a), null);
+        if (lastExit) {
+          const minsSince = (Date.now() - new Date(lastExit.exitAt).getTime()) / 60000;
+          const ideaIsNewer = new Date(idea.createdAt).getTime() > new Date(lastExit.exitAt).getTime();
+          if (minsSince < REENTRY_COOLDOWN_MIN && !ideaIsNewer) {
+            results.push({ ...tag, placed: false, reason: `Closed ${idea.symbol} ${minsSince.toFixed(0)} min ago (${lastExit.exitReasonTag ?? "exit"}) and this idea predates that exit — waiting ${REENTRY_COOLDOWN_MIN} min for a fresh read rather than re-buying what just played out.` });
+            continue;
+          }
         }
       }
 
