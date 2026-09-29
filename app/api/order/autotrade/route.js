@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { vetOrder, vetEquityOrder, submitOrder } from "../common";
 import { tradier, asArray } from "../../tradier";
+import { isPaperSandbox } from "../../tradeClient";
 import { listIdeas, listJournal } from "../../store";
 import { journalOpen } from "../../journalLib";
 import { buildOptionStopEstimate } from "../../../lib/orders";
@@ -62,6 +63,7 @@ import { buildOptionStopEstimate } from "../../../lib/orders";
    rather than weak — but whatever the cause, the outcomes favour taking
    them. Revisit if conviction-2 regresses as its sample grows. */
 const MIN_CONVICTION = 2;
+const MIN_REWARD_RISK = 1.0; // never risk more than the plan stands to make
 const MAX_BATCH_AGE_MIN = 20; // non-conditional ideas: reject a batch older than this
 const DEFAULT_TRIGGER_STALE_MIN = 120; // conditional ideas with no staleMinutes of their own
 const LOOKBACK_HOURS = 24; // how far back to search for each symbol's own latest idea
@@ -207,7 +209,12 @@ async function liveQuote(symbol) {
    invalidation on the live price plus a trailing take-profit. That trades
    instant intraday protection for the ability to realize a gain at all.
    Set PAPER_ATTACH_STOPS=true to restore broker-side stops. */
-const ATTACH_STOPS = process.env.PAPER_ATTACH_STOPS === "true";
+// Fails CLOSED: anywhere other than the paper sandbox, stops are always
+// attached regardless of the env var. The skip exists solely to dodge a
+// sandbox bug (a resting stop reserves the quantity and cannot then be
+// cancelled or modified, so winners freeze and only losses can be realised).
+// On a real broker that workaround would just be unprotected risk.
+const ATTACH_STOPS = !isPaperSandbox() || process.env.PAPER_ATTACH_STOPS === "true";
 
 // Attempt one specific contract. Returns { ok: true, orderResult, vet } or
 // { ok: false, error } — never throws, so the caller can try alternates.
@@ -381,6 +388,24 @@ export async function GET(req) {
       const tag = { symbol: rawIdea.symbol, action: rawIdea.action, vehicle: rawIdea.vehicle, risk: rawIdea.risk, ideaId: rawIdea.id };
       if (!["CALL", "PUT", "BUY", "SELL"].includes(rawIdea.action)) { results.push({ ...tag, placed: false, reason: "WAIT — nothing to trade." }); continue; }
       if (Number(rawIdea.conviction) < minConviction) { results.push({ ...tag, placed: false, reason: `Conviction ${rawIdea.conviction} below the ${minConviction} bar.` }); continue; }
+      // Reward:risk sanity. Not a performance filter — a shape check. Across
+      // 383 graded ideas carrying both levels, exactly ONE was ever planned at
+      // worse than 1:1, so this almost never binds; it exists because the one
+      // that slipped through was a real position: DXST target $4.85 against a
+      // $3.92 invalidation off a $4.83 entry, risking ~19% to make ~0.4%, and
+      // at 25%-of-account sizing that was ~$4,700 of risk for ~$85 of upside.
+      // Deliberately left at 1:1 rather than the 2.5:1 the outcome data would
+      // suggest: those grades were all recorded under the old exit logic that
+      // let winners round-trip, and cutting idea supply ~46% on pre-fix
+      // evidence would be fitting to a regime that no longer exists.
+      {
+        const e = Number(rawIdea.entryPrice), t = Number(rawIdea.target), v = Number(rawIdea.invalidation);
+        const risk = Math.abs(e - v), reward = Math.abs(t - e);
+        if (e > 0 && t > 0 && v > 0 && risk > 0 && reward / risk < MIN_REWARD_RISK) {
+          results.push({ ...tag, placed: false, reason: `Reward:risk ${(reward / risk).toFixed(2)}:1 is below the ${MIN_REWARD_RISK}:1 floor — risking $${risk.toFixed(2)}/share to make $${reward.toFixed(2)}. Not taking a plan shaped that way.` });
+          continue;
+        }
+      }
       // No risk-rating filter: HIGH is 78% of every actionable idea ever
       // logged (90% of options specifically) — the rulebook calls a
       // short-dated option HIGH structurally, regardless of setup quality,

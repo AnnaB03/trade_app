@@ -59,10 +59,34 @@ export async function reconcileJournal({ force = false } = {}) {
       let row = j;
       const fillPx = Number(entryLeg.avg_fill_price);
       if (filledQty > 0 && fillPx > 0 && j.entryFillPrice == null) {
-        row = updateJournalEntry(j.id, {
+        // Flag a fill that lands materially away from the price we asked for.
+        // A real broker cannot fill a BUY limit below the market — you get the
+        // ask, never a bargain — so a large favourable gap means the fill is
+        // not reproducible. Seen live: a $4.83 DXST buy limit submitted with
+        // the stock near $4.11 was filled by the sandbox at $1.95, the day's
+        // open hours earlier, manufacturing a ~137% "gain" that no live
+        // account could have had. Left unflagged, that inflates the track
+        // record the next real-money decision would be based on. The same
+        // check catches the opposite case that DOES happen for real: paying
+        // far more than intended on a fast or illiquid name.
+        const limitPx = Number(j.entryLimitPrice);
+        const patch = {
           entryFillPrice: fillPx, entryFilledQuantity: filledQty, entryOrderStatus: entryLeg.status,
           entryFilledAt: entryLeg.transaction_date || new Date().toISOString(),
-        }) || j;
+        };
+        if (limitPx > 0) {
+          const gapPct = ((fillPx - limitPx) / limitPx) * 100;
+          if (Math.abs(gapPct) >= 5) {
+            const buying = /buy/i.test(String(entryLeg.side ?? j.side ?? "buy"));
+            const favourable = buying ? fillPx < limitPx : fillPx > limitPx;
+            patch.fillGapPct = Number(gapPct.toFixed(1));
+            patch.fillSuspect = favourable;
+            patch.fillNote = favourable
+              ? `Filled at $${fillPx} against a $${limitPx} limit (${gapPct.toFixed(1)}%) — better than asked, which a live broker does not do. Treat any P&L on this row as simulation artifact, not edge.`
+              : `Filled at $${fillPx} against a $${limitPx} limit (${gapPct.toFixed(1)}%) — real slippage against us.`;
+          }
+        }
+        row = updateJournalEntry(j.id, patch) || j;
         updated++;
       }
 

@@ -11,6 +11,17 @@ export function sandboxLockError() {
   return null;
 }
 
+/* True only while orders are provably going to the paper sandbox. Exists so
+   that paper-only compromises cannot silently become live-money behaviour:
+   protective stops are currently skipped at entry ONLY because the sandbox
+   reserves the quantity behind a stop it then refuses to cancel or modify,
+   which freezes winners and leaves losses as the sole realisable outcome.
+   That workaround is specific to a simulator bug. A real broker cancels a
+   stop on request, and going without one there is simply unprotected risk,
+   so anything gated on this must fail CLOSED — protection on — the moment
+   orders are not sandbox-bound. */
+export const isPaperSandbox = () => TRADE_BASE === SANDBOX;
+
 export async function tradeFetch(path, { method = "GET", form } = {}) {
   if (!TOKEN) throw new Error("Server is missing TRADIER_TRADE_TOKEN (or TRADIER_TOKEN_SANDBOX) — set it in .env.local.");
   const res = await fetch(`${SANDBOX}${path}`, {
