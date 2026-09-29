@@ -54,6 +54,10 @@ const DIRECTION = { CALL: 1, BUY: 1, PUT: -1, SELL: -1 };
    only ever exit profitable (worst case ~+28%), so this never turns a winner
    into a loser. Shares arm lower because share ideas here target +3-11%. */
 const TRAIL_ARM_PCT = { OPTION: 40, SHARES: 15 };
+// Dollar peak that arms the trail regardless of percentage — see the arming
+// block below for why a percentage-only bar stopped working once position size
+// went from ~$800 to ~$9,000.
+const TRAIL_ARM_USD = 400;
 const TRAIL_GIVEBACK_PCT = 30;
 
 // Absolute ceiling, separate from the trail: a position up this much is
@@ -356,7 +360,18 @@ export async function GET(req) {
       // mark, so a spike that happened between two 15-minute runs still
       // counts. Without this the trail only ever knows the peaks it watched
       // live and would have been blind to the NVDA contract printing $8.78.
-      const todayHigh = pos.vehicle === "OPTION" ? oq?.high : range?.high;
+      /* The peak has to be measured in the same currency as the exit, and for
+         options it was not. markNow is the BID (what we can actually sell at)
+         while the seeded high came from oq.high, a LAST-TRADE price. On a wide
+         contract that gap is the whole spread: MRVL 265c showed a $17.98 high
+         against a $17.00/$17.55 market, so a "peak" was recorded at a price no
+         seller could have got, and every giveback measured against it was
+         overstated by ~3% of premium — enough to trip the trail early. Subtract
+         the current spread to approximate what the bid was up there. Shares need
+         no adjustment; their spreads are pennies. */
+      const rawHigh = pos.vehicle === "OPTION" ? Number(oq?.high) : Number(range?.high);
+      const spread = pos.vehicle === "OPTION" && oq?.ask > 0 && oq?.bid >= 0 ? oq.ask - oq.bid : 0;
+      const todayHigh = rawHigh > 0 ? Math.max(0, rawHigh - spread) : null;
       let peakMark = Math.max(Number(pos.peakMark) || 0, Number(todayHigh) || 0);
       if (markNow > 0 && markNow > peakMark) peakMark = markNow;
       if (!dryRun && peakMark > (Number(pos.peakMark) || 0)) {
@@ -366,6 +381,11 @@ export async function GET(req) {
         ? ((peakMark - entryPremium) / entryPremium) * 100
         : null;
       const armBar = TRAIL_ARM_PCT[pos.vehicle] ?? TRAIL_ARM_PCT.OPTION;
+      // Dollar gain at the peak, which is what actually matters once positions
+      // are sized to the account rather than to one contract.
+      const mult = pos.vehicle === "OPTION" ? 100 : 1;
+      const qty = Number(pos.entryQuantity) || 0;
+      const peakGainUsd = peakMark > 0 && entryPremium > 0 ? (peakMark - entryPremium) * qty * mult : null;
       const hardBar = HARD_TAKE_PROFIT_PCT[pos.vehicle] ?? HARD_TAKE_PROFIT_PCT.OPTION;
 
       // 1b. Outright ceiling — big enough that it goes in the book now.
@@ -380,7 +400,16 @@ export async function GET(req) {
       // least armBar at some point, then exits on a giveback of that peak
       // gain. Compares against the PEAK, not the entry, so a winner that
       // rolls over is banked near its high instead of round-tripping.
-      if (!exit && peakGainPct != null && peakGainPct >= armBar && gainPct != null) {
+      /* Arms on percentage OR dollars. Percentage alone was calibrated when a
+         position was ~$800, where +6% is $48 of noise worth ignoring. The same
+         +6% on an $8,475 position is $515, and MRVL rode exactly that from
+         +$515 back to +$25 without ever approaching the +40% bar. This stays a
+         GIVEBACK rule rather than a profit target: it only fires once a gain
+         has largely been surrendered, so a position still climbing never trips
+         it — the +127% NVDA winner would have been untouched. */
+      const armedByPct = peakGainPct != null && peakGainPct >= armBar;
+      const armedByUsd = peakGainUsd != null && peakGainUsd >= TRAIL_ARM_USD;
+      if (!exit && (armedByPct || armedByUsd) && gainPct != null) {
         const keepAtLeast = peakGainPct * (1 - TRAIL_GIVEBACK_PCT / 100);
         if (gainPct <= keepAtLeast) {
           exit = {
