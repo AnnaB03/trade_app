@@ -70,9 +70,13 @@ const MIN_CONVICTION = 2;
    construction, before spread. 1.5:1 needs 40%, which leaves actual room.
    Chosen this way deliberately because the outcome data (2.5:1+ at +0.75R vs
    1.5-2.5:1 at -0.27R) was all recorded under the old exit logic and cannot be
-   trusted to pick a threshold. Costs almost no supply: of the recent
-   actionable set only INTC at 1.09:1 fails — NOK 2.02, FEIM 1.99, MRVL 2.07
-   and ROG 2.52 all clear it. */
+   trusted to pick a threshold. Costs no supply against the current set: every
+   recent actionable idea clears it on the UNDERLYING levels this gate reads —
+   INTC 2.98, ROG 2.10, NOK 2.02, FEIM 1.99, MRVL 2.07. (A first draft of this
+   note claimed INTC failed at 1.09:1. That came from dividing underlying
+   target/invalidation distances by the option PREMIUM, which mixes units and
+   is meaningless; the gate uses idea.entryPrice, the underlying, and always
+   did.) */
 const MIN_REWARD_RISK = 1.5;
 const DIRECTION_SIGN = { CALL: 1, BUY: 1, PUT: -1, SELL: -1 };
 const REENTRY_COOLDOWN_MIN = 45; // no re-entry on a just-exited symbol without a newer idea
