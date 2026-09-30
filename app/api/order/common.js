@@ -100,7 +100,7 @@ export async function vetOrder(body, { preview }) {
   const attachStop = stopPrice > 0;
   const { form, underlying, net, side_map } = attachStop
     ? buildBracketOptionForm(legs, { stopPrice, limitPrice: body?.limit_price, preview })
-    : buildOrderForm(legs, { closing, limitPrice: body?.limit_price, preview });
+    : buildOrderForm(legs, { closing, limitPrice: body?.limit_price, preview, duration: body?.duration || "day" });
   return {
     gates, form, underlying,
     computed: {
@@ -193,7 +193,7 @@ export async function vetEquityOrder(body, { preview }) {
   const attachStop = !closing && eq.attachStop === true && stop > 0;
   const { form } = attachStop
     ? buildBracketEquityForm({ symbol, side, quantity: qty, price, stopPrice: stop, preview })
-    : { form: { class: "equity", symbol, side, quantity: String(qty), type: "limit", price: price.toFixed(2), duration: "day", ...(preview ? { preview: "true" } : {}) } };
+    : { form: { class: "equity", symbol, side, quantity: String(qty), type: "limit", price: price.toFixed(2), duration: body?.duration || "day", ...(preview ? { preview: "true" } : {}) } };
 
   return {
     gates, form, underlying: symbol,

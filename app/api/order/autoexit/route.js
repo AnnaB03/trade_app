@@ -54,10 +54,15 @@ const DIRECTION = { CALL: 1, BUY: 1, PUT: -1, SELL: -1 };
    only ever exit profitable (worst case ~+28%), so this never turns a winner
    into a loser. Shares arm lower because share ideas here target +3-11%. */
 const TRAIL_ARM_PCT = { OPTION: 40, SHARES: 15 };
-// Dollar peak that arms the trail regardless of percentage — see the arming
-// block below for why a percentage-only bar stopped working once position size
-// went from ~$800 to ~$9,000.
-const TRAIL_ARM_USD = 400;
+/* A dollar-based arm (peak gain >= $400) lived here briefly and was removed.
+   It was added for MRVL showing "+$515" that round-tripped, but the
+   bid-adjustment work established that peak was really +$240 / +2.8%, so the
+   motivating case was spread illusion. Meanwhile it broke the trail on large
+   positions: at 13 contracts a +4.3% peak clears $400, and 30% of a 4.3% gain
+   is a 1.2% band, so the trail became a hair-trigger and exited the NVDA
+   $230c at $7.75 on a blip instead of managing a real move. The trail is for
+   meaningful gains giving back a meaningful share; percentage is the right
+   unit for that, and position size does not change it. */
 const TRAIL_GIVEBACK_PCT = 30;
 
 // Absolute ceiling, separate from the trail: a position up this much is
@@ -217,11 +222,12 @@ async function cancelResting(orderId) {
   try { await tradeFetch(`/accounts/${await accountId()}/orders/${orderId}`, { method: "DELETE" }); } catch {}
 }
 
-async function closeOption(pos, exitPrice) {
+async function closeOption(pos, exitPrice, { duration = "day" } = {}) {
   await cancelResting(pos.entryOrderId); // the resting stop leg — about to be replaced by this close
   const body = {
     legs: [{ action: "sell", type: pos.optionType, strike: String(pos.strike), premium: String(exitPrice), qty: String(pos.entryQuantity || 1), occ: pos.occ }],
     closing: true,
+    duration,
     outcome_note: "auto-exit",
   };
   const vet = await vetOrder(body, { preview: false });
@@ -234,11 +240,12 @@ async function closeOption(pos, exitPrice) {
   }
 }
 
-async function closeShares(pos, exitPrice) {
+async function closeShares(pos, exitPrice, { duration = "day" } = {}) {
   await cancelResting(pos.entryOrderId);
   const body = {
     equity: { symbol: pos.symbol, quantity: pos.entryQuantity, price: exitPrice },
     closing: true,
+    duration,
     outcome_note: "auto-exit",
   };
   const vet = await vetEquityOrder(body, { preview: false });
@@ -385,7 +392,6 @@ export async function GET(req) {
       // are sized to the account rather than to one contract.
       const mult = pos.vehicle === "OPTION" ? 100 : 1;
       const qty = Number(pos.entryQuantity) || 0;
-      const peakGainUsd = peakMark > 0 && entryPremium > 0 ? (peakMark - entryPremium) * qty * mult : null;
       const hardBar = HARD_TAKE_PROFIT_PCT[pos.vehicle] ?? HARD_TAKE_PROFIT_PCT.OPTION;
 
       /* 1a. Explicit breakeven exit, set per position (exitAtBreakeven) when
@@ -394,28 +400,62 @@ export async function GET(req) {
          is to leave at the first opportunity, not to hold for more. Uses the
          BID for options, so breakeven here means genuinely recovering the
          entry rather than merely marking there. */
+      /* Breakeven exits are a RESTING order, not a polled comparison. A level
+         cannot be hit by checking every 15 minutes: the NVDA $230c was flagged
+         to leave at $8.15, and by the time a check observed it the bid was
+         $7.75 — the price was gone before anything looked. So once, for a
+         flagged position, place a GTC sell limit AT the entry and let the
+         market come to it. The pendingExitOrderId machinery above then does
+         the rest: it confirms the real fill whenever it happens, never books
+         P&L before the broker agrees, and never re-submits while the order is
+         still working. Resting sells reserve the quantity in this sandbox,
+         which is normally the FROZEN problem — here it is the intent, since
+         the whole plan for this position is "get out at entry". */
+      // Already at or above entry: take it now. Resting a limit at entry when
+      // the market is already through it only invites a worse fill than the
+      // one on offer.
       if (!exit && pos.exitAtBreakeven && markNow > 0 && entryPremium > 0 && markNow >= entryPremium) {
         exit = {
           tag: "breakeven",
-          detail: `Back to breakeven ($${entryPremium} entry, $${markNow} now) and flagged to exit flat — taking it rather than holding for more`,
+          detail: `Bid $${markNow} is at or above the $${entryPremium} entry — closing flat-or-better now rather than resting an order`,
         };
       }
 
-      /* "Hold for green" means the PROFIT rules may not book a loss on a
-         flagged position. Learned the hard way: the 13-lot NVDA $230c was
-         flagged to exit at its $8.15 breakeven, rallied from $6.05, armed the
-         trail on dollars, then gave back 30% of that peak and the trail fired
-         at $7.75 — forty cents under breakeven. It cut the loss (-$2,730 to
-         -$520) but it exited RED on a position explicitly told to wait for
-         green, because the trail measures from the PEAK while breakeven
-         measures from the ENTRY, and on a rally that stalls just short the
-         trail always gets there first.
-         Deliberately narrow: this suppresses only the discretionary
-         profit-taking rules (trail and target). Invalidation, a reversed
-         thesis, a broker stop that already filled, expiration and orphan
-         reconciliation are risk and reality rather than profit decisions, and
-         still fire — holding for green must not become holding to zero. */
-      const holdForGreen = !!pos.exitAtBreakeven && entryPremium > 0 && markNow > 0 && markNow < entryPremium;
+      if (!exit && pos.exitAtBreakeven && !pos.pendingExitOrderId && entryPremium > 0) {
+        if (dryRun) {
+          results.push({ symbol: pos.symbol, closed: false, reason: `Would rest a GTC sell at the $${entryPremium} entry (bid $${markNow})` });
+          continue;
+        }
+        const rest = pos.vehicle === "OPTION"
+          ? await closeOption(pos, entryPremium, { duration: "gtc" })
+          : await closeShares(pos, entryPremium, { duration: "gtc" });
+        if (rest.ok) {
+          const restId = rest.orderResult?.id ?? null;
+          try {
+            updateJournalEntry(pos.id, {
+              pendingExitOrderId: restId,
+              pendingExitTag: "breakeven",
+              pendingExitReason: `Resting GTC sell at the $${entryPremium} entry — exits flat the moment the market trades there`,
+              exitOrderStatus: "resting",
+            });
+          } catch (e) { console.error("autoexit resting-breakeven write failed:", e); }
+          results.push({ symbol: pos.symbol, closed: false, reason: `Resting GTC sell placed at $${entryPremium} (order ${restId}) — will fill flat if the market trades back to entry` });
+        } else if (/does not match an open position|No open .* position found/i.test(rest.error || "")) {
+          // No position behind the row — the entry never filled. Reconcile it
+          // shut with no invented price rather than retrying a rest forever.
+          try {
+            journalClose(pos, {
+              exitOrderId: null, exitOrderStatus: null, exitQuantity: pos.entryQuantity, exitFillPrice: null,
+              exitReason: "Flagged for a breakeven exit, but the broker holds no such position — the entry never filled. Reconciled closed with no P&L.",
+              exitReasonTag: "orphaned", underlyingPriceAtClose: underlyingPx,
+            });
+          } catch (e) { console.error("autoexit breakeven orphan reconcile failed:", e); }
+          results.push({ symbol: pos.symbol, closed: true, tag: "orphaned", detail: "No real position behind the row — reconciled closed, no P&L" });
+        } else {
+          results.push({ symbol: pos.symbol, closed: false, error: `Could not rest a breakeven sell at $${entryPremium}: ${rest.error}` });
+        }
+        continue;
+      }
 
       // 1b. Outright ceiling — big enough that it goes in the book now.
       if (gainPct != null && gainPct >= hardBar) {
@@ -436,9 +476,7 @@ export async function GET(req) {
          GIVEBACK rule rather than a profit target: it only fires once a gain
          has largely been surrendered, so a position still climbing never trips
          it — the +127% NVDA winner would have been untouched. */
-      const armedByPct = peakGainPct != null && peakGainPct >= armBar;
-      const armedByUsd = peakGainUsd != null && peakGainUsd >= TRAIL_ARM_USD;
-      if (!exit && !holdForGreen && (armedByPct || armedByUsd) && gainPct != null) {
+      if (!exit && peakGainPct != null && peakGainPct >= armBar && gainPct != null) {
         const keepAtLeast = peakGainPct * (1 - TRAIL_GIVEBACK_PCT / 100);
         if (gainPct <= keepAtLeast) {
           exit = {
@@ -449,7 +487,7 @@ export async function GET(req) {
       }
 
       // 2. Target hit — anywhere in today's range, not just the current tick.
-      if (!exit && !holdForGreen && pos.target != null && favorableExtreme != null) {
+      if (!exit && pos.target != null && favorableExtreme != null) {
         const hit = dir > 0 ? favorableExtreme >= pos.target : favorableExtreme <= pos.target;
         if (hit) exit = { tag: "target", detail: `Hit its $${pos.target} target intraday (day's ${dir > 0 ? "high" : "low"} $${favorableExtreme}, now $${underlyingPx})` };
       }
@@ -474,12 +512,7 @@ export async function GET(req) {
         }
       }
 
-      if (!exit) {
-        results.push(holdForGreen
-          ? { symbol: pos.symbol, closed: false, reason: `Holding for green — bid $${markNow} is under the $${entryPremium} entry, so profit rules are suppressed (risk rules still active)` }
-          : { symbol: pos.symbol, closed: false });
-        continue;
-      }
+      if (!exit) { results.push({ symbol: pos.symbol, closed: false }); continue; }
 
       // Decided to exit — but if the broker has this quantity reserved behind
       // a resting stop, no sell can be placed at all. Say so once instead of

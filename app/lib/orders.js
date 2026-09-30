@@ -128,7 +128,7 @@ export function gateE(legQuotes, ack) {
 }
 
 /* Tradier order form — exact shapes from the brief. Limit orders only. */
-export function buildOrderForm(legs, { closing = false, limitPrice = null, preview = false } = {}) {
+export function buildOrderForm(legs, { closing = false, limitPrice = null, preview = false, duration = "day" } = {}) {
   const underlying = parseOcc(legs[0].occ).underlying;
   const sideOf = (l) => closing
     ? (l.action === "buy" ? "buy_to_close" : "sell_to_close")
@@ -144,7 +144,7 @@ export function buildOrderForm(legs, { closing = false, limitPrice = null, previ
     const l = legs[0];
     form = {
       class: "option", symbol: underlying, option_symbol: l.occ, side: sideOf(l),
-      quantity: String(l.qty), type: "limit", price: px.toFixed(2), duration: "day",
+      quantity: String(l.qty), type: "limit", price: px.toFixed(2), duration,
     };
   } else {
     const type = net > 0 ? "debit" : net < 0 ? "credit" : "even";
