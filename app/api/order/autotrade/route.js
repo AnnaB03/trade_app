@@ -78,6 +78,10 @@ const MIN_CONVICTION = 2;
    is meaningless; the gate uses idea.entryPrice, the underlying, and always
    did.) */
 const MIN_REWARD_RISK = 1.5;
+// How far price may have slipped back below (or above, for a short) a trigger
+// it crossed intraday and still count as confirmation. See the cross-check
+// below for the ROG and DXST cases that set this.
+const MAX_TRIGGER_SLIP_PCT = 0.5;
 const DIRECTION_SIGN = { CALL: 1, BUY: 1, PUT: -1, SELL: -1 };
 const REENTRY_COOLDOWN_MIN = 45; // no re-entry on a just-exited symbol without a newer idea
 const MAX_BATCH_AGE_MIN = 20; // non-conditional ideas: reject a batch older than this
@@ -427,14 +431,36 @@ export async function GET(req) {
         // given back since this idea was written, between two runs of this
         // route. That is a real confirmation the poll simply didn't witness.
         let crossedAt = null;
+        let skipThisIdea = false;
         if (!nowTriggered) {
           const ext = await extremeSince(idea.symbol, idea.createdAt);
           const reached = above ? ext?.high : ext?.low;
           if (reached != null && (above ? reached >= effectiveTrigger : reached <= effectiveTrigger)) {
-            nowTriggered = true;
-            crossedAt = reached;
+            /* The level was crossed since the idea was written — but only count
+               it if price is still NEAR that level. A cross that has been given
+               back is a failed breakout, not a confirmation, and buying the
+               fade means taking the wrong end of the range.
+               Settled by ROG: trigger $162.46, ran to $165.94, bought at
+               $161.53 on the way back down (0.57% below), then kept falling to
+               $156.51 against a $138.70 day low. The "cheaper retest entry"
+               reading was wrong. DXST failed the same way earlier. Two real
+               losses from this mechanism, no wins.
+               The band is small on purpose: it still admits a genuine
+               consolidation just under the level, which is the case worth
+               keeping, while refusing a slide. */
+            const slipPct = above
+              ? ((effectiveTrigger - live) / effectiveTrigger) * 100
+              : ((live - effectiveTrigger) / effectiveTrigger) * 100;
+            if (slipPct > MAX_TRIGGER_SLIP_PCT) {
+              results.push({ ...tag, placed: false, reason: `Crossed $${effectiveTrigger} intraday (${above ? "high" : "low"} $${reached}) but price has slipped ${slipPct.toFixed(2)}% back to $${live} — past the ${MAX_TRIGGER_SLIP_PCT}% band, so the break failed rather than held.` });
+              skipThisIdea = true;
+            } else {
+              nowTriggered = true;
+              crossedAt = reached;
+            }
           }
         }
+        if (skipThisIdea) continue;
         if (!nowTriggered) { results.push({ ...tag, placed: false, reason: `Not triggered — live $${live} vs needs to go ${idea.triggerDirection} $${effectiveTrigger}${effectiveTrigger !== idea.triggerPrice ? ` (easiest of recent refreshes; latest asked for $${idea.triggerPrice})` : ""}.` }); continue; }
         if (crossedAt != null) tag.triggeredIntraday = `crossed $${effectiveTrigger} intraday (${idea.triggerDirection === "above" ? "high" : "low"} $${crossedAt} since the idea was written) though it is $${live} now`;
         // Trade off the live price, not the stale one from generation time —
