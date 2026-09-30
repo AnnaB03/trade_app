@@ -401,6 +401,22 @@ export async function GET(req) {
         };
       }
 
+      /* "Hold for green" means the PROFIT rules may not book a loss on a
+         flagged position. Learned the hard way: the 13-lot NVDA $230c was
+         flagged to exit at its $8.15 breakeven, rallied from $6.05, armed the
+         trail on dollars, then gave back 30% of that peak and the trail fired
+         at $7.75 — forty cents under breakeven. It cut the loss (-$2,730 to
+         -$520) but it exited RED on a position explicitly told to wait for
+         green, because the trail measures from the PEAK while breakeven
+         measures from the ENTRY, and on a rally that stalls just short the
+         trail always gets there first.
+         Deliberately narrow: this suppresses only the discretionary
+         profit-taking rules (trail and target). Invalidation, a reversed
+         thesis, a broker stop that already filled, expiration and orphan
+         reconciliation are risk and reality rather than profit decisions, and
+         still fire — holding for green must not become holding to zero. */
+      const holdForGreen = !!pos.exitAtBreakeven && entryPremium > 0 && markNow > 0 && markNow < entryPremium;
+
       // 1b. Outright ceiling — big enough that it goes in the book now.
       if (gainPct != null && gainPct >= hardBar) {
         exit = {
@@ -422,7 +438,7 @@ export async function GET(req) {
          it — the +127% NVDA winner would have been untouched. */
       const armedByPct = peakGainPct != null && peakGainPct >= armBar;
       const armedByUsd = peakGainUsd != null && peakGainUsd >= TRAIL_ARM_USD;
-      if (!exit && (armedByPct || armedByUsd) && gainPct != null) {
+      if (!exit && !holdForGreen && (armedByPct || armedByUsd) && gainPct != null) {
         const keepAtLeast = peakGainPct * (1 - TRAIL_GIVEBACK_PCT / 100);
         if (gainPct <= keepAtLeast) {
           exit = {
@@ -433,7 +449,7 @@ export async function GET(req) {
       }
 
       // 2. Target hit — anywhere in today's range, not just the current tick.
-      if (!exit && pos.target != null && favorableExtreme != null) {
+      if (!exit && !holdForGreen && pos.target != null && favorableExtreme != null) {
         const hit = dir > 0 ? favorableExtreme >= pos.target : favorableExtreme <= pos.target;
         if (hit) exit = { tag: "target", detail: `Hit its $${pos.target} target intraday (day's ${dir > 0 ? "high" : "low"} $${favorableExtreme}, now $${underlyingPx})` };
       }
@@ -458,7 +474,12 @@ export async function GET(req) {
         }
       }
 
-      if (!exit) { results.push({ symbol: pos.symbol, closed: false }); continue; }
+      if (!exit) {
+        results.push(holdForGreen
+          ? { symbol: pos.symbol, closed: false, reason: `Holding for green — bid $${markNow} is under the $${entryPremium} entry, so profit rules are suppressed (risk rules still active)` }
+          : { symbol: pos.symbol, closed: false });
+        continue;
+      }
 
       // Decided to exit — but if the broker has this quantity reserved behind
       // a resting stop, no sell can be placed at all. Say so once instead of
