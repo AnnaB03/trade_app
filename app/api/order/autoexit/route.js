@@ -388,6 +388,19 @@ export async function GET(req) {
       const peakGainUsd = peakMark > 0 && entryPremium > 0 ? (peakMark - entryPremium) * qty * mult : null;
       const hardBar = HARD_TAKE_PROFIT_PCT[pos.vehicle] ?? HARD_TAKE_PROFIT_PCT.OPTION;
 
+      /* 1a. Explicit breakeven exit, set per position (exitAtBreakeven) when
+         the plan becomes "get out of this without a loss" rather than "wait
+         for the thesis". Checked before every profit rule, because the point
+         is to leave at the first opportunity, not to hold for more. Uses the
+         BID for options, so breakeven here means genuinely recovering the
+         entry rather than merely marking there. */
+      if (!exit && pos.exitAtBreakeven && markNow > 0 && entryPremium > 0 && markNow >= entryPremium) {
+        exit = {
+          tag: "breakeven",
+          detail: `Back to breakeven ($${entryPremium} entry, $${markNow} now) and flagged to exit flat — taking it rather than holding for more`,
+        };
+      }
+
       // 1b. Outright ceiling — big enough that it goes in the book now.
       if (gainPct != null && gainPct >= hardBar) {
         exit = {
