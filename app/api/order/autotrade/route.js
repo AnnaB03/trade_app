@@ -82,6 +82,14 @@ const MIN_REWARD_RISK = 1.5;
 // it crossed intraday and still count as confirmation. See the cross-check
 // below for the ROG and DXST cases that set this.
 const MAX_TRIGGER_SLIP_PCT = 0.5;
+/* Ceiling on total cost basis committed to ONE underlying, as a fraction of
+   the account. The per-position cap (10% options / 25% shares) has no notion
+   of a symbol, so nothing stopped three INTC strikes reaching 28.8% together.
+   The widened duplicate rule above prevents the common form of that, but this
+   still catches what dedup cannot: different expirations, or a call and a put
+   on the same name. */
+const MAX_SYMBOL_EXPOSURE_PCT = 15;
+const ACCOUNT_SIZE = Number(process.env.ACCOUNT_SIZE) > 0 ? Number(process.env.ACCOUNT_SIZE) : 1000;
 const DIRECTION_SIGN = { CALL: 1, BUY: 1, PUT: -1, SELL: -1 };
 const REENTRY_COOLDOWN_MIN = 45; // no re-entry on a just-exited symbol without a newer idea
 const MAX_BATCH_AGE_MIN = 20; // non-conditional ideas: reject a batch older than this
@@ -149,7 +157,23 @@ function easiestTrigger(all, idea, now) {
 // ideas on the same symbol can't be told apart, so they're treated as the
 // same plan rather than stacked indefinitely.
 function isDuplicatePosition(idea, openEntry) {
-  if (idea.vehicle === "OPTION") return openEntry.vehicle === "OPTION" && openEntry.occ === idea.leg?.occ;
+  /* Options: same underlying + same expiration + same direction is the SAME
+     BET, whatever the strike. Matching on OCC alone treated one dollar of
+     strike difference as a genuinely different plan, and as a stock drifts up
+     each hourly refresh proposes the new at-the-money strike — so INTC was
+     bought three times in three hours ($118c, $119c, $120c, all 10/23) for
+     $28,495, 28.8% of the account, on one thesis. Three calls on one name at
+     one expiry are not diversification under any definition, and this app
+     cannot place spreads, so there is no legitimate multi-strike structure
+     this blocks. It does forgo pyramiding into a winner — a real strategy, but
+     not one that was ever chosen here. */
+  if (idea.vehicle === "OPTION") {
+    if (openEntry.vehicle !== "OPTION") return false;
+    const wantType = idea.action === "CALL" ? "call" : idea.action === "PUT" ? "put" : null;
+    const sameExpiry = openEntry.expiration && idea.expiration && openEntry.expiration === idea.expiration;
+    if (wantType && sameExpiry && openEntry.optionType === wantType) return true;
+    return openEntry.occ === idea.leg?.occ;
+  }
   const a = Number(idea.target), b = Number(openEntry.target);
   if (!(a > 0) && !(b > 0)) return true;
   if (!(a > 0) || !(b > 0)) return false;
@@ -539,6 +563,20 @@ export async function GET(req) {
       // can land on a contract this check never sees (see openOccs there).
       const dup = openJournal.find((r) => r.symbol === idea.symbol && isDuplicatePosition(idea, r));
       if (dup) { results.push({ ...tag, placed: false, reason: `Exact repeat of an already-open ${idea.symbol} position (from ${dup.createdAt}, ${dup.occ ? `contract ${dup.occ}` : `target ${dup.target ?? "none"}`}) — not stacking an identical plan.` }); continue; }
+
+      // Per-symbol exposure backstop.
+      {
+        const costOf = (r) => (Number(r.entryFillPrice ?? r.entryLimitPrice) || 0) * (Number(r.entryQuantity) || 0) * (r.vehicle === "OPTION" ? 100 : 1);
+        const held = openJournal.filter((r) => r.symbol === idea.symbol).reduce((s2, r) => s2 + costOf(r), 0);
+        const adding = idea.vehicle === "OPTION"
+          ? (Number(idea.leg?.mid ?? idea.leg?.ask) || 0) * 100 * Math.max(1, Number(idea.sizing?.contracts) || 1)
+          : (Number(idea.sizing?.dollarCost) || 0);
+        const pctAfter = ((held + adding) / ACCOUNT_SIZE) * 100;
+        if (held > 0 && pctAfter > MAX_SYMBOL_EXPOSURE_PCT) {
+          results.push({ ...tag, placed: false, reason: `${idea.symbol} exposure would reach ${pctAfter.toFixed(1)}% of the account ($${(held + adding).toFixed(0)} against $${held.toFixed(0)} already held) — over the ${MAX_SYMBOL_EXPOSURE_PCT}% per-symbol ceiling.` });
+          continue;
+        }
+      }
 
       let r;
       if (idea.vehicle === "OPTION") r = await placeOption(idea, { dryRun, openOccs });
