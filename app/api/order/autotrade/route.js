@@ -63,7 +63,17 @@ import { buildOptionStopEstimate } from "../../../lib/orders";
    rather than weak — but whatever the cause, the outcomes favour taking
    them. Revisit if conviction-2 regresses as its sample grows. */
 const MIN_CONVICTION = 2;
-const MIN_REWARD_RISK = 1.0; // never risk more than the plan stands to make
+/* Reward:risk floor. Raised from 1.0 on arithmetic rather than backtest: a
+   plan's breakeven win rate is 1/(1+RR), so 1.0:1 needs 50% and 1.09:1 needs
+   48%. Measured directional accuracy across this whole ledger is about 50%, so
+   anything under roughly 1.5:1 is a coin flip with extra steps — no edge by
+   construction, before spread. 1.5:1 needs 40%, which leaves actual room.
+   Chosen this way deliberately because the outcome data (2.5:1+ at +0.75R vs
+   1.5-2.5:1 at -0.27R) was all recorded under the old exit logic and cannot be
+   trusted to pick a threshold. Costs almost no supply: of the recent
+   actionable set only INTC at 1.09:1 fails — NOK 2.02, FEIM 1.99, MRVL 2.07
+   and ROG 2.52 all clear it. */
+const MIN_REWARD_RISK = 1.5;
 const DIRECTION_SIGN = { CALL: 1, BUY: 1, PUT: -1, SELL: -1 };
 const REENTRY_COOLDOWN_MIN = 45; // no re-entry on a just-exited symbol without a newer idea
 const MAX_BATCH_AGE_MIN = 20; // non-conditional ideas: reject a batch older than this
