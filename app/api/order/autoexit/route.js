@@ -80,6 +80,12 @@ const HARD_TAKE_PROFIT_PCT = { OPTION: 150, SHARES: 60 };
    10%-of-account sizing produces. Dollar-denominated on purpose, since "a
    good daily profit" is a dollar question, not a ratio one. */
 const EOD_TAKE_PROFIT_USD = 300;
+/* ...but the caller can lower it. The 15:xx jobs pass eodMin=200, because the
+   single 15:56 look at $300 was demonstrably too coarse: FEIM, a $24,325 share
+   position, touched +$667 intraday and sat at +$180 late in the day, and every
+   percentage rule read a 2.74% move on a quarter of the account as noise. A
+   lower bar in the last hour banks the kind of gain that is real in dollars
+   while still being invisible as a ratio. */
 
 async function underlyingQuote(symbol) {
   try {
@@ -246,6 +252,7 @@ export async function GET(req) {
   const params = new URL(req.url).searchParams;
   const dryRun = params.get("dryRun") === "true";
   const eod = params.get("eod") === "true";
+  const eodMin = Number(params.get("eodMin")) > 0 ? Number(params.get("eodMin")) : EOD_TAKE_PROFIT_USD;
   try {
     const open = listJournal().filter((r) => r.status === "open");
     if (!open.length) return NextResponse.json({ checked: 0, closed: 0, results: [] });
@@ -447,10 +454,10 @@ export async function GET(req) {
       // carry it overnight. Deliberately ahead of the trail and the target,
       // because at 15:56 the question is no longer "is there more in this?"
       const gainUsd = markNow > 0 && entryPremium > 0 ? (markNow - entryPremium) * qty * mult : null;
-      if (!exit && eod && gainUsd != null && gainUsd >= EOD_TAKE_PROFIT_USD) {
+      if (!exit && eod && gainUsd != null && gainUsd >= eodMin) {
         exit = {
           tag: "eod_take_profit",
-          detail: `Up $${gainUsd.toFixed(0)} into the close (${gainPct != null ? gainPct.toFixed(1) + "%" : "?"}) — banking it rather than carrying overnight gap risk`,
+          detail: `Up $${gainUsd.toFixed(0)} into the close (${gainPct != null ? gainPct.toFixed(1) + "%" : "?"}) — past the $${eodMin} late-session bar, banking it rather than carrying overnight gap risk`,
         };
       }
 
