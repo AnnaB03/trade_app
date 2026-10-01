@@ -3,6 +3,36 @@ import { validateLegs, gateA, gateB, gateC, gateE, buildOrderForm, buildBracketO
 import { analyze } from "../../lib/metrics";
 import { tradier, asArray as asArr } from "../tradier";
 
+/* What actually happened to a submitted order, read back from the broker.
+   An ACCEPTED order is not a FILLED order, and P&L must only ever be written
+   from a confirmed fill. Two separate bugs came from conflating them: the
+   phantom GLND "+$186.50" booked against a sell that was in fact rejected, and
+   two INTC closes booked at their submitted limits ($9.35 / $8.85) when the
+   broker actually filled $9.60 / $9.15 — under-reporting by $580 on one pair of
+   trades. Shared so every order path uses the same confirmation rather than
+   each route inventing its own.
+   Returns null when the order cannot be read, which callers must treat as
+   "not yet known" and never as a fill. */
+const ORDER_DEAD = ["expired", "canceled", "rejected", "error"];
+export async function confirmOrderFill(orderId) {
+  if (!orderId) return null;
+  try {
+    const d = await tradeFetch(`/accounts/${await accountId()}/orders/${orderId}`);
+    const o = d?.order;
+    if (!o) return null;
+    const legs = asArray(o.leg);
+    const filledLeg = legs.find((l) => Number(l.exec_quantity) > 0 && Number(l.avg_fill_price) > 0);
+    const qty = Number(o.exec_quantity) || Number(filledLeg?.exec_quantity) || 0;
+    const px = Number(o.avg_fill_price) || Number(filledLeg?.avg_fill_price) || 0;
+    if (qty > 0 && px > 0) return { filled: true, price: px, quantity: qty };
+    const status = String(o.status || legs[0]?.status || "").toLowerCase();
+    if (ORDER_DEAD.includes(status)) return { filled: false, dead: true, status };
+    return { filled: false, dead: false, status: status || "working" };
+  } catch {
+    return null;
+  }
+}
+
 // Live NBBO for each leg's OCC symbol, for the liquidity gate. [] on failure —
 // gateE then reports itself unavailable instead of blocking the order.
 async function fetchLegQuotes(legs) {

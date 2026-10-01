@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { vetOrder, vetEquityOrder, submitOrder } from "../common";
+import { vetOrder, vetEquityOrder, submitOrder, confirmOrderFill } from "../common";
 import { tradier, asArray } from "../../tradier";
 import { tradeFetch, accountId } from "../../tradeClient";
 import { listJournal, listIdeas, updateJournalEntry } from "../../store";
@@ -171,64 +171,6 @@ async function checkBrokerStopFill(pos) {
   }
 }
 
-// What actually happened to a submitted order. An accepted order is NOT a
-// filled order: GLND was recorded closed at "target" with +$186.50 booked
-// while the broker still held all 100 shares and no sell order existed at
-// all. P&L must never be written from a submit response — only from a fill
-// the broker confirms. Returns null when the order can't be read, which is
-// treated as "not yet known", never as a fill.
-const ORDER_DEAD = ["expired", "canceled", "rejected", "error"];
-async function exitOrderOutcome(orderId) {
-  if (!orderId) return null;
-  try {
-    const d = await tradeFetch(`/accounts/${await accountId()}/orders/${orderId}`);
-    const o = d?.order;
-    if (!o) return null;
-    const legs = asArray(o.leg);
-    // A plain close is single-leg; read the top level, falling back to the
-    // one leg that actually reports a fill.
-    const filledLeg = legs.find((l) => Number(l.exec_quantity) > 0 && Number(l.avg_fill_price) > 0);
-    const qty = Number(o.exec_quantity) || Number(filledLeg?.exec_quantity) || 0;
-    const px = Number(o.avg_fill_price) || Number(filledLeg?.avg_fill_price) || 0;
-    if (qty > 0 && px > 0) return { filled: true, price: px, quantity: qty };
-    const status = String(o.status || legs[0]?.status || "").toLowerCase();
-    if (ORDER_DEAD.includes(status)) return { filled: false, dead: true, status };
-    return { filled: false, dead: false, status: status || "working" };
-  } catch {
-    return null;
-  }
-}
-
-/* How much of each symbol is already committed to a resting sell-stop.
-   In the Tradier sandbox that quantity cannot be sold by any new order, and
-   the stop can be neither cancelled (DELETE returns {status:"ok"} and the
-   leg stays put, whether addressed by parent order id or by its own leg id)
-   nor modified ("Backoffice rejected override of the order."). Submitting a
-   close anyway just produces a rejected order every run, so the reservation
-   is checked BEFORE attempting rather than discovered afterwards.
-   Status matters: a resting stop leg reads "open" as often as "held", and
-   only matching "held" missed most of the book. */
-const RESTING_STOP = new Set(["held", "open", "pending", "partially_filled"]);
-async function reservedQuantities() {
-  const map = new Map();
-  try {
-    const d = await tradeFetch(`/accounts/${await accountId()}/orders`);
-    for (const o of asArray(d?.orders?.order)) {
-      const legs = asArray(o.leg);
-      for (const l of (legs.length ? legs : [o])) {
-        if (String(l.type) !== "stop" || !/sell/.test(String(l.side ?? ""))) continue;
-        if (!RESTING_STOP.has(String(l.status))) continue;
-        const key = l.option_symbol || l.symbol;
-        if (!key) continue;
-        map.set(key, (map.get(key) || 0) + (Number(l.quantity) || 0));
-      }
-    }
-  } catch {
-    return null; // unknown — don't block exits on a failed lookup
-  }
-  return map;
-}
-
 async function cancelResting(orderId) {
   if (!orderId) return;
   try { await tradeFetch(`/accounts/${await accountId()}/orders/${orderId}`, { method: "DELETE" }); } catch {}
@@ -290,7 +232,7 @@ export async function GET(req) {
       // is not yet confirmed filled. Never re-submit (that stacks duplicate
       // sells) and never book P&L until the broker confirms a price.
       if (pos.pendingExitOrderId) {
-        const outcome = await exitOrderOutcome(pos.pendingExitOrderId);
+        const outcome = await confirmOrderFill(pos.pendingExitOrderId);
         if (outcome?.filled) {
           if (dryRun) { results.push({ symbol: pos.symbol, wouldClose: true, tag: pos.pendingExitTag || "closed", detail: `Pending close filled at $${outcome.price}` }); continue; }
           try {
@@ -605,7 +547,7 @@ export async function GET(req) {
       // were a fill is what produced $186.50 of GLND profit that never
       // existed while the shares were still sitting in the account.
       const exitOrderId = closeResult.orderResult?.id ?? null;
-      const outcome = await exitOrderOutcome(exitOrderId);
+      const outcome = await confirmOrderFill(exitOrderId);
 
       if (outcome?.filled) {
         try {

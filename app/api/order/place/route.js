@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { vetOrder, vetEquityOrder, submitOrder } from "../common";
+import { vetOrder, vetEquityOrder, submitOrder, confirmOrderFill } from "../common";
 import { tradier, asArray } from "../../tradier";
 import { parseOcc } from "../../../lib/orders";
 import { journalOpen, journalClose } from "../../journalLib";
@@ -52,11 +52,15 @@ export async function POST(req) {
         } else {
           const entry = findOpenJournalEntry((r) => r.vehicle === "SHARES" && r.symbol === vet.underlying);
           if (entry) {
+            // Book the broker's confirmed fill, never the limit we submitted.
+            const got = await confirmOrderFill(orderResult?.id ?? null);
+            const exitPx = got?.filled ? got.price : null;
             journalClose(entry, {
-              exitOrderId: orderResult?.id ?? null, exitOrderStatus: orderResult?.status ?? null,
-              exitQuantity: vet.computed.quantity, exitFillPrice: vet.computed.price,
-              exitReason: body.outcome_note, exitReasonTag: body.outcome_tag ?? null,
-              underlyingPriceAtClose: vet.computed.price, // the equity IS the underlying
+              exitOrderId: orderResult?.id ?? null, exitOrderStatus: got?.filled ? "filled" : (orderResult?.status ?? null),
+              exitQuantity: got?.quantity || vet.computed.quantity, exitFillPrice: exitPx,
+              exitReason: exitPx != null ? body.outcome_note : `${body.outcome_note} [submitted at $${vet.computed.price} but no fill confirmed yet — P&L left uncomputed rather than booked against the limit]`,
+              exitReasonTag: body.outcome_tag ?? null,
+              underlyingPriceAtClose: exitPx, // the equity IS the underlying
             });
           }
         }
@@ -77,10 +81,14 @@ export async function POST(req) {
           const entry = findOpenJournalEntry((r) => r.occ === leg.occ);
           if (entry) {
             const underlyingPrice = await underlyingQuote(underlying);
+            // Book the broker's confirmed fill, never the limit we submitted.
+            const got = await confirmOrderFill(orderResult?.id ?? null);
+            const exitPx = got?.filled ? got.price : null;
             journalClose(entry, {
-              exitOrderId: orderResult?.id ?? null, exitOrderStatus: orderResult?.status ?? null,
-              exitQuantity: Number(leg.qty) || entry.entryQuantity, exitFillPrice: Number(vet.computed.price),
-              exitReason: body.outcome_note, exitReasonTag: body.outcome_tag ?? null,
+              exitOrderId: orderResult?.id ?? null, exitOrderStatus: got?.filled ? "filled" : (orderResult?.status ?? null),
+              exitQuantity: got?.quantity || Number(leg.qty) || entry.entryQuantity, exitFillPrice: exitPx,
+              exitReason: exitPx != null ? body.outcome_note : `${body.outcome_note} [submitted at $${vet.computed.price} but no fill confirmed yet — P&L left uncomputed rather than booked against the limit]`,
+              exitReasonTag: body.outcome_tag ?? null,
               underlyingPriceAtClose: underlyingPrice,
             });
           }
