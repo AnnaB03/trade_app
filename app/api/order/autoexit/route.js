@@ -171,6 +171,36 @@ async function checkBrokerStopFill(pos) {
   }
 }
 
+/* How much of each symbol is already committed to a resting sell-stop.
+   In the Tradier sandbox that quantity cannot be sold by any new order, and
+   the stop can be neither cancelled (DELETE returns {status:"ok"} and the
+   leg stays put, whether addressed by parent order id or by its own leg id)
+   nor modified ("Backoffice rejected override of the order."). Submitting a
+   close anyway just produces a rejected order every run, so the reservation
+   is checked BEFORE attempting rather than discovered afterwards.
+   Status matters: a resting stop leg reads "open" as often as "held", and
+   only matching "held" missed most of the book. */
+const RESTING_STOP = new Set(["held", "open", "pending", "partially_filled"]);
+async function reservedQuantities() {
+  const map = new Map();
+  try {
+    const d = await tradeFetch(`/accounts/${await accountId()}/orders`);
+    for (const o of asArray(d?.orders?.order)) {
+      const legs = asArray(o.leg);
+      for (const l of (legs.length ? legs : [o])) {
+        if (String(l.type) !== "stop" || !/sell/.test(String(l.side ?? ""))) continue;
+        if (!RESTING_STOP.has(String(l.status))) continue;
+        const key = l.option_symbol || l.symbol;
+        if (!key) continue;
+        map.set(key, (map.get(key) || 0) + (Number(l.quantity) || 0));
+      }
+    }
+  } catch {
+    return null; // unknown — don't block exits on a failed lookup
+  }
+  return map;
+}
+
 async function cancelResting(orderId) {
   if (!orderId) return;
   try { await tradeFetch(`/accounts/${await accountId()}/orders/${orderId}`, { method: "DELETE" }); } catch {}
