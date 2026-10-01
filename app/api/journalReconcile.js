@@ -18,6 +18,32 @@ const MIN_INTERVAL_MS = 60 * 1000;
 let lastRun = 0;
 const DEAD = ["expired", "canceled", "rejected", "error"];
 
+/* Did a price actually TRADE on the fill date? This is the honest test for a
+   suspicious fill, and it replaces comparing the fill to our own limit.
+   The sandbox order engine prices off ~15-minute-delayed data while the app
+   reads real-time quotes, so a fill landing several percent away from the
+   limit is usually just those fifteen minutes of movement, not a fabricated
+   price. Measured: MRVL fell $2.50 in the quarter hour before a fill, which
+   entirely explains a gap I had been calling an artifact. Flagging on
+   limit-divergence alone wrongly branded the TSLA (-5.9%) and INTC (-6.5%)
+   fills as simulation, and both were inside their day's range. A fill OUTSIDE
+   the day's high/low is different: that price never existed at any point, which
+   is what DXST filling at $1.95 against a $1.9944 low actually was. */
+async function tradedThatDay(symbol, isoDate) {
+  try {
+    const day = String(isoDate || "").slice(0, 10);
+    if (!day) return null;
+    const d = await tradier(`/markets/history?symbol=${encodeURIComponent(symbol)}&start=${day}&end=${day}&interval=daily`, { timeoutMs: 6000 });
+    let bar = d?.history?.day;
+    bar = Array.isArray(bar) ? bar[0] : bar;
+    const low = Number(bar?.low), high = Number(bar?.high);
+    if (!(low > 0) || !(high > 0)) return null;
+    return { low, high };
+  } catch {
+    return null;
+  }
+}
+
 async function underlyingLast(symbol) {
   try {
     const d = await tradier(`/markets/quotes?symbols=${encodeURIComponent(symbol)}`);
@@ -59,16 +85,7 @@ export async function reconcileJournal({ force = false } = {}) {
       let row = j;
       const fillPx = Number(entryLeg.avg_fill_price);
       if (filledQty > 0 && fillPx > 0 && j.entryFillPrice == null) {
-        // Flag a fill that lands materially away from the price we asked for.
-        // A real broker cannot fill a BUY limit below the market — you get the
-        // ask, never a bargain — so a large favourable gap means the fill is
-        // not reproducible. Seen live: a $4.83 DXST buy limit submitted with
-        // the stock near $4.11 was filled by the sandbox at $1.95, the day's
-        // open hours earlier, manufacturing a ~137% "gain" that no live
-        // account could have had. Left unflagged, that inflates the track
-        // record the next real-money decision would be based on. The same
-        // check catches the opposite case that DOES happen for real: paying
-        // far more than intended on a fast or illiquid name.
+        // Judged by tradedThatDay above, not by divergence from our own limit.
         const limitPx = Number(j.entryLimitPrice);
         const patch = {
           entryFillPrice: fillPx, entryFilledQuantity: filledQty, entryOrderStatus: entryLeg.status,
@@ -77,13 +94,18 @@ export async function reconcileJournal({ force = false } = {}) {
         if (limitPx > 0) {
           const gapPct = ((fillPx - limitPx) / limitPx) * 100;
           if (Math.abs(gapPct) >= 5) {
-            const buying = /buy/i.test(String(entryLeg.side ?? j.side ?? "buy"));
-            const favourable = buying ? fillPx < limitPx : fillPx > limitPx;
             patch.fillGapPct = Number(gapPct.toFixed(1));
-            patch.fillSuspect = favourable;
-            patch.fillNote = favourable
-              ? `Filled at $${fillPx} against a $${limitPx} limit (${gapPct.toFixed(1)}%) — better than asked, which a live broker does not do. Treat any P&L on this row as simulation artifact, not edge.`
-              : `Filled at $${fillPx} against a $${limitPx} limit (${gapPct.toFixed(1)}%) — real slippage against us.`;
+            const occOrSym = j.occ || j.symbol;
+            const range = await tradedThatDay(occOrSym, patch.entryFilledAt);
+            if (range && (fillPx < range.low || fillPx > range.high)) {
+              patch.fillSuspect = true;
+              patch.fillNote = `Filled at $${fillPx}, OUTSIDE the ${patch.entryFilledAt.slice(0, 10)} range of $${range.low}-$${range.high} — that price never traded, so any P&L on this row is simulation artifact rather than edge.`;
+            } else if (range) {
+              patch.fillSuspect = false;
+              patch.fillNote = `Filled at $${fillPx} against a $${limitPx} limit (${gapPct.toFixed(1)}%), but inside the day's $${range.low}-$${range.high} range — the gap is the sandbox's ~15-minute data delay, not a fabricated price. Treat this P&L as real.`;
+            } else {
+              patch.fillNote = `Filled at $${fillPx} against a $${limitPx} limit (${gapPct.toFixed(1)}%); could not fetch that day's range to judge whether the price was real.`;
+            }
           }
         }
         row = updateJournalEntry(j.id, patch) || j;
