@@ -69,6 +69,18 @@ const TRAIL_GIVEBACK_PCT = 30;
 // banked outright rather than risking a gap on the way back down.
 const HARD_TAKE_PROFIT_PCT = { OPTION: 150, SHARES: 60 };
 
+/* End-of-day profit taking, applied only when autoexit is called with
+   ?eod=true (the 15:56 pre-close sweep). A gain that survives to the close is
+   not a gain until it is realised: INTC closed +$670 across two call lots and
+   reopened the next session at -$1,690, a $2,360 swing for the privilege of
+   carrying it. MRVL did +$587 to +$25 and ROG +$587 to -$657 the same week —
+   three round trips, no overnight carry that paid. The trail cannot catch
+   these because it arms at +40% and none of them got near that in percentage
+   terms; the gains were large in dollars and small in percent, which is what
+   10%-of-account sizing produces. Dollar-denominated on purpose, since "a
+   good daily profit" is a dollar question, not a ratio one. */
+const EOD_TAKE_PROFIT_USD = 300;
+
 async function underlyingQuote(symbol) {
   try {
     const d = await tradier(`/markets/quotes?symbols=${encodeURIComponent(symbol)}`);
@@ -259,7 +271,9 @@ async function closeShares(pos, exitPrice, { duration = "day" } = {}) {
 }
 
 export async function GET(req) {
-  const dryRun = new URL(req.url).searchParams.get("dryRun") === "true";
+  const params = new URL(req.url).searchParams;
+  const dryRun = params.get("dryRun") === "true";
+  const eod = params.get("eod") === "true";
   try {
     const open = listJournal().filter((r) => r.status === "open");
     if (!open.length) return NextResponse.json({ checked: 0, closed: 0, results: [] });
@@ -455,6 +469,17 @@ export async function GET(req) {
           results.push({ symbol: pos.symbol, closed: false, error: `Could not rest a breakeven sell at $${entryPremium}: ${rest.error}` });
         }
         continue;
+      }
+
+      // 1a-eod. Last look of the day: bank a real dollar gain rather than
+      // carry it overnight. Deliberately ahead of the trail and the target,
+      // because at 15:56 the question is no longer "is there more in this?"
+      const gainUsd = markNow > 0 && entryPremium > 0 ? (markNow - entryPremium) * qty * mult : null;
+      if (!exit && eod && gainUsd != null && gainUsd >= EOD_TAKE_PROFIT_USD) {
+        exit = {
+          tag: "eod_take_profit",
+          detail: `Up $${gainUsd.toFixed(0)} into the close (${gainPct != null ? gainPct.toFixed(1) + "%" : "?"}) — banking it rather than carrying overnight gap risk`,
+        };
       }
 
       // 1b. Outright ceiling — big enough that it goes in the book now.
