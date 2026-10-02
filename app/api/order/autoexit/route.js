@@ -399,7 +399,28 @@ export async function GET(req) {
       // Options: price the contract itself up front, both to judge the
       // premium gain below and to reuse as the closing price further down.
       const oq = pos.vehicle === "OPTION" ? await optionQuote(pos.occ) : null;
-      const livePremium = oq ? (oq.bid > 0 ? oq.bid : oq.mid) : null;
+      /* Value the contract at the MID, not the bid, for every exit DECISION.
+         The bid systematically understates what a sale here realises, because
+         the sandbox order engine prices off ~15-minute-delayed data and fills
+         above the real-time bid. Measured on the AVGO 10/23 $355c: bid 12.30,
+         ask 12.65, mid 12.475, actual fill 12.45 — the mid predicted the fill
+         to 2.5 cents while the bid was off by 15 cents, which is $120 on 8
+         contracts. Every option sold today filled at or above a limit set at
+         the bid. At the bid that position read +$160 and would NOT have
+         cleared the $200 end-of-day bar; it sold for +$280.
+         The sell is still SUBMITTED at the bid (exitPrice = livePremiumBid
+         below), so the fill stays assured — only the measurement moves.
+         Tension worth naming: the peak seeding just below deliberately
+         subtracts the spread from the day's high, decided after an MRVL
+         "+$515" turned out to be ~+$240 once bid-adjusted. That was about not
+         inventing a peak from a stale last-trade print, which still holds —
+         so both now use the same mid convention (half the spread) and are
+         measured consistently, rather than a bid-adjusted peak being compared
+         against a mid-based current, which would flatter every giveback. */
+      const livePremiumBid = oq ? (oq.bid > 0 ? oq.bid : oq.mid) : null;
+      const livePremium = oq
+        ? (oq.bid > 0 && oq.ask > 0 ? (oq.bid + oq.ask) / 2 : (oq.bid > 0 ? oq.bid : oq.mid))
+        : null;
       const entryPremium = Number(pos.entryFillPrice ?? pos.entryLimitPrice) || null;
       // Gain on what was actually paid, measured on the contract premium for
       // options and on the share price for shares.
@@ -426,7 +447,8 @@ export async function GET(req) {
          no adjustment; their spreads are pennies. */
       const rawHigh = pos.vehicle === "OPTION" ? Number(oq?.high) : Number(range?.high);
       const spread = pos.vehicle === "OPTION" && oq?.ask > 0 && oq?.bid >= 0 ? oq.ask - oq.bid : 0;
-      const todayHigh = rawHigh > 0 ? Math.max(0, rawHigh - spread) : null;
+      // Half the spread, matching the mid the current mark now uses.
+      const todayHigh = rawHigh > 0 ? Math.max(0, rawHigh - spread / 2) : null;
       let peakMark = Math.max(Number(pos.peakMark) || 0, Number(todayHigh) || 0);
       if (markNow > 0 && markNow > peakMark) peakMark = markNow;
       if (!dryRun && peakMark > (Number(pos.peakMark) || 0)) {
@@ -446,8 +468,10 @@ export async function GET(req) {
          the plan becomes "get out of this without a loss" rather than "wait
          for the thesis". Checked before every profit rule, because the point
          is to leave at the first opportunity, not to hold for more. Uses the
-         BID for options, so breakeven here means genuinely recovering the
-         entry rather than merely marking there. */
+         MID for options (see the mark above) rather than the last trade, so
+         breakeven means a price a sale would actually realise and not merely
+         a stale print — while staying honest that the bid alone understates
+         what this sandbox fills at. */
       /* Breakeven exits are a RESTING order, not a polled comparison. A level
          cannot be hit by checking every 15 minutes: the NVDA $230c was flagged
          to leave at $8.15, and by the time a check observed it the bid was
@@ -465,7 +489,7 @@ export async function GET(req) {
       if (!exit && pos.exitAtBreakeven && markNow > 0 && entryPremium > 0 && markNow >= entryPremium) {
         exit = {
           tag: "breakeven",
-          detail: `Bid $${markNow} is at or above the $${entryPremium} entry — closing flat-or-better now rather than resting an order`,
+          detail: `Mark $${markNow} (mid) is at or above the $${entryPremium} entry — closing flat-or-better now rather than resting an order`,
         };
       }
 
@@ -599,7 +623,9 @@ export async function GET(req) {
 
       let exitPrice, closeResult;
       if (pos.vehicle === "OPTION") {
-        exitPrice = livePremium; // already priced above for the gain check
+        // Decide on the mid, SELL at the bid: a limit at the bid is the one
+        // that actually fills, and the sandbox has filled above it every time.
+        exitPrice = livePremiumBid ?? livePremium;
         if (!(exitPrice > 0)) { results.push({ symbol: pos.symbol, closed: false, reason: "no live quote to close against" }); continue; }
         closeResult = await closeOption(pos, exitPrice);
       } else {
