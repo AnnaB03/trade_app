@@ -166,8 +166,33 @@ async function expirationSettlement(pos) {
   }
 }
 
-function latestIdeaForSymbol(ideas, symbol, excludeIdeaId) {
-  const rows = ideas.filter((i) => i.symbol === symbol && i.id !== excludeIdeaId && ["CALL", "PUT", "BUY", "SELL"].includes(i.action));
+/* How old a read may be and still count as a REVERSAL of a live thesis.
+   This used to be unbounded, and that was a real bug: the filter drops WAIT
+   ideas and the position's own idea, then took the newest of whatever was
+   left — which on a symbol with no other recent directional read is whatever
+   is oldest in the ledger. The SPY 10/23 $772c was bought at 14:05 on a 13:46
+   CALL; the 14:14 refresh returned WAIT (filtered out), so the "latest read"
+   became a PUT from 2026-09-15 and the position was closed as "thesis
+   reversed" on a SEVENTEEN-DAY-OLD read, 15 minutes after being opened.
+   It fires precisely on fresh autotrade entries — the position's own idea has
+   to be the newest directional one for the symbol — and 7 symbols were primed
+   for it, NVDA, SPY, TSLA, QQQ, AAL, AMD and VEEA, each with an old opposite
+   idea sitting in the ledger. NVDA is the one that matters most: a 2026-09-15
+   PUT was ready to instantly close any new NVDA call, and NVDA calls are what
+   this book actually makes money on.
+   Two bounds now, and the first is the airtight one: a reversal must POSTDATE
+   the thesis it contradicts. An older read is not a change of mind, it is just
+   an older read. */
+const REVERSAL_MAX_AGE_MIN = 120;
+
+function latestIdeaForSymbol(ideas, symbol, excludeIdeaId, sinceMs) {
+  const floor = Math.max(Date.now() - REVERSAL_MAX_AGE_MIN * 60000, Number(sinceMs) || 0);
+  const rows = ideas.filter((i) =>
+    i.symbol === symbol &&
+    i.id !== excludeIdeaId &&
+    ["CALL", "PUT", "BUY", "SELL"].includes(i.action) &&
+    new Date(i.createdAt).getTime() > floor
+  );
   if (!rows.length) return null;
   return rows.reduce((a, b) => (new Date(a.createdAt) > new Date(b.createdAt) ? a : b));
 }
@@ -529,7 +554,11 @@ export async function GET(req) {
       }
       // 4. Thesis reversed.
       if (!exit) {
-        const latest = latestIdeaForSymbol(allIdeas, pos.symbol, pos.ideaId);
+        // Anchor to when this position's OWN thesis was written, so only a
+        // genuinely later read can overturn it.
+        const ownIdea = pos.ideaId ? allIdeas.find((i) => i.id === pos.ideaId) : null;
+        const sinceMs = new Date(ownIdea?.createdAt || pos.createdAt || 0).getTime();
+        const latest = latestIdeaForSymbol(allIdeas, pos.symbol, pos.ideaId, sinceMs);
         const latestDir = latest ? DIRECTION[latest.action] : undefined;
         if (latest && latestDir && latestDir !== dir) {
           exit = { tag: "reversed", detail: `Latest read flipped to ${latest.action} — ${latest.why_plain || latest.why_pro || "no reason given"}` };
