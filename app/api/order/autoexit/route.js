@@ -277,7 +277,14 @@ export async function GET(req) {
   try {
     const open = listJournal().filter((r) => r.status === "open");
     if (!open.length) return NextResponse.json({ checked: 0, closed: 0, results: [] });
-    const allIdeas = listIdeas();
+    /* AI ideas only, matching the entry path. autotrade already filters
+       `!i.strategy` so "a sweep scan landing last must never become this
+       route's latest idea for a symbol" — the reversal rule needs the same
+       guard, or a sweep-detector signal can close an AI position whose entry
+       path would never have considered that signal in the first place.
+       Latent today: no idea in the ledger carries a strategy tag yet. It stops
+       being latent the first time the sweeps detector logs one. */
+    const allIdeas = listIdeas().filter((i) => !i.strategy);
     const reserved = await reservedQuantities();
     const results = [];
 
