@@ -3,6 +3,7 @@ import { vetOrder, vetEquityOrder, submitOrder } from "../common";
 import { tradier, asArray } from "../../tradier";
 import { isPaperSandbox } from "../../tradeClient";
 import { listIdeas, listJournal } from "../../store";
+import { reservedQuantities } from "../common";
 import { journalOpen } from "../../journalLib";
 import { buildOptionStopEstimate } from "../../../lib/orders";
 
@@ -419,6 +420,18 @@ export async function GET(req) {
     const openJournal = listJournal().filter((r) => r.status === "open");
     const openOccs = new Set(openJournal.filter((r) => r.occ).map((r) => r.occ));
 
+    /* Quantity the broker already has reserved behind a resting sell-stop.
+       Buying into a reservation produces a position that can never be sold:
+       the sandbox rejects any new sell for that instrument, and the resting
+       leg cannot be cancelled or modified. Found two live orphans while
+       auditing — a VKTX stop for 4 shares at $37.20 and an NVDA 10/23 $235c
+       stop at $5.22, both left behind by positions that no longer exist — so
+       an entry into either would have been born un-exitable, and autoexit
+       could only ever have reported FROZEN on it.
+       A failed lookup returns null and is treated as "unknown": entries are
+       allowed through, since one broker hiccup should not halt all trading. */
+    const reserved = await reservedQuantities();
+
     // Conditional ideas (have a triggerPrice) get a fresh quote right now,
     // independent of batch age — see the file header for why. Fetched once
     // per unique symbol, not per idea.
@@ -563,6 +576,16 @@ export async function GET(req) {
       // can land on a contract this check never sees (see openOccs there).
       const dup = openJournal.find((r) => r.symbol === idea.symbol && isDuplicatePosition(idea, r));
       if (dup) { results.push({ ...tag, placed: false, reason: `Exact repeat of an already-open ${idea.symbol} position (from ${dup.createdAt}, ${dup.occ ? `contract ${dup.occ}` : `target ${dup.target ?? "none"}`}) — not stacking an identical plan.` }); continue; }
+
+      // Don't buy an instrument the broker has reserved behind a resting stop.
+      if (reserved) {
+        const key = idea.vehicle === "OPTION" ? idea.leg?.occ : idea.symbol;
+        const resQty = key ? (reserved.get(key) ?? 0) : 0;
+        if (resQty > 0) {
+          results.push({ ...tag, placed: false, reason: `${key} already has ${resQty} reserved behind a resting sell-stop — anything bought here cannot be sold (the sandbox refuses new sells and will not cancel the resting leg), so this would open an un-exitable position.` });
+          continue;
+        }
+      }
 
       // Per-symbol exposure backstop.
       {

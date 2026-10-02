@@ -71,6 +71,36 @@ function journalGateCheck(body, closing) {
 // nothing for a max-loss gate to protect by default. Set MAX_LOSS_PER_TRADE
 // in .env.local if you want the gate active anyway (e.g. rehearsing size
 // discipline before it matters, or ahead of ever pointing this at real money).
+/* Quantity the broker has RESERVED behind a resting sell-stop, keyed by
+   instrument. A reservation makes the quantity unsellable: a new sell is
+   rejected with "more shares than your current long position", the parent or
+   leg cannot be cancelled (DELETE answers ok and the leg keeps resting) and
+   PUT modify is refused by the backoffice. Only the stop firing releases it.
+   Shared out of autoexit so the ENTRY path can see it too — a position opened
+   in an instrument that already carries a reservation is born un-exitable.
+   Returns null when the lookup fails, which callers must read as "unknown"
+   and never as "nothing reserved". */
+export const RESTING_STOP = new Set(["held", "open", "pending", "partially_filled"]);
+export async function reservedQuantities() {
+  const map = new Map();
+  try {
+    const d = await tradeFetch(`/accounts/${await accountId()}/orders`);
+    for (const o of asArray(d?.orders?.order)) {
+      const legs = asArray(o.leg);
+      for (const l of (legs.length ? legs : [o])) {
+        if (String(l.type) !== "stop" || !/sell/.test(String(l.side ?? ""))) continue;
+        if (!RESTING_STOP.has(String(l.status))) continue;
+        const key = l.option_symbol || l.symbol;
+        if (!key) continue;
+        map.set(key, (map.get(key) || 0) + (Number(l.quantity) || 0));
+      }
+    }
+  } catch {
+    return null; // unknown — don't block exits on a failed lookup
+  }
+  return map;
+}
+
 export const MAX_LOSS_CAP = () => {
   const n = Number(process.env.MAX_LOSS_PER_TRADE);
   return Number.isFinite(n) && n > 0 ? n : Infinity;
