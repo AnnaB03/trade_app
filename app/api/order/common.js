@@ -33,6 +33,33 @@ export async function confirmOrderFill(orderId) {
   }
 }
 
+/* The ENTRY leg's real fill, for a row whose entryFillPrice was never stamped.
+   Deliberately NOT confirmOrderFill: that takes the first leg showing any fill,
+   which is right for a single-purpose close but wrong for a bracket OTO, where
+   it could return the STOP leg's price and book it as the entry. leg[0] is the
+   entry leg, the same assumption journalReconcile makes.
+   Needed because journalReconcile is throttled to once a minute and may not
+   have run before a position closes. INTC 10/23 $125c opened and closed inside
+   one session with entryFillPrice still null, so P&L was computed against the
+   $8.48 limit when the broker had filled $8.45 — booking -$693 for a real
+   -$660. Small here, and wrong in whichever direction the fill happened to
+   land. */
+export async function confirmEntryFill(orderId) {
+  if (!orderId) return null;
+  try {
+    const d = await tradeFetch(`/accounts/${await accountId()}/orders/${orderId}`);
+    const o = d?.order;
+    if (!o) return null;
+    const legs = asArray(o.leg);
+    const entryLeg = legs[0] || o;
+    const qty = Number(entryLeg.exec_quantity) || 0;
+    const px = Number(entryLeg.avg_fill_price) || 0;
+    return qty > 0 && px > 0 ? { filled: true, price: px, quantity: qty } : { filled: false };
+  } catch {
+    return null;
+  }
+}
+
 // Live NBBO for each leg's OCC symbol, for the liquidity gate. [] on failure —
 // gateE then reports itself unavailable instead of blocking the order.
 async function fetchLegQuotes(legs) {

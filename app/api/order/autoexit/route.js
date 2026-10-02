@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { vetOrder, vetEquityOrder, submitOrder, confirmOrderFill, reservedQuantities } from "../common";
+import { vetOrder, vetEquityOrder, submitOrder, confirmOrderFill, confirmEntryFill, reservedQuantities } from "../common";
 import { tradier, asArray } from "../../tradier";
 import { tradeFetch, accountId } from "../../tradeClient";
 import { listJournal, listIdeas, updateJournalEntry } from "../../store";
@@ -298,7 +298,24 @@ export async function GET(req) {
     const reserved = await reservedQuantities();
     const results = [];
 
-    for (const pos of open) {
+    for (let pos of open) {
+      /* Establish the real entry price before anything is measured against it.
+         journalReconcile stamps entryFillPrice, but it is throttled to once a
+         minute and a position can open and close before it ever runs — INTC
+         10/23 $125c did exactly that, so every percentage, the trail peak and
+         the final P&L were all measured against the $8.48 limit while the
+         broker had filled $8.45. Fixing it here rather than at each
+         journalClose covers the gain math too, since entryPremium below reads
+         the same field. */
+      if (pos.entryFillPrice == null && pos.entryOrderId) {
+        const got = await confirmEntryFill(pos.entryOrderId);
+        if (got?.filled) {
+          pos = { ...pos, entryFillPrice: got.price, entryFilledQuantity: got.quantity };
+          if (!dryRun) {
+            try { updateJournalEntry(pos.id, { entryFillPrice: got.price, entryFilledQuantity: got.quantity }); } catch {}
+          }
+        }
+      }
       const dir = pos.vehicle === "OPTION"
         ? (pos.optionType === "call" ? 1 : -1)
         : (pos.side === "sell_short" ? -1 : 1);
