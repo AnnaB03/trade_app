@@ -16,7 +16,22 @@
      account. Fractional shares (Robinhood) make even a $40 position real. */
 
 export const RISK_PCT = 0.01;            // per-idea risk, fraction of account
-export const MAX_POSITION_PCT = 0.25;    // one position's total cost, fraction of account
+/* One position's total cost, fraction of account. Lowered 0.25 -> 0.15 to
+   match MAX_SYMBOL_EXPOSURE_PCT in autotrade, which is the gate that actually
+   decides whether an order is placed. While these disagreed, share sizing
+   produced positions the gate was supposed to refuse — and because that gate
+   skipped new positions entirely, 25% quietly won: NOK opened at $24,948,
+   25.2% of the account. Aligning them means a large share idea is sized to
+   fit rather than built oversized and then thrown away by the backstop.
+   Honest about the calibration: the record does NOT establish that 15% beats
+   25% for shares. Closed share positions over 15% are n=4 at -$656 total
+   (1 win) against n=14 at -$233 under it — both negative, neither meaningful.
+   15% is chosen because it is the number with a documented rationale (three
+   INTC strikes reaching 28.8% together), because it is the conservative side
+   of a coin-flip with real money close, and because it is one constant to
+   raise again if the data ever speaks. One row is at least suggestive: NOK at
+   25.2% lost $572 to invalidation, and autotrade opened NOK at 25.2% again. */
+export const MAX_POSITION_PCT = 0.15;
 // Budget for a whole option POSITION (contracts × premium), not one contract.
 // Raised from 5% deliberately: at 5% of a ~$99k account each idea committed
 // ~$4,950 and roughly three positions open per day, so the book ran at well
@@ -130,7 +145,7 @@ export function accountText(account) {
     : `OPTION sizing: position budget ≈ $${L.optionPreferred.toFixed(0)} (5% of account), spread across up to ${MAX_CONTRACTS} contracts, with a per-contract hard cap of $${L.optionHardCap.toFixed(0)} (10%). Judge the setup, not the sticker price of one contract.`;
   return [
     header,
-    `Per-idea risk budget: $${L.riskDollars.toFixed(0)} (1%). Max cost of any one position: $${L.maxPositionDollars.toFixed(0)} (25%).`,
+    `Per-idea risk budget: $${L.riskDollars.toFixed(0)} (1%). Max cost of any one position: $${L.maxPositionDollars.toFixed(0)} (${(MAX_POSITION_PCT * 100).toFixed(0)}%).`,
     optionLine,
   ].join("\n");
 }

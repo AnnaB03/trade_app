@@ -572,8 +572,14 @@ export async function GET(req) {
           ? (Number(idea.leg?.mid ?? idea.leg?.ask) || 0) * 100 * Math.max(1, Number(idea.sizing?.contracts) || 1)
           : (Number(idea.sizing?.dollarCost) || 0);
         const pctAfter = ((held + adding) / ACCOUNT_SIZE) * 100;
-        if (held > 0 && pctAfter > MAX_SYMBOL_EXPOSURE_PCT) {
-          results.push({ ...tag, placed: false, reason: `${idea.symbol} exposure would reach ${pctAfter.toFixed(1)}% of the account ($${(held + adding).toFixed(0)} against $${held.toFixed(0)} already held) — over the ${MAX_SYMBOL_EXPOSURE_PCT}% per-symbol ceiling.` });
+        /* No `held > 0` guard. It used to be there, and it made this gate a
+           no-op for exactly the case it reads as if it covers: a brand-new
+           position of any size. NOK opened at $24,948 — 25.2% of the account —
+           straight past a stated 15% ceiling, because the previous NOK lot was
+           closed so `held` was 0 and the check never ran. A per-symbol ceiling
+           that only applies to the second position is not a ceiling. */
+        if (pctAfter > MAX_SYMBOL_EXPOSURE_PCT) {
+          results.push({ ...tag, placed: false, reason: `${idea.symbol} exposure would reach ${pctAfter.toFixed(1)}% of the account ($${(held + adding).toFixed(0)}${held > 0 ? ` against $${held.toFixed(0)} already held` : " as a new position"}) — over the ${MAX_SYMBOL_EXPOSURE_PCT}% per-symbol ceiling.` });
           continue;
         }
       }
