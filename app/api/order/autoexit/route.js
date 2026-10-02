@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { vetOrder, vetEquityOrder, submitOrder, confirmOrderFill, confirmEntryFill, reservedQuantities } from "../common";
-import { tradier, asArray } from "../../tradier";
+import { tradier, asArray, tradierDelayed } from "../../tradier";
 import { tradeFetch, accountId } from "../../tradeClient";
 import { listJournal, listIdeas, updateJournalEntry } from "../../store";
 import { journalClose } from "../../journalLib";
@@ -134,7 +134,10 @@ async function underlyingDayRange(symbol) {
 
 async function optionQuote(occ) {
   try {
-    const d = await tradier(`/markets/quotes?symbols=${encodeURIComponent(occ)}`);
+    /* SANDBOX feed on purpose — this values a PAPER position, so the right
+       clock is the one the fill engine and the user's screen both use. See
+       tradierDelayed in tradier.js for the measurement that settled it. */
+    const d = await tradierDelayed(`/markets/quotes?symbols=${encodeURIComponent(occ)}`);
     const q = asArray(d?.quotes?.quote)?.[0];
     const bid = Number(q?.bid), ask = Number(q?.ask);
     return {

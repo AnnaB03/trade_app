@@ -34,3 +34,30 @@ export async function tradier(path, { timeoutMs } = {}) {
   return res.json();
 }
 export const asArray = (x) => (x == null ? [] : Array.isArray(x) ? x : [x]);
+/* Same call, but deliberately against the SANDBOX host — delayed data, on
+   purpose. Real-time is the right clock for an ENTRY decision: a trigger has to
+   be judged on where price is now. It is the wrong clock for valuing a PAPER
+   position, for two reasons that both point the same way:
+     1. The sandbox order engine prices fills off its own delayed feed, so the
+        delayed quote is what a sale here would actually realise.
+     2. It is what the user sees on the sandbox UI, so any other source makes
+        our numbers disagree with theirs.
+   Measured 2026-10-02 on SPCX 10/23 $157.50c, 14 contracts at $6.65 entry, the
+   same instant: production bid/ask/last 6.65/6.80/7.00 (so +$70 to +$490) while
+   the sandbox read 6.60/6.75/6.64 — the sandbox last of 6.64 is -$14, and the
+   user's screen said -$28. Reporting +$385 off production was simply the wrong
+   feed. The reverse happened on AVGO, where the user's figure was HIGHER than
+   mine: that asymmetry is the signature of a clock difference, not of a
+   bid-versus-mid convention.
+   Falls back to the normal client when no sandbox token exists. */
+export async function tradierDelayed(path, { timeoutMs } = {}) {
+  if (!sandboxToken) return tradier(path, { timeoutMs });
+  const res = await fetch(`${SANDBOX}${path}`, {
+    headers: { Authorization: `Bearer ${sandboxToken}`, Accept: "application/json" },
+    cache: "no-store",
+    ...(timeoutMs > 0 ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
+  });
+  if (!res.ok) throw new Error(`Tradier sandbox data responded ${res.status}`);
+  return res.json();
+}
+
