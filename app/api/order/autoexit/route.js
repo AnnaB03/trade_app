@@ -233,10 +233,20 @@ async function cancelResting(orderId) {
   try { await tradeFetch(`/accounts/${await accountId()}/orders/${orderId}`, { method: "DELETE" }); } catch {}
 }
 
+/* The quantity actually HELD, which is what a sell order and any P&L must be
+   based on. entryQuantity is what was ORDERED; journalReconcile writes
+   entryFilledQuantity from the broker's exec_quantity. They are equal on a
+   clean fill and no row in the ledger has ever differed, but on a partial fill
+   the ordered number is both too large to sell (the broker rejects a sell for
+   more than the position) and wrong for the gain, which would be overstated by
+   the unfilled remainder. Share orders here now run to thousands of shares, so
+   a partial is a question of when, not whether. */
+const heldQuantity = (pos) => Number(pos.entryFilledQuantity ?? pos.entryQuantity) || 0;
+
 async function closeOption(pos, exitPrice, { duration = "day" } = {}) {
   await cancelResting(pos.entryOrderId); // the resting stop leg — about to be replaced by this close
   const body = {
-    legs: [{ action: "sell", type: pos.optionType, strike: String(pos.strike), premium: String(exitPrice), qty: String(pos.entryQuantity || 1), occ: pos.occ }],
+    legs: [{ action: "sell", type: pos.optionType, strike: String(pos.strike), premium: String(exitPrice), qty: String(heldQuantity(pos) || 1), occ: pos.occ }],
     closing: true,
     duration,
     outcome_note: "auto-exit",
@@ -254,7 +264,7 @@ async function closeOption(pos, exitPrice, { duration = "day" } = {}) {
 async function closeShares(pos, exitPrice, { duration = "day" } = {}) {
   await cancelResting(pos.entryOrderId);
   const body = {
-    equity: { symbol: pos.symbol, quantity: pos.entryQuantity, price: exitPrice },
+    equity: { symbol: pos.symbol, quantity: heldQuantity(pos), price: exitPrice },
     closing: true,
     duration,
     outcome_note: "auto-exit",
@@ -412,7 +422,7 @@ export async function GET(req) {
       // Dollar gain at the peak, which is what actually matters once positions
       // are sized to the account rather than to one contract.
       const mult = pos.vehicle === "OPTION" ? 100 : 1;
-      const qty = Number(pos.entryQuantity) || 0;
+      const qty = heldQuantity(pos);
       const hardBar = HARD_TAKE_PROFIT_PCT[pos.vehicle] ?? HARD_TAKE_PROFIT_PCT.OPTION;
 
       /* 1a. Explicit breakeven exit, set per position (exitAtBreakeven) when
@@ -560,7 +570,7 @@ export async function GET(req) {
       // firing an order that is certain to be rejected on every future run.
       const resKey = pos.vehicle === "OPTION" ? pos.occ : pos.symbol;
       const reservedQty = reserved?.get(resKey) ?? 0;
-      if (reserved && reservedQty >= (Number(pos.entryQuantity) || 1)) {
+      if (reserved && reservedQty >= (heldQuantity(pos) || 1)) {
         results.push({
           symbol: pos.symbol, closed: false, ...exit,
           error: `FROZEN — all ${reservedQty} held by a resting stop the sandbox will not cancel or modify, so no sell can be placed. Only that stop firing can exit it.`,
