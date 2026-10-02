@@ -53,7 +53,32 @@ const DIRECTION = { CALL: 1, BUY: 1, PUT: -1, SELL: -1 };
    Arming at 40% with a 30% giveback of the gain means an armed position can
    only ever exit profitable (worst case ~+28%), so this never turns a winner
    into a loser. Shares arm lower because share ideas here target +3-11%. */
-const TRAIL_ARM_PCT = { OPTION: 40, SHARES: 15 };
+/* OPTION lowered 40 -> 8 on 2026-10-02. The +40% bar was calibrated when a
+   position was a few hundred dollars and a contract routinely doubled. At
+   10%-of-account sizing it is simply unreachable: across the 11 closed
+   account-sized option positions (cost > $7k) with a recorded peak, the peak
+   gains were 4.1, 6.1, 7.9, 8.2, 8.7, 9.1, 9.4, 9.4, 10.3, 15.3 and 109.8
+   percent — median 9.1%, and exactly ONE of eleven ever reached +40%. The
+   trail was dead code for every position this book now opens.
+   Re-simulated at a 30% giveback, arming at +8% would have turned two real
+   losses into gains without capping the one runner: NVDA -$520 -> +$1,137 and
+   INTC -$660 -> +$670, plus AVGO +$280 -> +$616, for +$3,348 across the set.
+   The +$7,625 NVDA outlier is untouched — it peaked at 109.8% and never gave
+   back 30%, so a giveback rule lets it ride. That is the whole reason this is
+   an arm-and-trail change rather than a flat take-profit, which was checked
+   separately and would have cost $5,625 on that single trade.
+   Why 8 and not the simulation-optimal 4: the simulation assumes we sell at
+   the giveback level exactly, and a 15-minute check can miss it; a 30%
+   giveback off a +4% peak is a 1.2% band, which is noise and is precisely
+   what made the old dollar-arm a hair-trigger. +8% gives a 2.4% band and
+   keeps most of the benefit.
+   SHARES deliberately UNCHANGED at 15 even though it is unreachable too
+   (median share peak 3.0%, and +15% was reached only by the two DXST lots).
+   Getting any benefit there needs a +2% arm, which is a 0.6% band — pure
+   noise — and the whole result rests on two positions, ROG and NOK. Shares
+   are covered by the $200 end-of-day dollar bar instead, which is what
+   actually banked FEIM (+$156) and NOK (+$191). Revisit with more rows. */
+const TRAIL_ARM_PCT = { OPTION: 8, SHARES: 15 };
 /* A dollar-based arm (peak gain >= $400) lived here briefly and was removed.
    It was added for MRVL showing "+$515" that round-tripped, but the
    bid-adjustment work established that peak was really +$240 / +2.8%, so the
