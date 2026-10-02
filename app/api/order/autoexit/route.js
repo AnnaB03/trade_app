@@ -64,6 +64,21 @@ const TRAIL_ARM_PCT = { OPTION: 40, SHARES: 15 };
    meaningful gains giving back a meaningful share; percentage is the right
    unit for that, and position size does not change it. */
 const TRAIL_GIVEBACK_PCT = 30;
+/* ...but 30% of a very large gain is a lot of money to risk finding out.
+   The NVDA 10/07 $232.50c (25 contracts, $3.05 entry) reached +100% / +$7,625
+   and the trail tolerated a fall back to +70% before firing — a $2,288
+   giveback. Nothing else in this book has ever been close: across 44 closed
+   trades the median win is $500 and the second-best win ever is $975, so a
+   gain past ~$2,000 is a different animal from the gains the 30% band was
+   calibrated on, and this book's winners round-trip hard (INTC +$670 to
+   -$1,690). Above TRAIL_TIGHTEN_USD the band halves.
+   Note what this deliberately is NOT: a flat dollar take-profit. Checked
+   against the record, a $2,000 ceiling would have fired on exactly one trade
+   in 44 — that same NVDA — and banked $2,000 instead of $7,625. Capping the
+   giveback keeps the whole upside of a position that is still climbing and
+   only tightens what it may hand back. */
+const TRAIL_TIGHTEN_USD = 2000;
+const TRAIL_GIVEBACK_PCT_LARGE = 15;
 
 // Absolute ceiling, separate from the trail: a position up this much is
 // banked outright rather than risking a gap on the way back down.
@@ -481,11 +496,16 @@ export async function GET(req) {
          has largely been surrendered, so a position still climbing never trips
          it — the +127% NVDA winner would have been untouched. */
       if (!exit && peakGainPct != null && peakGainPct >= armBar && gainPct != null) {
-        const keepAtLeast = peakGainPct * (1 - TRAIL_GIVEBACK_PCT / 100);
+        // Peak gain in dollars, from the same peak mark the percentage uses.
+        const peakGainUsd = peakMark > 0 && entryPremium > 0 ? (peakMark - entryPremium) * qty * mult : null;
+        const givebackPct = peakGainUsd != null && peakGainUsd >= TRAIL_TIGHTEN_USD
+          ? TRAIL_GIVEBACK_PCT_LARGE
+          : TRAIL_GIVEBACK_PCT;
+        const keepAtLeast = peakGainPct * (1 - givebackPct / 100);
         if (gainPct <= keepAtLeast) {
           exit = {
             tag: "trail_stop",
-            detail: `Peaked at +${peakGainPct.toFixed(0)}% ($${peakMark}) and gave back to +${gainPct.toFixed(0)}% ($${markNow}) — trailing exit at ${TRAIL_GIVEBACK_PCT}% giveback, banking +${gainPct.toFixed(0)}%`,
+            detail: `Peaked at +${peakGainPct.toFixed(0)}% ($${peakMark}${peakGainUsd != null ? `, +$${peakGainUsd.toFixed(0)}` : ""}) and gave back to +${gainPct.toFixed(0)}% ($${markNow}) — trailing exit at ${givebackPct}% giveback${givebackPct === TRAIL_GIVEBACK_PCT_LARGE ? ` (tightened: peak gain cleared $${TRAIL_TIGHTEN_USD})` : ""}, banking +${gainPct.toFixed(0)}%`,
           };
         }
       }
