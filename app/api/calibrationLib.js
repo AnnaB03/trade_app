@@ -2,8 +2,32 @@
    Groups by the dimension that plausibly predicts a repeatable edge, using
    the best available grade per idea (final > d1 > h1). n < 3 groups are
    dropped — not enough to say anything. */
+/* The grade whose HORIZON matches what the idea actually was.
+   This used to prefer `final`, and that single preference made the model
+   long-only. Ideas here carry staleMinutes of 60-240 — one to four hours —
+   but `final` is graded a median of 6.7 days after the idea was written
+   (max 10.9). Over a week, the grade stops measuring the idea and starts
+   measuring the market's drift, which is not symmetric: in a rising tape it
+   flatters every long and destroys every short.
+   Measured on the real ledger, same ideas, by horizon:
+     BULLISH  h1 42.4%/+0.23  d1 57.0%/+0.61  final 61.7%/+0.82  (n=330)
+     BEARISH  h1 23.5%/-0.66  d1 51.8%/+0.24  final  9.1%/-3.56  (n=85)
+   At d1 the two directions are 5 points apart. At `final` they are 52 apart,
+   and that gap is manufactured entirely by the horizon. One real example: a
+   SELL written 2026-09-14 was graded 2026-09-22 against a +19.3% move, -6.7R.
+   The consequence fed straight into the prompt as settled fact, because
+   n=76 clears the provisional threshold: "technical breakdown 22% (n=76,
+   avgR -2.14)". Told its bearish catalyst loses 78% of the time, the model
+   stopped proposing bearish setups — zero PUT/SELL ideas across nine
+   consecutive refreshes — which then produced no new bearish grades, so the
+   number could never correct itself. A self-reinforcing loop.
+   d1 first: it is the horizon these ideas are actually built for, it exists
+   on every graded idea (n=76 against 43 for final), and it matches the
+   day-trading orientation this book is run on. h1 next, still inside an
+   idea's own staleness window. `final` last — a multi-day drift measure is a
+   different question and must not be the headline number. */
 function bestGrade(idea) {
-  return idea.grades?.final || idea.grades?.d1 || idea.grades?.h1 || null;
+  return idea.grades?.d1 || idea.grades?.h1 || idea.grades?.final || null;
 }
 
 // A real R-multiple can still be a legitimate outlier — a 480% squeeze on a
