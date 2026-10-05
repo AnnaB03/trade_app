@@ -28,7 +28,19 @@ const TRENDING_CAP = 6;
 // Penny candidates ($0.10-$5) get their own small cap — each one costs an
 // extra FMP profile/float/news round trip (computeReality), and a handful of
 // well-checked candidates beats a long list of raw, unverified movers.
-const PENNY_CAP = 4;
+/* 0 disables the penny feed. Measured 2026-10-05 over the whole ledger: it
+   produced 882 ideas, of which 19 were directional, 8 became a journal row and
+   3 ever filled. The genuine penny names — ZTG, ZEO twice, FLNA — all
+   stop_hit, -$82 combined. It also cost prompt tokens on every refresh and was
+   the source of the BEAT order: 18,929 shares of a $0.74 stock, 14% of the
+   account, in a name that trades in fractions of a cent (it never filled and
+   reconciled orphaned).
+   Honest cost of switching it off: DXST also arrived this way and made +$573
+   in its non-artifact lots (its +$14,744 row is excluded as a fill at a price
+   that never traded). So this forgoes a real winner to remove a category with
+   ~0% conversion and an un-exitable tail. Raise it back if penny names are
+   wanted deliberately rather than as scan filler. */
+const PENNY_CAP = 0;
 // Cheaper, liquid, optionable names added for a small account — the default
 // watchlist is all $200+ underlyings whose contracts cost most of a ~$1k
 // account. Bounded like TRENDING_CAP: each one is a full chain fan-out.

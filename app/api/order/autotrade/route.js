@@ -58,11 +58,17 @@ import { buildOptionStopEstimate } from "../../../lib/orders";
      conviction 2: 74% directionally correct, avgR +1.24  (n=35)
      conviction 3: 50% correct,               avgR +0.16  (n=316)
      conviction 4: 53% correct,               avgR +0.53  (n=17)
-   The 74%-vs-50% gap on those samples is significant (p≈0.007), so the bar
-   was filtering out the good ideas. It reads backwards, and the likely
-   explanation is that the model reserves a 2 for setups it finds unusual
-   rather than weak — but whatever the cause, the outcomes favour taking
-   them. Revisit if conviction-2 regresses as its sample grows. */
+   SUPERSEDED 2026-10-05. Those figures came from the `final` grade horizon,
+   which was measuring market drift a median of 6.7 days out. Re-measured at
+   d1, the horizon these ideas are actually built for, the buckets are flat:
+     conviction 2: 51.3% / +0.34R (n=39)
+     conviction 3: 55.6% / +0.50R (n=372)
+     conviction 4: 52.4% / +0.60R (n=21)
+   There is no 74%-vs-50% gap and no signal in conviction either way. The bar
+   is left at 2 because it is inert — 91 of the last 97 directional ideas were
+   conviction 3 and nothing real is being filtered — rather than removed, so
+   the field stays available if it ever starts carrying information. Do not
+   cite the old gap again. */
 const MIN_CONVICTION = 2;
 /* Reward:risk floor. Raised from 1.0 on arithmetic rather than backtest: a
    plan's breakeven win rate is 1/(1+RR), so 1.0:1 needs 50% and 1.09:1 needs
@@ -93,6 +99,7 @@ const MAX_SYMBOL_EXPOSURE_PCT = 15;
 const ACCOUNT_SIZE = Number(process.env.ACCOUNT_SIZE) > 0 ? Number(process.env.ACCOUNT_SIZE) : 1000;
 const DIRECTION_SIGN = { CALL: 1, BUY: 1, PUT: -1, SELL: -1 };
 const REENTRY_COOLDOWN_MIN = 45; // no re-entry on a just-exited symbol without a newer idea
+const MAX_ENTRIES_PER_SYMBOL_DAY = 2; // churn cap; each lot clears the exposure gate on its own
 const MAX_BATCH_AGE_MIN = 20; // non-conditional ideas: reject a batch older than this
 const DEFAULT_TRIGGER_STALE_MIN = 120; // conditional ideas with no staleMinutes of their own
 const LOOKBACK_HOURS = 24; // how far back to search for each symbol's own latest idea
@@ -545,6 +552,44 @@ export async function GET(req) {
         }
         if (e > 0 && t > 0 && v > 0 && risk > 0 && reward / risk < MIN_REWARD_RISK) {
           results.push({ ...tag, placed: false, reason: `Reward:risk ${(reward / risk).toFixed(2)}:1 at the live entry $${e} is below the ${MIN_REWARD_RISK}:1 floor — risking $${risk.toFixed(2)}/share to make $${reward.toFixed(2)}.` });
+          continue;
+        }
+      }
+
+      /* An idea that already carried a position to a close is CONSUMED — it
+         can never be traded again, at any price, on any strike. The cooldown
+         below only blocks the first REENTRY_COOLDOWN_MIN minutes and only when
+         the idea predates the exit, so once it lapsed the same ideaId was
+         re-bought: on 2026-10-05, SPCX idea s3ii5g and AVGO idea 7nku2a were
+         each opened, trail-stopped for -$60, then re-opened on those same two
+         ids. Across 09-29..10-05 that produced 7 SPCX and 5 AVGO positions
+         with 8 same-day re-entries. The thesis was already played out; buying
+         it again is not a new read, it is the same read at a worse price.
+         A row that never filled (unfilled / orphaned, like the BEAT order that
+         found no position) does NOT consume the idea — nothing was tested. */
+      {
+        // "Carried to a close" means it actually held something: the row needs a
+        // real entry fill. 25 journal rows are closed as orphaned/unfilled with
+        // entryFillPrice null — nothing was ever tested, so those do not consume
+        // the idea. BEAT's 18,929-share order found no position and is one of them.
+        const consumed = listJournal().find((r) =>
+          r.ideaId && r.ideaId === idea.id && r.status === "closed" && r.entryFillPrice != null);
+        if (consumed) {
+          results.push({ ...tag, placed: false, reason: `Idea ${idea.id} already carried a ${idea.symbol} position to a close on ${String(consumed.exitAt).slice(0, 16)} (${consumed.exitReasonTag ?? "exit"}, P&L ${consumed.pnl == null ? "unbooked" : `$${Number(consumed.pnl).toFixed(0)}`}) — a played-out thesis is consumed, not re-tradeable.` });
+          continue;
+        }
+      }
+
+      /* No more than MAX_ENTRIES_PER_SYMBOL_DAY entries per symbol per session
+         day. The churn above netted +$2,444, but entirely inside one rising
+         week on two names — it is the first thing that stops paying when the
+         tape turns, and each lot passes the exposure gate separately so
+         nothing else caps it. */
+      {
+        const today = new Date().toDateString();
+        const todayCount = listJournal().filter((r) => r.symbol === idea.symbol && r.createdAt && new Date(r.createdAt).toDateString() === today).length;
+        if (todayCount >= MAX_ENTRIES_PER_SYMBOL_DAY) {
+          results.push({ ...tag, placed: false, reason: `${idea.symbol} already has ${todayCount} entries today — at the ${MAX_ENTRIES_PER_SYMBOL_DAY}/symbol/day cap, so this is churn rather than a new position.` });
           continue;
         }
       }
