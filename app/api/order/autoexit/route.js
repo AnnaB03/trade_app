@@ -50,9 +50,13 @@ const DIRECTION = { CALL: 1, BUY: 1, PUT: -1, SELL: -1 };
                  (flat 50% = +$157, flat 80% = +$250)
      GLND        $2.83 -> peak $5.705 -> trail exit ~$4.84 = +$201
                  (never triggered at all under a flat 80%)
-   Arming at 40% with a 30% giveback of the gain means an armed position can
-   only ever exit profitable (worst case ~+28%), so this never turns a winner
-   into a loser. Shares arm lower because share ideas here target +3-11%. */
+   In principle an armed position exits above entry, since it leaves after
+   surrendering only a share of its gain. In practice it does not always: the
+   check runs every 15 minutes and price can fall through the whole band
+   between looks. SPCX peaked +8%, was -5% at the next check and closed -$550.
+   (Historical note: this was first written for a 40% arm / 30% giveback) — so
+   treat the trail as limiting givebacks, not as a guarantee against turning
+   a winner into a loser. Shares arm lower because share ideas here target +3-11%. */
 /* OPTION lowered 40 -> 8 on 2026-10-02. The +40% bar was calibrated when a
    position was a few hundred dollars and a contract routinely doubled. At
    10%-of-account sizing it is simply unreachable: across the 11 closed
@@ -281,6 +285,28 @@ async function cancelResting(orderId) {
    more than the position) and wrong for the gain, which would be overstated by
    the unfilled remainder. Share orders here now run to thousands of shares, so
    a partial is a question of when, not whether. */
+/* The instrument's high SINCE this position was entered, from 5-minute bars
+   that start strictly after the entry time. Null when it cannot be read. */
+async function highSinceEntry(symbol, sinceIso) {
+  try {
+    const since = new Date(sinceIso);
+    if (!(since.getTime() > 0)) return null;
+    const pad = (n) => String(n).padStart(2, "0");
+    const fmt = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    const d = await tradier(
+      `/markets/timesales?symbol=${encodeURIComponent(symbol)}&interval=5min` +
+      `&start=${encodeURIComponent(fmt(since))}&end=${encodeURIComponent(fmt(new Date()))}`,
+      { timeoutMs: 4000 }
+    );
+    const highs = asArray(d?.series?.data)
+      .filter((b) => Number(b.timestamp) * 1000 > since.getTime())
+      .map((b) => Number(b.high)).filter((n) => n > 0);
+    return highs.length ? Math.max(...highs) : null;
+  } catch {
+    return null;
+  }
+}
+
 const heldQuantity = (pos) => Number(pos.entryFilledQuantity ?? pos.entryQuantity) || 0;
 
 async function closeOption(pos, exitPrice, { duration = "day" } = {}) {
@@ -485,7 +511,21 @@ export async function GET(req) {
          overstated by ~3% of premium — enough to trip the trail early. Subtract
          the current spread to approximate what the bid was up there. Shares need
          no adjustment; their spreads are pennies. */
-      const rawHigh = pos.vehicle === "OPTION" ? Number(oq?.high) : Number(range?.high);
+      /* The day's high only counts as THIS position's peak if the position was
+         held when it printed. For a position entered today it usually was not:
+         SPCX 10/30 $167.50c was bought at $7.75 at 12:03 on a day the contract
+         had already traded $8.775, and AVGO at $14.60 against an earlier
+         $15.335. Seeded with those, the trail read "peaked +13%, gave it all
+         back" and sold both three minutes after entry for -$60 each. With the
+         arm at 40% this could not happen; at 5% any re-entry below the day's
+         high trips it. So: entered before today -> the day high is fair;
+         entered today -> only the high since entry, and nothing if unreadable. */
+      const enteredAt = pos.entryFilledAt || pos.entryAt || pos.createdAt;
+      const enteredToday = enteredAt && new Date(enteredAt).toDateString() === new Date().toDateString();
+      const dayHigh = pos.vehicle === "OPTION" ? Number(oq?.high) : Number(range?.high);
+      const rawHigh = enteredToday
+        ? Number(await highSinceEntry(pos.vehicle === "OPTION" ? pos.occ : pos.symbol, enteredAt))
+        : dayHigh;
       const spread = pos.vehicle === "OPTION" && oq?.ask > 0 && oq?.bid >= 0 ? oq.ask - oq.bid : 0;
       // Half the spread, matching the mid the current mark now uses.
       const todayHigh = rawHigh > 0 ? Math.max(0, rawHigh - spread / 2) : null;
