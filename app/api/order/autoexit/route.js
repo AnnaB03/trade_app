@@ -692,11 +692,25 @@ export async function GET(req) {
       const resKey = pos.vehicle === "OPTION" ? pos.occ : pos.symbol;
       const reservedQty = reserved?.get(resKey) ?? 0;
       if (reserved && reservedQty >= (heldQuantity(pos) || 1)) {
+        /* Stamp `frozen` on the row the first time this is seen, so every other
+           reader can take these out of its totals instead of each one
+           rediscovering the reservation. Four rows (GLND x2, NVDA 10/16 x2)
+           have produced an identical FROZEN line on every check for days while
+           holding ~$1,000 that can never be realised — real at the broker,
+           unreachable, and not a decision anyone can act on. Cleared again if
+           the reservation ever lifts, since only the stop firing releases it. */
+        if (!dryRun && !pos.frozen) {
+          try { updateJournalEntry(pos.id, { frozen: true, frozenSince: new Date().toISOString(), frozenQty: reservedQty }); } catch {}
+        }
         results.push({
-          symbol: pos.symbol, closed: false, ...exit,
+          symbol: pos.symbol, closed: false, frozen: true, ...exit,
           error: `FROZEN — all ${reservedQty} held by a resting stop the sandbox will not cancel or modify, so no sell can be placed. Only that stop firing can exit it.`,
         });
         continue;
+      }
+      if (!dryRun && pos.frozen && !(reserved && reservedQty > 0)) {
+        // Reservation lifted (the stop fired or was cleared) — the row is live again.
+        try { updateJournalEntry(pos.id, { frozen: false, frozenSince: null, frozenQty: null }); } catch {}
       }
 
       if (dryRun) { results.push({ symbol: pos.symbol, wouldClose: true, ...exit }); continue; }
