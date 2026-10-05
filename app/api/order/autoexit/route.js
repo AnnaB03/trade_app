@@ -78,7 +78,19 @@ const DIRECTION = { CALL: 1, BUY: 1, PUT: -1, SELL: -1 };
    noise — and the whole result rests on two positions, ROG and NOK. Shares
    are covered by the $200 end-of-day dollar bar instead, which is what
    actually banked FEIM (+$156) and NOK (+$191). Revisit with more rows. */
-const TRAIL_ARM_PCT = { OPTION: 8, SHARES: 15 };
+/* 8 -> 5 and giveback 30 -> 25 on 2026-10-05, from replaying exit rules along
+   the real 5-minute price path of all 23 account-sized trades (09-29..10-05),
+   checks every 15 minutes, flat by the close, -8% premium stop as a proxy for
+   invalidation. Same-day totals: arm 3-5% / give 20-25% +$9.1-9.3k; arm 6-10% /
+   give 30-35% +$6.4k (the previous setting); arm 12%+ +$3.1k; the original 40%
+   +$2.7k; holding to the close with no rule -$891. The ordering is the same
+   with the best day (10-05) removed: +$3.0k / +$0.2k / -$3.1k. Why lower works:
+   the day's peak arrives a median 35 minutes after entry and winners were
+   giving back half of it — median capture was 49% of the same-day peak.
+   Five trading days in one rising week; a direction to keep measuring, not a
+   settled optimum. Fixed limit targets and half-off scale-outs were tested on
+   the same paths and were worse than a plain trail. */
+const TRAIL_ARM_PCT = { OPTION: 5, SHARES: 15 };
 /* A dollar-based arm (peak gain >= $400) lived here briefly and was removed.
    It was added for MRVL showing "+$515" that round-tripped, but the
    bid-adjustment work established that peak was really +$240 / +2.8%, so the
@@ -88,7 +100,7 @@ const TRAIL_ARM_PCT = { OPTION: 8, SHARES: 15 };
    $230c at $7.75 on a blip instead of managing a real move. The trail is for
    meaningful gains giving back a meaningful share; percentage is the right
    unit for that, and position size does not change it. */
-const TRAIL_GIVEBACK_PCT = 30;
+const TRAIL_GIVEBACK_PCT = 25;
 /* ...but 30% of a very large gain is a lot of money to risk finding out.
    The NVDA 10/07 $232.50c (25 contracts, $3.05 entry) reached +100% / +$7,625
    and the trail tolerated a fall back to +70% before firing — a $2,288
