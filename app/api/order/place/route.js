@@ -3,7 +3,7 @@ import { vetOrder, vetEquityOrder, submitOrder, confirmOrderFill } from "../comm
 import { tradier, asArray } from "../../tradier";
 import { parseOcc } from "../../../lib/orders";
 import { journalOpen, journalClose } from "../../journalLib";
-import { findOpenJournalEntry } from "../../store";
+import { findOpenJournalEntry, listJournal, updateJournalEntry } from "../../store";
 
 /* Place = run all the same gates as Stage, then actually submit the order to
    Tradier — still the sandbox (paper money) only, per the hard lock in
@@ -23,6 +23,21 @@ async function underlyingQuote(symbol) {
   } catch {
     return null;
   }
+}
+
+/* A close that was submitted, then cancelled and re-submitted, leaves the
+   journal row closed and still pointing at the CANCELLED order: the second
+   submit finds no open row to attach to. AVGO 10/30 $360c on 2026-10-05 — a
+   resting $15.55 sell was cancelled and replaced by a $15.50 sell that filled,
+   while the row kept the dead order id and never booked the +$300. The
+   reconcile retry pass books a close from whatever order id the row carries,
+   so re-pointing the id is enough. Returns true if a row was re-linked. */
+function relinkCancelledClose(matchFn, newOrderId) {
+  if (!newOrderId) return false;
+  const stale = listJournal().find((r) => r.status === "closed" && r.exitOrderId && r.exitFillPrice == null && matchFn(r));
+  if (!stale) return false;
+  updateJournalEntry(stale.id, { exitOrderId: newOrderId, exitOrderStatus: "ok" });
+  return true;
 }
 
 export async function POST(req) {
@@ -51,6 +66,7 @@ export async function POST(req) {
           });
         } else {
           const entry = findOpenJournalEntry((r) => r.vehicle === "SHARES" && r.symbol === vet.underlying);
+          if (!entry) relinkCancelledClose((r) => r.vehicle === "SHARES" && r.symbol === vet.underlying, orderResult?.id ?? null);
           if (entry) {
             // Book the broker's confirmed fill, never the limit we submitted.
             const got = await confirmOrderFill(orderResult?.id ?? null);
@@ -79,6 +95,7 @@ export async function POST(req) {
           });
         } else if (leg?.occ) {
           const entry = findOpenJournalEntry((r) => r.occ === leg.occ);
+          if (!entry) relinkCancelledClose((r) => r.occ === leg.occ, orderResult?.id ?? null);
           if (entry) {
             const underlyingPrice = await underlyingQuote(underlying);
             // Book the broker's confirmed fill, never the limit we submitted.
