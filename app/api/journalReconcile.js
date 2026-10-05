@@ -58,7 +58,15 @@ export async function reconcileJournal({ force = false } = {}) {
   if (!force && Date.now() - lastRun < MIN_INTERVAL_MS) return { skipped: true };
   lastRun = Date.now();
   const open = listJournal().filter((j) => j.status === "open" && j.entryOrderId);
-  if (!open.length) return { checked: 0, updated: 0 };
+  /* Closes that were submitted and confirmed FILLED by the broker, but whose
+     post-submit confirmation lost the race and left the row with no exit price.
+     The confirmed-fill guard is right to refuse booking the limit, but nothing
+     ever retried, so the realised P&L was silently dropped from the week.
+     Happened for real: SPCX 10/30 $162.50c, 12 contracts, broker filled $8.90
+     against a $7.20 entry — $2,040 that existed at the broker and was missing
+     from every total until it was repaired by hand. */
+  const unbooked = listJournal().filter((j) => j.status === "closed" && j.exitOrderId && j.exitFillPrice == null);
+  if (!open.length && !unbooked.length) return { checked: 0, updated: 0 };
   try {
     const acct = await accountId();
     const orders = asArray((await tradeFetch(`/accounts/${acct}/orders`))?.orders?.order);
@@ -123,7 +131,27 @@ export async function reconcileJournal({ force = false } = {}) {
         updated++;
       }
     }
-    return { checked: open.length, updated };
+    // Retry the exit confirmation for any close still missing its fill price.
+    for (const j of unbooked) {
+      const o = byId.get(String(j.exitOrderId));
+      if (!o) continue;
+      const legs = asArray(o.leg);
+      const leg = legs.find((l) => Number(l.exec_quantity) > 0 && Number(l.avg_fill_price) > 0) || o;
+      const px = Number(leg.avg_fill_price), qty = Number(leg.exec_quantity) || Number(j.exitQuantity) || 0;
+      if (!(px > 0) || !(qty > 0)) continue;
+      const entryPx = Number(j.entryFillPrice ?? j.entryLimitPrice);
+      const mult = j.vehicle === "OPTION" ? 100 : 1;
+      if (!Number.isFinite(entryPx) || !(entryPx > 0)) continue;
+      const pnl = (px - entryPx) * qty * mult * (j.side === "sell_short" ? -1 : 1);
+      const cost = Math.abs(entryPx * qty * mult);
+      updateJournalEntry(j.id, {
+        exitFillPrice: px, exitOrderStatus: "filled", exitQuantity: qty,
+        pnl, pnlPct: cost > 0 ? (pnl / cost) * 100 : null,
+        exitReason: `${String(j.exitReason || "").split(" [submitted at")[0]} [P&L booked on a later pass from the broker's confirmed fill $${px}; the post-submit confirmation had lost the race]`,
+      });
+      updated++;
+    }
+    return { checked: open.length + unbooked.length, updated };
   } catch (e) {
     return { error: String(e.message || e) };
   }
