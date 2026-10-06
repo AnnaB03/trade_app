@@ -166,7 +166,22 @@ function easiestTrigger(all, idea, now) {
     i.symbol === idea.symbol && i.action === idea.action && i.vehicle === idea.vehicle &&
     i.triggerPrice != null && i.triggerDirection === idea.triggerDirection &&
     new Date(i.createdAt).getTime() <= new Date(idea.createdAt).getTime() &&
-    isFreshEnough(i, now)
+    isFreshEnough(i, now) &&
+    /* A trigger drawn before the open is not a level the session has confirmed.
+       The pre-open refresh (added 2026-10-05) writes ideas while the market is
+       closed, from yesterday's close and thin pre-market quotes, and they stay
+       fresh for hours (staleMinutes up to 360). NVDA 2026-10-06: the 9:28 ET
+       idea set a trigger of $240.10 off the $238.90 prior close; by 9:33 the
+       model had raised it to $243.40, and by 10:09 to $243.37, with its own
+       thesis reading "not chasing until it reclaims the intraday high". This
+       lookback still returned the LOWEST trigger, $240.10, so two NVDA calls
+       were bought at $241.25 and $242.18 — both below the level the model
+       itself was waiting for, and NVDA never reclaimed it. Regular-session
+       ideas still count, which is what the lookback was built for (a stock
+       grinding up through 224.42 -> 224.95 -> 225.50 -> 227.20). If the idea
+       being evaluated was itself written pre-open, its own tag matches and it
+       is unaffected. */
+    (idea.marketState !== "open" || i.marketState === "open")
   );
   const prices = candidates.map((i) => Number(i.triggerPrice));
   if (!prices.length) return idea.triggerPrice;
