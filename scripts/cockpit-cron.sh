@@ -15,6 +15,13 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BASE="${COCKPIT_BASE:-http://localhost:3000}"
+# Same source of truth as the app (.env.local). A hard-coded default here is how
+# the suggestions call could keep sizing for a $99K account after the app moved
+# to $10K.
+if [ -z "${ACCOUNT_SIZE:-}" ] && [ -f "$HERE/../.env.local" ]; then
+  ACCOUNT_SIZE=$(grep -E '^ACCOUNT_SIZE=' "$HERE/../.env.local" | head -1 | cut -d= -f2- | tr -d '"'"'"' ')
+fi
+ACCOUNT_SIZE="${ACCOUNT_SIZE:-10000}"
 LOG="${COCKPIT_LOG:-$HOME/Library/Logs/cockpit-autopilot.log}"
 mkdir -p "$(dirname "$LOG")"
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
@@ -68,13 +75,13 @@ case "${1:-exits}" in
     # -$138 in another. Quotes only, no AI cost.
     run autoexit "$BASE/api/order/autoexit" ;;
   eod)
-    run autoexit-eod "$BASE/api/order/autoexit?eod=true&eodMin=200" ;;
+    run autoexit-eod "$BASE/api/order/autoexit?eod=true" ;;
   entries)
     run autotrade "$BASE/api/order/autotrade" ;;
   refresh)
     # The only billed call. Hourly.
     code=$(curl -s -o /tmp/cockpit-sugg.json -w '%{http_code}' --max-time 300 \
-      "$BASE/api/suggestions?symbols=NVDA,TSLA,AAL,NOK,FEIM,QQQ,SPY&account=${ACCOUNT_SIZE:-99000}")
+      "$BASE/api/suggestions?symbols=NVDA,TSLA,AAL,NOK,FEIM,QQQ,SPY&account=${ACCOUNT_SIZE}")
     log "refresh http=$code $(python3 "$HERE/summarize.py" /tmp/cockpit-sugg.json)" ;;
   *) log "unknown mode ${1:-}"; exit 2 ;;
 esac

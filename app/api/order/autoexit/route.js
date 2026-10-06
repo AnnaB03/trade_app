@@ -118,7 +118,15 @@ const TRAIL_GIVEBACK_PCT = 25;
    in 44 — that same NVDA — and banked $2,000 instead of $7,625. Capping the
    giveback keeps the whole upside of a position that is still climbing and
    only tightens what it may hand back. */
-const TRAIL_TIGHTEN_USD = 2000;
+/* Dollar thresholds here were tuned on the $99K paper account, where one
+   position is ~$9,900 and $200 is about 2% of it. They are kept as a SHARE of
+   the account so they mean the same thing at any size: at $10K a position is
+   ~$1,000 and the equivalent bar is ~$20, not $200 — which would be a 20% gain
+   and would never fire. */
+const REFERENCE_ACCOUNT = 99000;
+const ACCOUNT_SIZE = Number(process.env.ACCOUNT_SIZE) > 0 ? Number(process.env.ACCOUNT_SIZE) : REFERENCE_ACCOUNT;
+const DOLLAR_SCALE = ACCOUNT_SIZE / REFERENCE_ACCOUNT;
+const TRAIL_TIGHTEN_USD = 2000 * DOLLAR_SCALE;
 const TRAIL_GIVEBACK_PCT_LARGE = 15;
 
 // Absolute ceiling, separate from the trail: a position up this much is
@@ -135,7 +143,7 @@ const HARD_TAKE_PROFIT_PCT = { OPTION: 150, SHARES: 60 };
    terms; the gains were large in dollars and small in percent, which is what
    10%-of-account sizing produces. Dollar-denominated on purpose, since "a
    good daily profit" is a dollar question, not a ratio one. */
-const EOD_TAKE_PROFIT_USD = 300;
+const EOD_TAKE_PROFIT_USD = 200 * DOLLAR_SCALE; // $200 at the $99K reference, $20 at $10K
 /* ...but the caller can lower it. The 15:xx jobs pass eodMin=200, because the
    single 15:56 look at $300 was demonstrably too coarse: FEIM, a $24,325 share
    position, touched +$667 intraday and sat at +$180 late in the day, and every
@@ -349,7 +357,11 @@ export async function GET(req) {
   const params = new URL(req.url).searchParams;
   const dryRun = params.get("dryRun") === "true";
   const eod = params.get("eod") === "true";
-  const eodMin = Number(params.get("eodMin")) > 0 ? Number(params.get("eodMin")) : EOD_TAKE_PROFIT_USD;
+  // The eodMin query param is IGNORED. Callers used to pass eodMin=200, a flat
+  // dollar figure that only means anything at one account size; the bar now
+  // always comes from the account (see DOLLAR_SCALE), so a stale caller cannot
+  // quietly set a bar that is 20% of a $1,000 position.
+  const eodMin = EOD_TAKE_PROFIT_USD;
   try {
     const open = listJournal().filter((r) => r.status === "open");
     if (!open.length) return NextResponse.json({ checked: 0, closed: 0, results: [] });
@@ -799,7 +811,7 @@ export async function GET(req) {
       });
     }
 
-    return NextResponse.json({ checked: open.length, closed: results.filter((r) => r.closed).length, results });
+    return NextResponse.json({ checked: open.length, closed: results.filter((r) => r.closed).length, accountSize: ACCOUNT_SIZE, eodBarUsd: Number(EOD_TAKE_PROFIT_USD.toFixed(2)), results });
   } catch (e) {
     return NextResponse.json({ error: String(e.message || e) }, { status: 502 });
   }

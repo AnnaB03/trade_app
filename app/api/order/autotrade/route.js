@@ -96,6 +96,16 @@ const MAX_TRIGGER_SLIP_PCT = 0.5;
    still catches what dedup cannot: different expirations, or a call and a put
    on the same name. */
 const MAX_SYMBOL_EXPOSURE_PCT = 15;
+/* Hard ceiling on capital deployed across ALL open positions, as a share of
+   ACCOUNT_SIZE. Set 2026-10-06 when the working account size went from the
+   $99K paper balance to $10K, the amount expected to go live. Nothing capped
+   the total before: each position was limited to 10% and each symbol to 15%,
+   but ten positions was simply allowed. 100% because the real account is
+   limited margin — no borrowing — so deployed cost can never exceed the money.
+   Rows frozen behind a resting stop are excluded from the sum: they are a
+   sandbox artifact (a real broker cancels the stop and sells), and counting
+   ~$2,400 of stuck cost basis would silently shrink a $10K test to $7.6K. */
+const MAX_TOTAL_EXPOSURE_PCT = Number(process.env.MAX_TOTAL_EXPOSURE_PCT) > 0 ? Number(process.env.MAX_TOTAL_EXPOSURE_PCT) : 100;
 const ACCOUNT_SIZE = Number(process.env.ACCOUNT_SIZE) > 0 ? Number(process.env.ACCOUNT_SIZE) : 1000;
 const DIRECTION_SIGN = { CALL: 1, BUY: 1, PUT: -1, SELL: -1 };
 const REENTRY_COOLDOWN_MIN = 45; // no re-entry on a just-exited symbol without a newer idea
@@ -448,6 +458,7 @@ export async function GET(req) {
     const liveBySym = Object.fromEntries(await Promise.all(conditionalSyms.map(async (s) => [s, await liveQuote(s)])));
 
     const results = [];
+    let deployedThisRun = 0; // cost placed earlier in this same pass, which journal rows don't show yet
     for (const rawIdea of batch) {
       const tag = { symbol: rawIdea.symbol, action: rawIdea.action, vehicle: rawIdea.vehicle, risk: rawIdea.risk, ideaId: rawIdea.id };
       if (!["CALL", "PUT", "BUY", "SELL"].includes(rawIdea.action)) { results.push({ ...tag, placed: false, reason: "WAIT — nothing to trade." }); continue; }
@@ -652,10 +663,38 @@ export async function GET(req) {
         }
       }
 
+      // Total capital deployed across every live position.
+      {
+        const costOf = (r) => (Number(r.entryFillPrice ?? r.entryLimitPrice) || 0) * (Number(r.entryQuantity) || 0) * (r.vehicle === "OPTION" ? 100 : 1);
+        /* A row is marked closed the moment a sell is SUBMITTED, but the capital
+           is still deployed until that sell actually fills — exitFillPrice stays
+           null until then. Counting only status "open" let a resting $8.8K SPY
+           sell look like free cash and would have admitted another position on
+           top of it. So: live = open rows, plus filled entries whose close is
+           submitted but not yet confirmed. Conservative on purpose — a stale
+           unbooked close over-counts, which blocks an entry rather than
+           admitting one past the ceiling. */
+        const live = listJournal().filter((r) => !r.frozen && (
+          r.status === "open" ||
+          (r.status === "closed" && r.entryFillPrice != null && r.exitOrderId && r.exitFillPrice == null)
+        ));
+        const deployed = live.reduce((s2, r) => s2 + costOf(r), 0) + deployedThisRun;
+        const adding = idea.vehicle === "OPTION"
+          ? (Number(idea.leg?.mid ?? idea.leg?.ask) || 0) * 100 * Math.max(1, Number(idea.sizing?.contracts) || 1)
+          : (Number(idea.sizing?.dollarCost) || 0);
+        const ceiling = (ACCOUNT_SIZE * MAX_TOTAL_EXPOSURE_PCT) / 100;
+        if (deployed + adding > ceiling) {
+          results.push({ ...tag, placed: false, reason: `Deployed capital would reach $${(deployed + adding).toFixed(0)} against a $${ceiling.toFixed(0)} ceiling (${MAX_TOTAL_EXPOSURE_PCT}% of the $${ACCOUNT_SIZE} account; $${deployed.toFixed(0)} already in live positions) — no room for another.` });
+          continue;
+        }
+        idea.__addingCost = adding;
+      }
+
       let r;
       if (idea.vehicle === "OPTION") r = await placeOption(idea, { dryRun, openOccs });
       else if (idea.vehicle === "SHARES") r = await placeShares(idea, { dryRun });
       else r = { placed: false, reason: `Unhandled vehicle: ${idea.vehicle}` };
+      if (r?.placed && !dryRun) deployedThisRun += Number(idea.__addingCost) || 0;
       results.push({ ...tag, ...r });
     }
 
