@@ -481,7 +481,18 @@ export async function GET(req) {
       // Gain on what was actually paid, measured on the contract premium for
       // options and on the share price for shares.
       const markNow = pos.vehicle === "OPTION" ? livePremium : underlyingPx;
-      const gainPct = markNow > 0 && entryPremium > 0 && dir > 0
+      /* An OPTION position here is always LONG premium, so it gains when its
+         own premium rises, whether it is a call or a put. This used to require
+         `dir > 0`, and dir is -1 for a put (it describes the UNDERLYING's
+         direction), so gainPct came back null for every put: the trail needs a
+         gain and never armed, and the 150% outright ceiling never fired. No put
+         had been held long enough to notice — the book was long-only for weeks,
+         and found only when the first put experiment was about to be placed.
+         Short SHARES (dir < 0, sell_short) still return null here: their gain is
+         the mirror image and their peak would be a LOW, which this block does
+         not track, so they stay unmanaged by the trail rather than being
+         mismanaged by it. */
+      const gainPct = markNow > 0 && entryPremium > 0 && (pos.vehicle === "OPTION" || dir > 0)
         ? ((markNow - entryPremium) / entryPremium) * 100
         : null;
 
