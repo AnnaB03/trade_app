@@ -39,8 +39,19 @@ export const MAX_POSITION_PCT = 0.15;
 // scales with this number, losses included — an explicit choice to be
 // aggressive in a paper account being used to learn, not a default to copy
 // onto real money. MAX_CONTRACTS still backstops illiquid names.
-export const OPTION_PREFERRED_PCT = 0.10;
-export const OPTION_HARD_PCT = 0.10;      // per-contract cost above this = not an option trade for this account
+/* 0.10 -> 0.15 on 2026-10-06, at the user's call, for the $10K working account.
+   At 10% ($1,000) a contract over $1,000 is "not an option trade", which ruled
+   out AVGO ($1,170-$1,500), MRVL ($1,695-$1,760) and TSLA ($1,750) — 9 of the
+   25 account-sized trades since 09-29, worth +$4,290 as traded. At 15% ($1,500)
+   AVGO fits; MRVL and TSLA (they need 18%) still do not. Replay at each cap,
+   26 trades: 10% -> 17 tradable, +$1,667; 15% -> 23 tradable, +$2,802; 20% ->
+   all 26, +$4,084. That was a rising week, so the totals say what the cap
+   admits, not what it earns.
+   What it costs: for a long option the worst case is the whole premium, so at
+   15% one bad trade can lose $1,500, 15% of the account. That is not
+   hypothetical — two QQQ calls expired worthless on 09-14, -100% each. */
+export const OPTION_PREFERRED_PCT = 0.15;
+export const OPTION_HARD_PCT = 0.15;      // per-contract cost above this = not an option trade for this account
 // Ceiling on contract count regardless of how much budget allows. A $66
 // penny-name contract against a 5% budget on a six-figure account works out
 // to 75 contracts, which is a liquidity problem rather than a position —
@@ -141,8 +152,8 @@ export function accountText(account) {
     ? `ACCOUNT SIZE: $${L.account.toFixed(0)}. This is SMALL — size, not thesis quality, is the binding constraint.`
     : `ACCOUNT SIZE: $${L.account.toFixed(0)}. Contract cost is NOT the binding constraint here — nearly any liquid contract fits. Thesis quality and risk control are what matter, so do not pass on a good setup because the premium looks expensive in absolute dollars.`;
   const optionLine = small
-    ? `OPTION contract cost limits: comfortable ≤ $${L.optionPreferred.toFixed(0)} (5%), hard cap $${L.optionHardCap.toFixed(0)} (10%). A contract costing more than the hard cap is NOT an option trade for this account no matter how good the setup — use SHARES (sized to the risk budget) or WAIT.`
-    : `OPTION sizing: position budget ≈ $${L.optionPreferred.toFixed(0)} (5% of account), spread across up to ${MAX_CONTRACTS} contracts, with a per-contract hard cap of $${L.optionHardCap.toFixed(0)} (10%). Judge the setup, not the sticker price of one contract.`;
+    ? `OPTION contract cost limits: comfortable ≤ $${L.optionPreferred.toFixed(0)} (${(OPTION_PREFERRED_PCT * 100).toFixed(0)}%), hard cap $${L.optionHardCap.toFixed(0)} (${(OPTION_HARD_PCT * 100).toFixed(0)}%). A contract costing more than the hard cap is NOT an option trade for this account no matter how good the setup — use SHARES (sized to the risk budget) or WAIT.`
+    : `OPTION sizing: position budget ≈ $${L.optionPreferred.toFixed(0)} (${(OPTION_PREFERRED_PCT * 100).toFixed(0)}% of account), spread across up to ${MAX_CONTRACTS} contracts, with a per-contract hard cap of $${L.optionHardCap.toFixed(0)} (${(OPTION_HARD_PCT * 100).toFixed(0)}%). Judge the setup, not the sticker price of one contract.`;
   return [
     header,
     `Per-idea risk budget: $${L.riskDollars.toFixed(0)} (1%). Max cost of any one position: $${L.maxPositionDollars.toFixed(0)} (${(MAX_POSITION_PCT * 100).toFixed(0)}%).`,

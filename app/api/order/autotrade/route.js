@@ -95,7 +95,12 @@ const MAX_TRIGGER_SLIP_PCT = 0.5;
    The widened duplicate rule above prevents the common form of that, but this
    still catches what dedup cannot: different expirations, or a call and a put
    on the same name. */
-const MAX_SYMBOL_EXPOSURE_PCT = 15;
+/* 15 -> 20 with the option cap moving to 15%. A position built at exactly the
+   cap (AVGO at ~$1,500 on a $10K account) sits right on a 15% ceiling, and the
+   gate prices it off the mid while the order fills at the ask, so a cap-sized
+   position was being refused by a few dollars. The ceiling now leaves room for
+   one full position plus rounding, and still blocks stacking a second lot. */
+const MAX_SYMBOL_EXPOSURE_PCT = 20;
 /* Hard ceiling on capital deployed across ALL open positions, as a share of
    ACCOUNT_SIZE. Set 2026-10-06 when the working account size went from the
    $99K paper balance to $10K, the amount expected to go live. Nothing capped
