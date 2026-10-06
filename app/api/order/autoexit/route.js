@@ -293,28 +293,6 @@ async function cancelResting(orderId) {
    more than the position) and wrong for the gain, which would be overstated by
    the unfilled remainder. Share orders here now run to thousands of shares, so
    a partial is a question of when, not whether. */
-/* The instrument's high SINCE this position was entered, from 5-minute bars
-   that start strictly after the entry time. Null when it cannot be read. */
-async function highSinceEntry(symbol, sinceIso) {
-  try {
-    const since = new Date(sinceIso);
-    if (!(since.getTime() > 0)) return null;
-    const pad = (n) => String(n).padStart(2, "0");
-    const fmt = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-    const d = await tradier(
-      `/markets/timesales?symbol=${encodeURIComponent(symbol)}&interval=5min` +
-      `&start=${encodeURIComponent(fmt(since))}&end=${encodeURIComponent(fmt(new Date()))}`,
-      { timeoutMs: 4000 }
-    );
-    const highs = asArray(d?.series?.data)
-      .filter((b) => Number(b.timestamp) * 1000 > since.getTime())
-      .map((b) => Number(b.high)).filter((n) => n > 0);
-    return highs.length ? Math.max(...highs) : null;
-  } catch {
-    return null;
-  }
-}
-
 const heldQuantity = (pos) => Number(pos.entryFilledQuantity ?? pos.entryQuantity) || 0;
 
 async function closeOption(pos, exitPrice, { duration = "day" } = {}) {
@@ -535,9 +513,19 @@ export async function GET(req) {
       const enteredAt = pos.entryFilledAt || pos.entryAt || pos.createdAt;
       const enteredToday = enteredAt && new Date(enteredAt).toDateString() === new Date().toDateString();
       const dayHigh = pos.vehicle === "OPTION" ? Number(oq?.high) : Number(range?.high);
-      const rawHigh = enteredToday
-        ? Number(await highSinceEntry(pos.vehicle === "OPTION" ? pos.occ : pos.symbol, enteredAt))
-        : dayHigh;
+      /* For a position entered today the peak is built ONLY from marks this
+         route has itself observed (pos.peakMark, raised below each pass). It
+         used to be seeded from production 5-minute bars since entry, and that
+         mixed two clocks: the peak came from the real-time feed while markNow
+         comes from the sandbox feed, which lags it by ~15 minutes. On any rising
+         contract the trail then saw a giveback that was only the lag. Measured
+         on AVGO 10/30 $375c, 2026-10-06: production bars gave a peak of $15.825
+         (+24%) while the sandbox mark was $13.175, so it read "gave back to +3%"
+         and sold at the stale $13.00 bid while the contract traded $15.70.
+         Observed marks share the mark's clock, so the lag cannot fake a giveback.
+         Positions entered before today keep the day high, which is the sandbox's
+         own quote.high and so on the same clock. */
+      const rawHigh = enteredToday ? null : dayHigh;
       const spread = pos.vehicle === "OPTION" && oq?.ask > 0 && oq?.bid >= 0 ? oq.ask - oq.bid : 0;
       // Half the spread, matching the mid the current mark now uses.
       const todayHigh = rawHigh > 0 ? Math.max(0, rawHigh - spread / 2) : null;
