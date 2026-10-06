@@ -22,11 +22,25 @@ log() { echo "$(ts) $*" >> "$LOG"; }
 
 # Only trade while the regular session is open. The broker's own clock decides,
 # not this machine's, so holidays and half-days need no special casing here.
-state=$(curl -s --max-time 15 "$BASE/api/clock" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("clock") or {}).get("state","unknown"))' 2>/dev/null || echo unreachable)
-if [ "$state" != "open" ]; then
-  [ "${1:-}" = "refresh" ] && log "skip refresh — market $state"
-  exit 0
-fi
+state=$(curl -s --max-time 15 "$BASE/api/clock" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+# /api/clock returns the broker clock FLAT: {"state": "open", ...}. An earlier
+# version read d["clock"]["state"], got "unknown" on every call and exited
+# silently, so the autopilot never traded and never said so.
+print(d.get("state") or (d.get("clock") or {}).get("state") or "unknown")
+' 2>/dev/null || echo unreachable)
+case "$state" in
+  open) ;;                                   # trade
+  closed|premarket|postmarket) 
+    [ "${1:-}" = "refresh" ] && log "skip refresh — market $state"
+    exit 0 ;;
+  *)
+    # Not a market state we recognise: this is the "quiet because broken" case.
+    # Say so every time rather than exiting like a closed market would.
+    log "CLOCK UNREADABLE state=$state — not trading; is the dev server up?"
+    exit 1 ;;
+esac
 
 # Health first. A 503 here is the difference between a quiet market and a dead
 # autopilot, which is exactly what went unnoticed before.
