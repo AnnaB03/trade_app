@@ -4,6 +4,7 @@ import { tradier, asArray } from "../../tradier";
 import { isPaperSandbox } from "../../tradeClient";
 import { listIdeas, listJournal } from "../../store";
 import { reservedQuantities } from "../common";
+import { isLegacy, readBaseline } from "../../ledgerLib";
 import { journalOpen } from "../../journalLib";
 import { buildOptionStopEstimate } from "../../../lib/orders";
 
@@ -603,7 +604,8 @@ export async function GET(req) {
          nothing else caps it. */
       {
         const today = new Date().toDateString();
-        const todayCount = listJournal().filter((r) => r.symbol === idea.symbol && r.createdAt && new Date(r.createdAt).toDateString() === today).length;
+        const baseline = readBaseline();
+        const todayCount = listJournal().filter((r) => r.symbol === idea.symbol && r.createdAt && new Date(r.createdAt).toDateString() === today && !isLegacy(r, baseline)).length;
         if (todayCount >= MAX_ENTRIES_PER_SYMBOL_DAY) {
           results.push({ ...tag, placed: false, reason: `${idea.symbol} already has ${todayCount} entries today — at the ${MAX_ENTRIES_PER_SYMBOL_DAY}/symbol/day cap, so this is churn rather than a new position.` });
           continue;
@@ -651,7 +653,8 @@ export async function GET(req) {
       // Per-symbol exposure backstop.
       {
         const costOf = (r) => (Number(r.entryFillPrice ?? r.entryLimitPrice) || 0) * (Number(r.entryQuantity) || 0) * (r.vehicle === "OPTION" ? 100 : 1);
-        const held = openJournal.filter((r) => r.symbol === idea.symbol).reduce((s2, r) => s2 + costOf(r), 0);
+        const baseline = readBaseline();
+        const held = openJournal.filter((r) => r.symbol === idea.symbol && !isLegacy(r, baseline)).reduce((s2, r) => s2 + costOf(r), 0);
         const adding = idea.vehicle === "OPTION"
           ? (Number(idea.leg?.mid ?? idea.leg?.ask) || 0) * 100 * Math.max(1, Number(idea.sizing?.contracts) || 1)
           : (Number(idea.sizing?.dollarCost) || 0);
@@ -679,7 +682,8 @@ export async function GET(req) {
            submitted but not yet confirmed. Conservative on purpose — a stale
            unbooked close over-counts, which blocks an entry rather than
            admitting one past the ceiling. */
-        const live = listJournal().filter((r) => !r.frozen && (
+        const baseline = readBaseline();
+        const live = listJournal().filter((r) => !r.frozen && !isLegacy(r, baseline) && (
           r.status === "open" ||
           (r.status === "closed" && r.entryFillPrice != null && r.exitOrderId && r.exitFillPrice == null)
         ));
