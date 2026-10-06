@@ -22,9 +22,14 @@ $MARK (managed by scripts/install-cron.sh — do not edit by hand)
 */5 15 * * 1-5 $RUN eod
 # Entries every 15 minutes.
 3,18,33,48 9-15 * * 1-5 $RUN entries
-# The one billed call, hourly, plus a pre-open run so the 9:30 window has ideas.
+# The one billed call, every 30 minutes (was hourly until 2026-10-06; an experiment
+# to see whether more refreshes mean more positions). Placed at :12 and :42 so each
+# finishes before the entry checks at :18 and :48 that would act on its ideas — the
+# old :47 refresh landed just AFTER the :48 check and waited a further 15 minutes.
+# 9:21 is the pre-open run so the 9:33 window has ideas; 9:42 feeds the 9:48 check.
 21 9 * * 1-5 $RUN refresh
-47 9-14 * * 1-5 $RUN refresh
+42 9 * * 1-5 $RUN refresh
+12,42 10-14 * * 1-5 $RUN refresh
 $MARK end
 CRON
 
