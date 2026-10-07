@@ -6,6 +6,7 @@ import { listIdeas, listJournal } from "../../store";
 import { reservedQuantities } from "../common";
 import { isLegacy, readBaseline } from "../../ledgerLib";
 import { journalOpen } from "../../journalLib";
+import { OPTION_HARD_PCT } from "../../sizingLib";
 import { buildOptionStopEstimate } from "../../../lib/orders";
 
 /* Paper-only autopilot: scans the most recent Ideas refresh, places the
@@ -680,6 +681,21 @@ export async function GET(req) {
         const resQty = key ? (reserved.get(key) ?? 0) : 0;
         if (resQty > 0) {
           results.push({ ...tag, placed: false, reason: `${key} already has ${resQty} reserved behind a resting sell-stop — anything bought here cannot be sold (the sandbox refuses new sells and will not cancel the resting leg), so this would open an un-exitable position.` });
+          continue;
+        }
+      }
+
+      /* Re-check the position cap at the price actually being paid. Sizing
+         happens when the idea is written; the order goes in later, at the live
+         ask. MU 10/9 $1082.50c was sized at $14.27 (14.3% of the account) at
+         12:29 and bought at $19.25 at 13:04 after MU ran — 19.3%, past the 15%
+         cap, admitted because only the looser 20% per-symbol gate looked at the
+         live price. */
+      if (idea.vehicle === "OPTION") {
+        const liveCost = (Number(payPrice(idea.leg)) || 0) * 100 * Math.max(1, Number(idea.sizing?.contracts) || 1);
+        const cap = ACCOUNT_SIZE * OPTION_HARD_PCT;
+        if (liveCost > cap) {
+          results.push({ ...tag, placed: false, reason: `Costs $${liveCost.toFixed(0)} at the live ask — over the $${cap.toFixed(0)} position cap (${(OPTION_HARD_PCT * 100).toFixed(0)}% of the account). It fit when the idea was sized; the price has moved since.` });
           continue;
         }
       }
