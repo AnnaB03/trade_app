@@ -1,5 +1,5 @@
 #!/bin/bash
-# Durable Cockpit autopilot — runs from the system crontab, not a Claude session.
+# Durable Cockpit autopilot — run by launchd (scripts/install-launchd.sh), not a Claude session.
 #
 # Why this exists: every scheduled job lived inside one Claude session, as a
 # session-only cron with a 7-day life. When that session ended, nothing managed
@@ -10,7 +10,7 @@
 # It does NOT report into chat — it logs. Chat reporting stays with the session
 # jobs while they exist. The point here is that the orders keep being managed.
 #
-# Install:  scripts/install-cron.sh
+# Install:  scripts/install-launchd.sh
 # Logs:     ~/Library/Logs/cockpit-autopilot.log
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -39,7 +39,11 @@ print(d.get("state") or (d.get("clock") or {}).get("state") or "unknown")
 ' 2>/dev/null || echo unreachable)
 case "$state" in
   open) ;;                                   # trade
-  closed|premarket|postmarket) 
+  premarket)
+    # The 9:21 refresh runs BEFORE the open on purpose, so the first entry
+    # check has ideas. It used to be skipped here along with everything else.
+    [ "${1:-}" = "refresh" ] || exit 0 ;;
+  closed|postmarket)
     [ "${1:-}" = "refresh" ] && log "skip refresh — market $state"
     exit 0 ;;
   *)
@@ -80,8 +84,10 @@ case "${1:-exits}" in
     run autotrade "$BASE/api/order/autotrade" ;;
   refresh)
     # The only billed call. Hourly.
+    # The fixed list plus whatever the watchlist maintenance has added.
+    extras=$(curl -s --max-time 15 "$BASE/api/watchlist/extras" | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)["symbols"]))' 2>/dev/null || true)
     code=$(curl -s -o /tmp/cockpit-sugg.json -w '%{http_code}' --max-time 300 \
-      "$BASE/api/suggestions?symbols=NVDA,TSLA,AAL,NOK,FEIM,QQQ,SPY&account=${ACCOUNT_SIZE}")
+      "$BASE/api/suggestions?symbols=NVDA,TSLA,AAL,NOK,FEIM,QQQ,SPY${extras:+,$extras}&account=${ACCOUNT_SIZE}")
     log "refresh http=$code $(python3 "$HERE/summarize.py" /tmp/cockpit-sugg.json)" ;;
   *) log "unknown mode ${1:-}"; exit 2 ;;
 esac

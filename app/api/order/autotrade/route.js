@@ -461,7 +461,7 @@ async function placeShares(idea, { dryRun }) {
   return { placed: true, order: orderResult, stopAttached: vet.computed.stop_attached, stopPrice: vet.computed.stop_price };
 }
 
-export async function GET(req) {
+async function run(req) {
   const params = new URL(req.url).searchParams;
   const dryRun = params.get("dryRun") === "true";
   const minConviction = Number(params.get("minConviction")) || MIN_CONVICTION;
@@ -772,4 +772,15 @@ export async function GET(req) {
   } catch (e) {
     return NextResponse.json({ error: String(e.message || e) }, { status: 502 });
   }
+}
+
+/* One run at a time. The Mac-side schedule and a chat-side check can fire in
+   the same second, and every gate here reads the journal before either run has
+   written to it — so two overlapping runs would each see "nothing open" and
+   both act. Queued, the second run sees what the first one did. */
+let queue = Promise.resolve();
+export function GET(req) {
+  const next = queue.then(() => run(req));
+  queue = next.catch(() => {});
+  return next;
 }
