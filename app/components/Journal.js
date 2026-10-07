@@ -91,6 +91,43 @@ function ClosePositionControl({ position, onClosed }) {
 const REFRESH_MS = 30000;
 const usd0 = (v) => v == null ? "—" : (v < 0 ? "-$" : "$") + Math.abs(v).toLocaleString("en-US", { maximumFractionDigits: 0 });
 
+const clockTime = (iso) => iso ? new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "never";
+const minutesAgo = (iso) => iso ? (Date.now() - new Date(iso).getTime()) / 60000 : Infinity;
+const marketHoursNow = () => {
+  const p = new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour12: false, weekday: "short", hour: "2-digit", minute: "2-digit" });
+  const [day, hm] = p.split(" "); const [h, m] = hm.split(":").map(Number); const t = (h % 24) * 60 + m;
+  return !/Sat|Sun/.test(day) && t >= 9 * 60 + 32 && t < 16 * 60;
+};
+
+// Proof of life for the background schedule: when each job last ran and what
+// it is waiting on. Red when the every-minute exit check has gone quiet.
+function AutomationStatus({ activity }) {
+  const a = activity || {};
+  const stale = marketHoursNow() && minutesAgo(a.exits?.at) > 3;
+  const watching = a.entries?.watching || [];
+  return (
+    <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--line)", fontSize: 12.5 }}>
+      {stale && <div className="err" style={{ marginBottom: 8 }}>The automatic exit check has not run for {Number.isFinite(minutesAgo(a.exits?.at)) ? Math.round(minutesAgo(a.exits?.at)) + " minutes" : "a while"}. Open positions are not being watched.</div>}
+      <div className="mono muted">
+        Automation · exits checked {clockTime(a.exits?.at)}{a.exits ? ` (${a.exits.checked} open, ${a.exits.closed} sold)` : ""}
+        {" · "}entries checked {clockTime(a.entries?.at)}{a.entries ? ` (${a.entries.placed} bought)` : ""}
+        {" · "}ideas refreshed {clockTime(a.refresh?.at)}{a.refresh ? ` (${a.refresh.ideas} ideas, ${a.refresh.setups?.length ?? 0} setup${a.refresh.setups?.length === 1 ? "" : "s"})` : ""}
+      </div>
+      {watching.length > 0 && (
+        <div style={{ marginTop: 6 }}>
+          <span className="muted">Waiting on: </span>
+          {watching.map((w, i) => (
+            <span key={w.symbol + i} style={{ marginRight: 14 }}>
+              <b>{w.symbol}</b> {String(w.action || "").toLowerCase()} <span className="muted">— {w.note.replace(/^Not triggered — /, "")}</span>
+            </span>
+          ))}
+        </div>
+      )}
+      {a.entries && !watching.length && <div className="muted" style={{ marginTop: 6 }}>No setup is waiting on a price right now — every current idea says wait.</div>}
+    </div>
+  );
+}
+
 // The account in one row: what the practice account has made since the
 // fresh start, what is open right now, and how much cash can still buy today.
 function AccountSummary() {
@@ -134,6 +171,7 @@ function AccountSummary() {
             <div className="metric"><div className="k">Cash to buy today</div><div className="v">{usd0(acct.available)}</div></div>
             <div className="metric"><div className="k">Settles tomorrow</div><div className="v">{usd0(acct.unsettled)}</div></div>
           </div>
+          <AutomationStatus activity={acct.activity} />
           <div className="mono muted" style={{ fontSize: 12, marginTop: 8, textAlign: "center" }}>
             {L.closes} closed trade{L.closes === 1 ? "" : "s"} ({L.wins} won, {L.losses} lost) · {L.open} open · fees paid {usd(acct.feesPaid)} · realized profit is after fees; open positions are valued at what they would sell for now
           </div>

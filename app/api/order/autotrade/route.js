@@ -7,6 +7,7 @@ import { reservedQuantities } from "../common";
 import { isLegacy, readBaseline } from "../../ledgerLib";
 import { journalOpen } from "../../journalLib";
 import { OPTION_HARD_PCT } from "../../sizingLib";
+import { markActivity } from "../../activityLib";
 import { buildOptionStopEstimate } from "../../../lib/orders";
 
 /* Paper-only autopilot: scans the most recent Ideas refresh, places the
@@ -115,6 +116,7 @@ const MAX_SYMBOL_EXPOSURE_PCT = 20;
 const MAX_TOTAL_EXPOSURE_PCT = Number(process.env.MAX_TOTAL_EXPOSURE_PCT) > 0 ? Number(process.env.MAX_TOTAL_EXPOSURE_PCT) : 100;
 const ACCOUNT_SIZE = Number(process.env.ACCOUNT_SIZE) > 0 ? Number(process.env.ACCOUNT_SIZE) : 1000;
 const DIRECTION_SIGN = { CALL: 1, BUY: 1, PUT: -1, SELL: -1 };
+const LAST_FLAT_BY_CLOSE_ENTRY_MIN = 15 * 60; // ET minutes; flat-by-close contracts are not opened after this
 const REENTRY_COOLDOWN_MIN = 45; // no re-entry on a just-exited symbol without a newer idea
 const MAX_ENTRIES_PER_SYMBOL_DAY = 2; // churn cap; each lot clears the exposure gate on its own
 const MAX_BATCH_AGE_MIN = 20; // non-conditional ideas: reject a batch older than this
@@ -685,6 +687,17 @@ async function run(req) {
         }
       }
 
+      /* A contract that must be flat by the close needs time to work. MU 10/9
+         $1090c was bought at 15:33 on 2026-10-07 with a forced sale due at 15:45:
+         twelve minutes in which it could only pay the spread and two fees. */
+      if (idea.flatByClose) {
+        const [hh, mm] = new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour12: false, hour: "2-digit", minute: "2-digit" }).split(":").map(Number);
+        if ((hh % 24) * 60 + mm >= LAST_FLAT_BY_CLOSE_ENTRY_MIN) {
+          results.push({ ...tag, placed: false, reason: "Short-dated contract that is sold before the close — too late in the day to open one (no entries after 15:00 ET)." });
+          continue;
+        }
+      }
+
       /* Re-check the position cap at the price actually being paid. Sizing
          happens when the idea is written; the order goes in later, at the live
          ask. MU 10/9 $1082.50c was sized at $14.27 (14.3% of the account) at
@@ -780,7 +793,21 @@ async function run(req) {
    both act. Queued, the second run sees what the first one did. */
 let queue = Promise.resolve();
 export function GET(req) {
-  const next = queue.then(() => run(req));
+  const next = queue.then(async () => {
+    const res = await run(req);
+    if (new URL(req.url).searchParams.get("dryRun") !== "true") {
+      try {
+        const d = await res.clone().json();
+        // The setups still waiting on their price, so the screen can show what
+        // the automation is watching and how far away each one is.
+        const watching = (d.results || [])
+          .filter((r) => r.placed || /^Not triggered|^Crossed/.test(String(r.reason || "")))
+          .map((r) => ({ symbol: r.symbol, action: r.action, placed: Boolean(r.placed), note: r.placed ? "bought" : String(r.reason).slice(0, 160) }));
+        markActivity("entries", { ok: !d.error, error: d.error ?? null, candidates: d.candidateCount ?? 0, placed: d.placed ?? 0, watching });
+      } catch {}
+    }
+    return res;
+  });
   queue = next.catch(() => {});
   return next;
 }

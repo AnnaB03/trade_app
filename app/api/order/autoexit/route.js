@@ -5,6 +5,7 @@ import { tradeFetch, accountId, isPaperSandbox } from "../../tradeClient";
 import { listJournal, listIdeas, updateJournalEntry } from "../../store";
 import { journalClose } from "../../journalLib";
 import { dailyBars } from "../../historyCache";
+import { markActivity } from "../../activityLib";
 
 /* Paper-only auto-EXIT — the other half of autotrade.js. That route only
    ever opens a position; until now, the only thing that could close one was
@@ -852,7 +853,16 @@ async function run(req) {
    both act. Queued, the second run sees what the first one did. */
 let queue = Promise.resolve();
 export function GET(req) {
-  const next = queue.then(() => run(req));
+  const next = queue.then(async () => {
+    const res = await run(req);
+    if (new URL(req.url).searchParams.get("dryRun") !== "true") {
+      try {
+        const d = await res.clone().json();
+        markActivity("exits", { ok: !d.error, error: d.error ?? null, checked: d.checked ?? 0, closed: d.closed ?? 0 });
+      } catch {}
+    }
+    return res;
+  });
   queue = next.catch(() => {});
   return next;
 }

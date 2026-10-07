@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { tradeFetch, accountId, BROKER, optionFeePerContract } from "../tradeClient";
 import { listJournal } from "../store";
 import { readBaseline, isLegacy } from "../ledgerLib";
+import { readActivity } from "../activityLib";
 
 /* The paper account at a glance, for the Journal tab and the book report.
    Cash: on the simulated cash account this is what decides whether another
@@ -23,6 +24,7 @@ export async function GET() {
       available: b.cash?.cash_available ?? null,
       unsettled: b.cash?.unsettled_funds ?? null,
       feesPaid: b.sim?.feesPaid ?? null, startCash: b.sim?.startCash ?? null,
+      activity: readActivity(),
       ledger: {
         since: baseline.freshStartAt ?? null,
         realized: done.reduce((s, r) => s + r.pnl, 0),

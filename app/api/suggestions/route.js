@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { markActivity } from "../activityLib";
 import { Anthropic } from "@anthropic-ai/sdk";
 import { tradier, asArray } from "../tradier";
 import { fetchStockNews } from "../fmp";
@@ -649,6 +650,10 @@ action is one of BUY, SELL, CALL, PUT, WAIT (BUY/SELL pair with vehicle SHARES; 
       if (isNotable(idea)) { try { touchNotable(idea.symbol); } catch {} }
     }
 
+    markActivity("refresh", {
+      ok: true, ideas: ideas.length,
+      setups: ideas.filter((i) => i.action !== "WAIT").map((i) => ({ symbol: i.symbol, action: i.action, triggerDirection: i.triggerDirection ?? null, triggerPrice: i.triggerPrice ?? null })),
+    });
     return NextResponse.json({ ideas, market_state: clock.state, timestamp: new Date().toISOString() });
   } catch (e) {
     console.error("Suggestions error:", e);
