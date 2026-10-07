@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { vetOrder, vetEquityOrder, submitOrder, confirmOrderFill, confirmEntryFill, reservedQuantities } from "../common";
-import { tradier, asArray, tradierDelayed } from "../../tradier";
-import { tradeFetch, accountId } from "../../tradeClient";
+import { tradier, asArray } from "../../tradier";
+import { tradeFetch, accountId, isPaperSandbox } from "../../tradeClient";
 import { listJournal, listIdeas, updateJournalEntry } from "../../store";
 import { journalClose } from "../../journalLib";
 import { dailyBars } from "../../historyCache";
@@ -175,7 +175,9 @@ async function underlyingDayRange(symbol) {
     const last = q?.last != null ? Number(q.last) : null;
     const high = q?.high != null ? Number(q.high) : last;
     const low = q?.low != null ? Number(q.low) : last;
-    return { last, high, low };
+    // The bid is what a share sale realises; last can sit above it.
+    const bid = Number(q?.bid) > 0 ? Number(q.bid) : null;
+    return { last, high, low, bid };
   } catch {
     return null;
   }
@@ -183,10 +185,10 @@ async function underlyingDayRange(symbol) {
 
 async function optionQuote(occ) {
   try {
-    /* SANDBOX feed on purpose — this values a PAPER position, so the right
-       clock is the one the fill engine and the user's screen both use. See
-       tradierDelayed in tradier.js for the measurement that settled it. */
-    const d = await tradierDelayed(`/markets/quotes?symbols=${encodeURIComponent(occ)}`);
+    /* The real-time feed, the only one a real account has. This used to read
+       the sandbox's delayed feed so the mark matched the sandbox's fills; with
+       fills simulated on real-time quotes there is one clock for everything. */
+    const d = await tradier(`/markets/quotes?symbols=${encodeURIComponent(occ)}`);
     const q = asArray(d?.quotes?.quote)?.[0];
     const bid = Number(q?.bid), ask = Number(q?.ask);
     return {
@@ -293,6 +295,7 @@ async function cancelResting(orderId) {
    more than the position) and wrong for the gain, which would be overstated by
    the unfilled remainder. Share orders here now run to thousands of shares, so
    a partial is a question of when, not whether. */
+const ENTRY_REST_MAX_MIN = 5; // how long an unfilled entry may rest before it is withdrawn
 const heldQuantity = (pos) => Number(pos.entryFilledQuantity ?? pos.entryQuantity) || 0;
 
 async function closeOption(pos, exitPrice, { duration = "day" } = {}) {
@@ -351,7 +354,9 @@ export async function GET(req) {
        Latent today: no idea in the ledger carries a strategy tag yet. It stops
        being latent the first time the sweeps detector logs one. */
     const allIdeas = listIdeas().filter((i) => !i.strategy);
-    const reserved = await reservedQuantities();
+    // Only the sandbox freezes quantity behind a stop; anywhere else the stop is
+    // simply cancelled before the sell (see cancelResting).
+    const reserved = isPaperSandbox() ? await reservedQuantities() : null;
     const results = [];
 
     for (let pos of open) {
@@ -371,6 +376,24 @@ export async function GET(req) {
             try { updateJournalEntry(pos.id, { entryFillPrice: got.price, entryFilledQuantity: got.quantity }); } catch {}
           }
         }
+      }
+      /* Still no fill: this row is a working ORDER, not a position, and no
+         exit rule applies to it. Found on the first simulated-broker test: a buy
+         resting below the market was read as "up 211%" against its own limit,
+         and the attempt to sell it cancelled the entry order on the way. The
+         sandbox filled nearly everything on arrival, so this never showed.
+         An entry is priced at the ask to fill now. If the market has moved off
+         it, a fill minutes later happens on a pullback rather than on the
+         breakout the idea was written for, so the order is withdrawn instead. */
+      if (pos.entryFillPrice == null && pos.entryOrderId) {
+        const restingMin = (Date.now() - new Date(pos.entryAt || pos.createdAt).getTime()) / 60000;
+        if (restingMin >= ENTRY_REST_MAX_MIN && !dryRun) {
+          await cancelResting(pos.entryOrderId);
+          results.push({ symbol: pos.symbol, closed: false, reason: `entry order unfilled after ${restingMin.toFixed(0)} min — cancelled rather than left to fill on a pullback` });
+        } else {
+          results.push({ symbol: pos.symbol, closed: false, reason: `entry order still working (${restingMin.toFixed(0)} min) — not a position yet` });
+        }
+        continue;
       }
       const dir = pos.vehicle === "OPTION"
         ? (pos.optionType === "call" ? 1 : -1)
@@ -455,32 +478,20 @@ export async function GET(req) {
       // Options: price the contract itself up front, both to judge the
       // premium gain below and to reuse as the closing price further down.
       const oq = pos.vehicle === "OPTION" ? await optionQuote(pos.occ) : null;
-      /* Value the contract at the MID, not the bid, for every exit DECISION.
-         The bid systematically understates what a sale here realises, because
-         the sandbox order engine prices off ~15-minute-delayed data and fills
-         above the real-time bid. Measured on the AVGO 10/23 $355c: bid 12.30,
-         ask 12.65, mid 12.475, actual fill 12.45 — the mid predicted the fill
-         to 2.5 cents while the bid was off by 15 cents, which is $120 on 8
-         contracts. Every option sold today filled at or above a limit set at
-         the bid. At the bid that position read +$160 and would NOT have
-         cleared the $200 end-of-day bar; it sold for +$280.
-         The sell is still SUBMITTED at the bid (exitPrice = livePremiumBid
-         below), so the fill stays assured — only the measurement moves.
-         Tension worth naming: the peak seeding just below deliberately
-         subtracts the spread from the day's high, decided after an MRVL
-         "+$515" turned out to be ~+$240 once bid-adjusted. That was about not
-         inventing a peak from a stale last-trade print, which still holds —
-         so both now use the same mid convention (half the spread) and are
-         measured consistently, rather than a bid-adjusted peak being compared
-         against a mid-based current, which would flatter every giveback. */
+      /* Value the contract at the BID: that is what selling it right now
+         realises, and the sell is submitted there. This was the MID for a
+         while, because the sandbox filled above the real-time bid (its fill
+         feed lagged), so the bid understated a sale. That was a property of the
+         simulator's lag, not of a market. On one real-time feed a marketable
+         sell gets the bid, so a gain measured at the mid is money that is not
+         there — and the end-of-day bar and the trail both bank "gains". */
       const livePremiumBid = oq ? (oq.bid > 0 ? oq.bid : oq.mid) : null;
-      const livePremium = oq
-        ? (oq.bid > 0 && oq.ask > 0 ? (oq.bid + oq.ask) / 2 : (oq.bid > 0 ? oq.bid : oq.mid))
-        : null;
+      const livePremium = livePremiumBid;
       const entryPremium = Number(pos.entryFillPrice ?? pos.entryLimitPrice) || null;
       // Gain on what was actually paid, measured on the contract premium for
       // options and on the share price for shares.
-      const markNow = pos.vehicle === "OPTION" ? livePremium : underlyingPx;
+      const sharesBid = range?.bid ?? underlyingPx;
+      const markNow = pos.vehicle === "OPTION" ? livePremium : (dir > 0 ? sharesBid : underlyingPx);
       /* An OPTION position here is always LONG premium, so it gains when its
          own premium rises, whether it is a call or a put. This used to require
          `dir > 0`, and dir is -1 for a put (it describes the UNDERLYING's
@@ -538,8 +549,8 @@ export async function GET(req) {
          own quote.high and so on the same clock. */
       const rawHigh = enteredToday ? null : dayHigh;
       const spread = pos.vehicle === "OPTION" && oq?.ask > 0 && oq?.bid >= 0 ? oq.ask - oq.bid : 0;
-      // Half the spread, matching the mid the current mark now uses.
-      const todayHigh = rawHigh > 0 ? Math.max(0, rawHigh - spread / 2) : null;
+      // The whole spread, matching the bid the current mark uses.
+      const todayHigh = rawHigh > 0 ? Math.max(0, rawHigh - spread) : null;
       let peakMark = Math.max(Number(pos.peakMark) || 0, Number(todayHigh) || 0);
       if (markNow > 0 && markNow > peakMark) peakMark = markNow;
       if (!dryRun && peakMark > (Number(pos.peakMark) || 0)) {
@@ -580,7 +591,7 @@ export async function GET(req) {
       if (!exit && pos.exitAtBreakeven && markNow > 0 && entryPremium > 0 && markNow >= entryPremium) {
         exit = {
           tag: "breakeven",
-          detail: `Mark $${markNow} (mid) is at or above the $${entryPremium} entry — closing flat-or-better now rather than resting an order`,
+          detail: `Mark $${markNow} (bid) is at or above the $${entryPremium} entry — closing flat-or-better now rather than resting an order`,
         };
       }
 
@@ -739,13 +750,12 @@ export async function GET(req) {
 
       let exitPrice, closeResult;
       if (pos.vehicle === "OPTION") {
-        // Decide on the mid, SELL at the bid: a limit at the bid is the one
-        // that actually fills, and the sandbox has filled above it every time.
-        exitPrice = livePremiumBid ?? livePremium;
+        // A limit at the bid is the one that fills.
+        exitPrice = livePremiumBid;
         if (!(exitPrice > 0)) { results.push({ symbol: pos.symbol, closed: false, reason: "no live quote to close against" }); continue; }
         closeResult = await closeOption(pos, exitPrice);
       } else {
-        exitPrice = underlyingPx;
+        exitPrice = dir > 0 ? sharesBid : underlyingPx;
         if (!(exitPrice > 0)) { results.push({ symbol: pos.symbol, closed: false, reason: "no live quote to close against" }); continue; }
         closeResult = await closeShares(pos, exitPrice);
       }

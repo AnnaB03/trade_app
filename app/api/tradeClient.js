@@ -1,6 +1,19 @@
-/* Phase 3 trading client — SANDBOX ONLY.
+/* Trading client — PAPER ONLY, two possible paper brokers.
+
+   BROKER=sim (the default): the simulated cash account in simBroker.js, which
+   fills against real-time quotes. This is the practice account.
+   BROKER=sandbox: the Tradier sandbox, kept only as a plumbing check. Its
+   fills come off a feed ~15 minutes behind the quotes the decisions read, so
+   nothing learned there about timing or price carries over to real money.
+
    The lock below is hard-coded per the build brief: no env var may point order
    routes at live Tradier in this build. */
+import { simFetch, SIM_ACCOUNT, OPTION_FEE } from "./simBroker";
+
+export const BROKER = String(process.env.BROKER || "sim").toLowerCase() === "sandbox" ? "sandbox" : "sim";
+// What an option contract costs per side at this broker, for the journal's P&L.
+export const optionFeePerContract = () => (BROKER === "sim" ? OPTION_FEE : 0);
+
 const SANDBOX = "https://sandbox.tradier.com/v1";
 const TRADE_BASE = process.env.TRADIER_TRADE_BASE || SANDBOX;
 const TOKEN = process.env.TRADIER_TRADE_TOKEN || process.env.TRADIER_TOKEN_SANDBOX || process.env.TRADIER_TOKEN;
@@ -20,9 +33,10 @@ export function sandboxLockError() {
    stop on request, and going without one there is simply unprotected risk,
    so anything gated on this must fail CLOSED — protection on — the moment
    orders are not sandbox-bound. */
-export const isPaperSandbox = () => TRADE_BASE === SANDBOX;
+export const isPaperSandbox = () => BROKER === "sandbox" && TRADE_BASE === SANDBOX;
 
 export async function tradeFetch(path, { method = "GET", form } = {}) {
+  if (BROKER === "sim") return simFetch(path, { method, form });
   if (!TOKEN) throw new Error("Server is missing TRADIER_TRADE_TOKEN (or TRADIER_TOKEN_SANDBOX) — set it in .env.local.");
   const res = await fetch(`${SANDBOX}${path}`, {
     method,
@@ -59,6 +73,7 @@ export async function tradeFetch(path, { method = "GET", form } = {}) {
 
 let cachedAccount = null;
 export async function accountId() {
+  if (BROKER === "sim") return SIM_ACCOUNT;
   if (process.env.TRADIER_ACCOUNT_ID) return process.env.TRADIER_ACCOUNT_ID;
   if (cachedAccount) return cachedAccount;
   const d = await tradeFetch("/user/profile");

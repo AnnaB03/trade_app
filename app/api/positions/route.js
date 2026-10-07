@@ -4,7 +4,7 @@ import { tradier, asArray } from "../tradier";
 import { parseOcc } from "../../lib/orders";
 import { listJournal } from "../store";
 
-/* Live positions from the Tradier sandbox account, enriched with a current
+/* Live positions from the paper account (see tradeClient.js), enriched with a current
    quote (for unrealized P&L) and cross-referenced with the open journal
    entry for that contract/symbol, if this app is the one that opened it —
    that's what lets the Positions view show the original plan (thesis,
@@ -31,7 +31,9 @@ export async function GET() {
       const isOption = Boolean(parsed);
       const underlying = parsed?.underlying ?? p.symbol;
       const q = quoteBySym[p.symbol];
-      const last = q?.last != null ? Number(q.last) : null;
+      // Valued at the bid — what selling it now would realise — falling back
+      // to the last trade when there is no bid (market closed).
+      const last = Number(q?.bid) > 0 ? Number(q.bid) : (q?.last != null ? Number(q.last) : null);
       const costBasis = Number(p.cost_basis) || null;
       const qty = Number(p.quantity) || 0;
       const mult = isOption ? 100 : 1;

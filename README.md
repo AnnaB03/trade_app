@@ -5,7 +5,13 @@ defined-risk position builder with hard safety gates, AI-generated trade
 ideas that carry a real plan (entry trigger, stop, target, conviction) and
 grade themselves against what actually happened, and a trade journal.
 
-Order routes are hard-locked to Tradier's **sandbox** — paper trading only.
+Paper trading only. Orders go to a **simulated cash account**
+(`app/api/simBroker.js`) that fills at the real-time bid and ask, charges a
+per-contract option fee, and lets only settled cash buy — the rules of the
+real Tradier cash account this is practice for. There is one price feed, the
+real-time one; nothing is filled or valued off a delayed feed. `BROKER=sandbox`
+sends orders to the Tradier sandbox instead, as a plumbing check only: its
+fills lag the quotes by ~15 minutes, so its P&L means nothing.
 
 ## Setup
 
@@ -64,11 +70,11 @@ put the cap back.
 
 Autopilot trades now close themselves out in the Journal. Fills, bracket
 stop-outs, and entry limits that expired unfilled are read back from the
-Tradier sandbox (`app/api/journalReconcile.js`).
+paper broker (`app/api/journalReconcile.js`).
 
 ## Data
 
-- **Tradier** — quotes, chains, history, extended-hours prints, sandbox orders.
+- **Tradier** — quotes, chains, history, extended-hours prints.
 - **FMP** (optional, Starter plan+) — news, earnings/macro calendar, analyst
   targets, top movers.
 - **Anthropic** — powers the Ideas tab.

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { listJournal, listIdeas } from "../store";
 import { tradier } from "../tradier";
-import { tradeFetch, accountId, asArray } from "../tradeClient";
+import { tradeFetch, accountId, asArray, BROKER } from "../tradeClient";
 
 /* End-to-end health, for the scheduled jobs to gate on.
 
@@ -35,7 +35,7 @@ export async function GET() {
     const acct = await accountId();
     const d = await tradeFetch(`/accounts/${acct}/positions`);
     const pos = asArray(d?.positions?.position);
-    checks.broker = { ok: true, account: acct, positions: pos.length };
+    checks.broker = { ok: true, broker: BROKER, account: acct, positions: pos.length };
   } catch (e) { checks.broker = { ok: false, error: String(e.message || e) }; }
 
   const ok = Object.values(checks).every((c) => c.ok);

@@ -822,7 +822,7 @@ function OptionStageButton({ idea }) {
     try {
       const d = await submitLegOrder("/api/order/place", idea, ack, activeStop);
       const stopNote = d.computed?.stop_attached ? ` A protective stop is resting GTC at $${Number(d.computed.stop_price).toFixed(2)} premium.` : "";
-      setState({ status: "placed", ack, msg: `Sent to Tradier (paper) — order #${d.order?.id ?? "?"}, status ${d.order?.status ?? "submitted"}.${stopNote} Check the Orders tab in your Tradier sandbox account.` });
+      setState({ status: "placed", ack, msg: `Sent to the paper account — order #${d.order?.id ?? "?"}, status ${d.order?.status ?? "submitted"}.${stopNote} It appears in the Journal tab once filled.` });
     } catch (e) {
       if (e.needsSpreadAck) setState({ status: "needs_ack_place", ack, msg: `${e.message} Send anyway?` });
       else setState({ status: "error", ack, msg: e.message });
@@ -904,7 +904,7 @@ function ShareStageButton({ idea }) {
     try {
       const d = await submit("/api/order/place", {});
       const stopNote = d.computed?.stop_attached ? ` A protective stop is resting GTC at $${Number(d.computed.stop_price).toFixed(2)}.` : "";
-      setState({ status: "placed", msg: `Sent to Tradier (paper) — order #${d.order?.id ?? "?"}, status ${d.order?.status ?? "submitted"}.${stopNote} Check the Orders tab in your Tradier sandbox account.` });
+      setState({ status: "placed", msg: `Sent to the paper account — order #${d.order?.id ?? "?"}, status ${d.order?.status ?? "submitted"}.${stopNote} It appears in the Journal tab once filled.` });
     } catch (e) {
       setState({ status: "error", msg: e.message });
     }
@@ -1284,8 +1284,8 @@ export default function Page() {
               title={status.data === "realtime" ? "Production Tradier — real-time quotes" : "Sandbox Tradier — quotes are ~15 min delayed. Set TRADIER_TOKEN (production) for real-time."}>
               {status.data === "realtime" ? "● DATA: REALTIME" : "● DATA: DELAYED (sandbox)"}
             </span>
-            <span className="badge" title="Order routes are hard-locked to the Tradier sandbox — staged orders never touch real money.">
-              ORDERS: PAPER
+            <span className="badge" title={status.broker === "sandbox" ? "Orders go to the Tradier sandbox — never real money." : "Orders go to a simulated cash account filled at the real-time bid and ask — never real money."}>
+              {status.broker === "sandbox" ? "ORDERS: PAPER (sandbox)" : "ORDERS: PAPER (simulated fills)"}
             </span>
           </span>
         )}

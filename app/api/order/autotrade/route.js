@@ -268,6 +268,16 @@ async function extremeSince(symbol, sinceIso) {
   }
 }
 
+async function liveAsk(symbol) {
+  try {
+    const d = await tradier(`/markets/quotes?symbols=${encodeURIComponent(symbol)}`);
+    const q = asArray(d?.quotes?.quote)?.[0];
+    return Number(q?.ask) > 0 ? Number(q.ask) : null;
+  } catch {
+    return null;
+  }
+}
+
 async function liveQuote(symbol) {
   try {
     const d = await tradier(`/markets/quotes?symbols=${encodeURIComponent(symbol)}`);
@@ -298,6 +308,12 @@ async function liveQuote(symbol) {
 // cancelled or modified, so winners freeze and only losses can be realised).
 // On a real broker that workaround would just be unprotected risk.
 const ATTACH_STOPS = !isPaperSandbox() || process.env.PAPER_ATTACH_STOPS === "true";
+
+/* What a buy is priced at: the ASK. Entries used to be submitted at the mid,
+   which the sandbox would fill from its lagging feed. On a real-time market a
+   buy that must fill now pays the ask, so the order is priced there and every
+   size and exposure gate counts that cost, not a mid nobody sells at. */
+const payPrice = (leg) => (Number(leg?.ask) > 0 ? Number(leg.ask) : leg?.mid);
 
 // Attempt one specific contract. Returns { ok: true, orderResult, vet } or
 // { ok: false, error } — never throws, so the caller can try alternates.
@@ -354,13 +370,13 @@ async function placeOption(idea, { dryRun, openOccs }) {
   // work per idea, so even a +127% winner returned a few hundred dollars.
   const contractQty = Math.max(1, Number(idea.sizing?.contracts) || 1);
   const stopEst = idea.invalidation != null && leg.delta != null
-    ? buildOptionStopEstimate({ entryPremium: leg.mid ?? leg.ask, entryUnderlying: idea.entryPrice, invalidation: idea.invalidation, delta: leg.delta })
+    ? buildOptionStopEstimate({ entryPremium: payPrice(leg), entryUnderlying: idea.entryPrice, invalidation: idea.invalidation, delta: leg.delta })
     : null;
   if (dryRun) {
-    return { placed: false, dryRun: true, wouldPlace: { occ: leg.occ, strike: leg.strike, premium: leg.mid ?? leg.ask, stopEst } };
+    return { placed: false, dryRun: true, wouldPlace: { occ: leg.occ, strike: leg.strike, premium: payPrice(leg), stopEst } };
   }
 
-  let attempt = await attemptOptionOrder({ occ: leg.occ, strike: leg.strike, action: idea.action, premium: leg.mid ?? leg.ask, stopEst, ideaId: idea.id, qty: contractQty });
+  let attempt = await attemptOptionOrder({ occ: leg.occ, strike: leg.strike, action: idea.action, premium: payPrice(leg), stopEst, ideaId: idea.id, qty: contractQty });
   let usedOcc = leg.occ, usedStrike = leg.strike, substituted = false;
 
   // Tradier's sandbox order book recognizes only a narrower set of strikes
@@ -382,7 +398,7 @@ async function placeOption(idea, { dryRun, openOccs }) {
       const altStopEst = idea.invalidation != null && leg.delta != null && mid != null
         ? buildOptionStopEstimate({ entryPremium: mid, entryUnderlying: idea.entryPrice, invalidation: idea.invalidation, delta: leg.delta })
         : null;
-      const r = await attemptOptionOrder({ occ: c.occ, strike: c.strike, action: idea.action, premium: mid ?? c.ask, stopEst: altStopEst, ideaId: idea.id, qty: contractQty });
+      const r = await attemptOptionOrder({ occ: c.occ, strike: c.strike, action: idea.action, premium: c.ask > 0 ? c.ask : mid, stopEst: altStopEst, ideaId: idea.id, qty: contractQty });
       if (r.ok) { attempt = r; usedOcc = c.occ; usedStrike = c.strike; substituted = true; break; }
     }
   }
@@ -406,7 +422,8 @@ async function placeOption(idea, { dryRun, openOccs }) {
 }
 
 async function placeShares(idea, { dryRun }) {
-  const entry = Number(idea.entryPrice);
+  // A share buy pays the ask too; the idea's price is the last trade.
+  const entry = (idea.action !== "SELL" && !dryRun ? await liveAsk(idea.symbol) : null) ?? Number(idea.entryPrice);
   if (!(entry > 0)) return { placed: false, reason: "No entry price on this idea." };
   const sized = idea.sizing?.vehicle === "SHARES" ? idea.sizing.shares : null;
   // Sandbox needs whole shares — fractional sizing (fine on real Robinhood)
@@ -469,7 +486,7 @@ export async function GET(req) {
        could only ever have reported FROZEN on it.
        A failed lookup returns null and is treated as "unknown": entries are
        allowed through, since one broker hiccup should not halt all trading. */
-    const reserved = await reservedQuantities();
+    const reserved = isPaperSandbox() ? await reservedQuantities() : null; // a sandbox-only defect
 
     // Conditional ideas (have a triggerPrice) get a fresh quote right now,
     // independent of batch age — see the file header for why. Fetched once
@@ -606,9 +623,10 @@ export async function GET(req) {
         // entryFillPrice null — nothing was ever tested, so those do not consume
         // the idea. BEAT's 18,929-share order found no position and is one of them.
         const consumed = listJournal().find((r) =>
-          r.ideaId && r.ideaId === idea.id && r.status === "closed" && r.entryFillPrice != null);
+          // "parked": acted on in the sandbox before practice moved off it.
+          r.ideaId && r.ideaId === idea.id && (r.status === "closed" || r.status === "parked") && r.entryFillPrice != null);
         if (consumed) {
-          results.push({ ...tag, placed: false, reason: `Idea ${idea.id} already carried a ${idea.symbol} position to a close on ${String(consumed.exitAt).slice(0, 16)} (${consumed.exitReasonTag ?? "exit"}, P&L ${consumed.pnl == null ? "unbooked" : `$${Number(consumed.pnl).toFixed(0)}`}) — a played-out thesis is consumed, not re-tradeable.` });
+          results.push({ ...tag, placed: false, reason: `Idea ${idea.id} already carried a ${idea.symbol} position to a close on ${String(consumed.exitAt ?? consumed.parkedAt).slice(0, 16)} (${consumed.exitReasonTag ?? "exit"}, P&L ${consumed.pnl == null ? "unbooked" : `$${Number(consumed.pnl).toFixed(0)}`}) — a played-out thesis is consumed, not re-tradeable.` });
           continue;
         }
       }
@@ -672,7 +690,7 @@ export async function GET(req) {
         const baseline = readBaseline();
         const held = openJournal.filter((r) => r.symbol === idea.symbol && !isLegacy(r, baseline)).reduce((s2, r) => s2 + costOf(r), 0);
         const adding = idea.vehicle === "OPTION"
-          ? (Number(idea.leg?.mid ?? idea.leg?.ask) || 0) * 100 * Math.max(1, Number(idea.sizing?.contracts) || 1)
+          ? (Number(payPrice(idea.leg)) || 0) * 100 * Math.max(1, Number(idea.sizing?.contracts) || 1)
           : (Number(idea.sizing?.dollarCost) || 0);
         const pctAfter = ((held + adding) / ACCOUNT_SIZE) * 100;
         /* No `held > 0` guard. It used to be there, and it made this gate a
@@ -705,7 +723,7 @@ export async function GET(req) {
         ));
         const deployed = live.reduce((s2, r) => s2 + costOf(r), 0) + deployedThisRun;
         const adding = idea.vehicle === "OPTION"
-          ? (Number(idea.leg?.mid ?? idea.leg?.ask) || 0) * 100 * Math.max(1, Number(idea.sizing?.contracts) || 1)
+          ? (Number(payPrice(idea.leg)) || 0) * 100 * Math.max(1, Number(idea.sizing?.contracts) || 1)
           : (Number(idea.sizing?.dollarCost) || 0);
         const ceiling = (ACCOUNT_SIZE * MAX_TOTAL_EXPOSURE_PCT) / 100;
         if (deployed + adding > ceiling) {

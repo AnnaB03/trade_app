@@ -55,7 +55,7 @@ function ClosePositionControl({ position, onClosed }) {
     setState((s) => ({ ...s, status: "placing" }));
     try {
       const d = await submit("/api/order/place");
-      setState({ status: "placed", msg: `Sent to Tradier (paper) — order #${d.order?.id ?? "?"}, status ${d.order?.status ?? "submitted"}.` });
+      setState({ status: "placed", msg: `Sent to the paper account — order #${d.order?.id ?? "?"}, status ${d.order?.status ?? "submitted"}.` });
       onClosed?.();
     } catch (e) { setState({ status: "error", msg: e.message }); }
   };
@@ -76,7 +76,7 @@ function ClosePositionControl({ position, onClosed }) {
       {state.status === "previewed" ? (
         <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
           <span className="mono muted" style={{ fontSize: 12 }}>{state.msg}</span>
-          <button className="chip" onClick={place} disabled={state.status === "placing"}>{state.status === "placing" ? "Sending…" : "Send to Tradier (paper)"}</button>
+          <button className="chip" onClick={place} disabled={state.status === "placing"}>{state.status === "placing" ? "Sending…" : "Send to the paper account"}</button>
         </div>
       ) : (
         <button className="chip" onClick={preview} disabled={state.status === "previewing" || !reason.trim() || !price} style={{ alignSelf: "flex-start" }}>
@@ -105,7 +105,7 @@ function PositionsPanel() {
   return (
     <div className="card" style={{ overflowX: "auto" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-        <span className="label" style={{ margin: 0 }}>Open positions · live, from your Tradier sandbox account</span>
+        <span className="label" style={{ margin: 0 }}>Open positions · paper account, valued at the real-time bid</span>
         <button className="chip" onClick={load} disabled={loading}>{loading ? "Loading…" : "Refresh"}</button>
       </div>
       {err && <div className="err">{err}</div>}

@@ -4,6 +4,7 @@
    journalClose when an existing one is closed out. */
 import { listIdeas, updateIdea, appendJournalEntry, updateJournalEntry } from "./store";
 import { gradeAt } from "./gradeLib";
+import { BROKER, optionFeePerContract } from "./tradeClient";
 
 // Realized dollar P&L from actual entry/exit limit prices — the ground truth
 // for "what happened," independent of the underlying-price grading below.
@@ -25,7 +26,10 @@ export function realizedPnl(entry, exitFillPrice) {
   const exitPx = Number(exitFillPrice);
   if (!(qty > 0) || !Number.isFinite(entryPx) || !Number.isFinite(exitPx)) return { pnl: null, pnlPct: null };
   const longMult = entry.side === "sell_short" ? -1 : 1; // the OPTION vehicle is always long in this build
-  const pnl = (exitPx - entryPx) * qty * mult * longMult;
+  // Commission on both sides, at the rate stamped on the row when it was
+  // opened (zero on rows from before fees were modelled).
+  const fees = entry.vehicle === "OPTION" ? (Number(entry.feePerContract) || 0) * qty * 2 : 0;
+  const pnl = (exitPx - entryPx) * qty * mult * longMult - fees;
   const cost = Math.abs(entryPx * qty * mult);
   return { pnl, pnlPct: cost > 0 ? (pnl / cost) * 100 : null };
 }
@@ -80,6 +84,9 @@ export function journalOpen({ ideaId, thesis, vehicle, symbol, occ, strike, opti
     // A short-dated fallback contract decays ~25% of its price a day, so it is
     // closed at the end of the day whatever its P&L. See autoexit's eod_flat.
     closeByEod: closeByEod ?? idea?.flatByClose ?? false,
+    // Which paper broker holds it, and what a contract costs there per side.
+    broker: BROKER,
+    feePerContract: vehicle === "OPTION" ? optionFeePerContract() : 0,
   });
 }
 

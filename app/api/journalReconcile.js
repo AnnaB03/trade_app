@@ -12,7 +12,7 @@
 import { tradeFetch, accountId, asArray } from "./tradeClient";
 import { tradier, asArray as asArr } from "./tradier";
 import { listJournal, updateJournalEntry } from "./store";
-import { journalClose } from "./journalLib";
+import { journalClose, realizedPnl } from "./journalLib";
 
 const MIN_INTERVAL_MS = 60 * 1000;
 let lastRun = 0;
@@ -139,14 +139,12 @@ export async function reconcileJournal({ force = false } = {}) {
       const leg = legs.find((l) => Number(l.exec_quantity) > 0 && Number(l.avg_fill_price) > 0) || o;
       const px = Number(leg.avg_fill_price), qty = Number(leg.exec_quantity) || Number(j.exitQuantity) || 0;
       if (!(px > 0) || !(qty > 0)) continue;
-      const entryPx = Number(j.entryFillPrice ?? j.entryLimitPrice);
-      const mult = j.vehicle === "OPTION" ? 100 : 1;
-      if (!Number.isFinite(entryPx) || !(entryPx > 0)) continue;
-      const pnl = (px - entryPx) * qty * mult * (j.side === "sell_short" ? -1 : 1);
-      const cost = Math.abs(entryPx * qty * mult);
+      // Same arithmetic as a normal close, fees included.
+      const { pnl, pnlPct } = realizedPnl({ ...j, entryQuantity: qty }, px);
+      if (pnl == null) continue;
       updateJournalEntry(j.id, {
         exitFillPrice: px, exitOrderStatus: "filled", exitQuantity: qty,
-        pnl, pnlPct: cost > 0 ? (pnl / cost) * 100 : null,
+        pnl, pnlPct,
         exitReason: `${String(j.exitReason || "").split(" [submitted at")[0]} [P&L booked on a later pass from the broker's confirmed fill $${px}; the post-submit confirmation had lost the race]`,
       });
       updated++;
