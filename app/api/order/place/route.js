@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { vetOrder, vetEquityOrder, submitOrder, confirmOrderFill } from "../common";
 import { tradier, asArray } from "../../tradier";
 import { parseOcc } from "../../../lib/orders";
+import { tradeFetch, accountId } from "../../tradeClient";
 import { journalOpen, journalClose } from "../../journalLib";
 import { findOpenJournalEntry, listJournal, updateJournalEntry } from "../../store";
 
@@ -52,6 +53,18 @@ export async function POST(req) {
         { error: vet.error, gates: vet.gates ?? null, needs_ack: vet.needs_ack ?? false, figure: vet.figure ?? null, needs_spread_ack: vet.needs_spread_ack ?? false, worst_spread: vet.worst_spread ?? null },
         { status: vet.status }
       );
+    }
+
+    /* A close has to release the position's own protective stop first: the stop
+       is a working sell for the same quantity, and a broker will not accept two
+       sells against one position. autoexit already does this; a close from the
+       Journal tab did not, and was refused. */
+    if (closing) {
+      const occ = body.legs?.[0]?.occ;
+      const row = findOpenJournalEntry((r) => (isEquity ? r.vehicle === "SHARES" && r.symbol === vet.underlying : r.occ === occ));
+      if (row?.entryOrderId) {
+        try { await tradeFetch(`/accounts/${await accountId()}/orders/${row.entryOrderId}`, { method: "DELETE" }); } catch {}
+      }
     }
 
     const orderResult = (await submitOrder(vet.form))?.order ?? null;

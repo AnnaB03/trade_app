@@ -295,6 +295,7 @@ async function cancelResting(orderId) {
    more than the position) and wrong for the gain, which would be overstated by
    the unfilled remainder. Share orders here now run to thousands of shares, so
    a partial is a question of when, not whether. */
+const SHORT_DATED_TARGET_PCT = 7; // sell a closeByEod contract outright at this gain
 const ENTRY_REST_MAX_MIN = 5; // how long an unfilled entry may rest before it is withdrawn
 const heldQuantity = (pos) => Number(pos.entryFilledQuantity ?? pos.entryQuantity) || 0;
 
@@ -645,6 +646,14 @@ export async function GET(req) {
         if (hm[0] * 60 + hm[1] >= 15 * 60 + 45) {
           exit = { tag: "eod_flat", detail: `Flat by the close: short-dated contract, up/down ${gainUsd != null ? "$" + gainUsd.toFixed(0) : "?"}, not carrying overnight decay` };
         }
+      }
+      /* Fixed target for the same short-dated contracts. Everywhere else a
+         trailing exit beat a fixed one in the replay, but these lose about a
+         quarter of their price a day and move fast: MU 10/9 $1082.50c traded
+         from $19.25 to $21.10 and back inside ten minutes on 2026-10-07 and was
+         never sold. A gain here is taken when it is on the table. */
+      if (!exit && pos.closeByEod && gainPct != null && gainPct >= SHORT_DATED_TARGET_PCT) {
+        exit = { tag: "quick_target", detail: `Up ${gainPct.toFixed(1)}% ($${entryPremium} to $${markNow} at the bid) — at the ${SHORT_DATED_TARGET_PCT}% target for a short-dated contract, taking it` };
       }
       if (!exit && eod && gainUsd != null && gainUsd >= eodMin) {
         exit = {
