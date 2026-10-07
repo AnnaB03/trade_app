@@ -88,6 +88,61 @@ function ClosePositionControl({ position, onClosed }) {
   );
 }
 
+const REFRESH_MS = 30000;
+const usd0 = (v) => v == null ? "—" : (v < 0 ? "-$" : "$") + Math.abs(v).toLocaleString("en-US", { maximumFractionDigits: 0 });
+
+// The account in one row: what the practice account has made since the
+// fresh start, what is open right now, and how much cash can still buy today.
+function AccountSummary() {
+  const [acct, setAcct] = useState(null);
+  const [openPnl, setOpenPnl] = useState(null);
+  const [err, setErr] = useState("");
+  const [at, setAt] = useState(null);
+
+  const load = useCallback(async () => {
+    try {
+      const [a, p] = await Promise.all([getJSON("/api/account"), getJSON("/api/positions")]);
+      setAcct(a);
+      const list = p.positions || [];
+      setOpenPnl(list.length ? list.reduce((s, x) => s + (Number(x.unrealizedPnl) || 0), 0) : 0);
+      setAt(new Date()); setErr("");
+    } catch (e) { setErr(e.message); }
+  }, []);
+  useEffect(() => {
+    load();
+    const t = setInterval(load, REFRESH_MS);
+    return () => clearInterval(t);
+  }, [load]);
+
+  const L = acct?.ledger;
+  const tone = (v) => ({ color: v == null || v === 0 ? "inherit" : v > 0 ? "var(--bull)" : "var(--bear)" });
+  return (
+    <div className="card">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
+        <span className="label" style={{ margin: 0 }}>
+          Practice account · {acct ? usd0(acct.startCash) : "…"} simulated cash, real-time prices
+          {L?.since ? ` · since ${new Date(L.since).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}` : ""}
+        </span>
+        <span className="muted mono" style={{ fontSize: 11 }}>{at ? `updated ${at.toLocaleTimeString()}` : ""}</span>
+      </div>
+      {err && <div className="err">{err}</div>}
+      {acct && (
+        <>
+          <div className="metrics" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))" }}>
+            <div className="metric"><div className="k">Realized profit</div><div className="v" style={tone(L.realized)}>{usd0(L.realized)}</div></div>
+            <div className="metric"><div className="k">Open positions now</div><div className="v" style={tone(openPnl)}>{usd0(openPnl)}</div></div>
+            <div className="metric"><div className="k">Cash to buy today</div><div className="v">{usd0(acct.available)}</div></div>
+            <div className="metric"><div className="k">Settles tomorrow</div><div className="v">{usd0(acct.unsettled)}</div></div>
+          </div>
+          <div className="mono muted" style={{ fontSize: 12, marginTop: 8, textAlign: "center" }}>
+            {L.closes} closed trade{L.closes === 1 ? "" : "s"} ({L.wins} won, {L.losses} lost) · {L.open} open · fees paid {usd(acct.feesPaid)} · realized profit is after fees; open positions are valued at what they would sell for now
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function PositionsPanel() {
   const [positions, setPositions] = useState(null);
   const [err, setErr] = useState("");
@@ -101,6 +156,12 @@ function PositionsPanel() {
     finally { setLoading(false); }
   }, []);
   useEffect(() => { load(); }, [load]);
+  // Keep the prices live, but not while a close form is open under the table.
+  useEffect(() => {
+    if (openSym) return;
+    const t = setInterval(load, REFRESH_MS);
+    return () => clearInterval(t);
+  }, [load, openSym]);
 
   return (
     <div className="card" style={{ overflowX: "auto" }}>
@@ -113,7 +174,7 @@ function PositionsPanel() {
       {positions && positions.length > 0 && (
         <table>
           <thead><tr>
-            <th style={{ textAlign: "left" }}>Symbol</th><th>Qty</th><th>Cost basis</th><th>Last</th><th>Unrealized</th><th></th>
+            <th style={{ textAlign: "left" }}>Symbol</th><th>Qty</th><th>Cost basis</th><th>Sell price now</th><th>Gain / loss</th><th></th>
           </tr></thead>
           <tbody>
             {positions.map((p) => {
@@ -162,24 +223,38 @@ const STRATEGY_TAG = { ai: "AI idea", sweep_limit: "sweep · limit", sweep_recla
 const GRADE_TONE = (v) => v == null ? "muted" : v >= 0 ? "up" : "down";
 
 function AutoJournalPanel() {
-  const [entries, setEntries] = useState(null);
+  const [all, setAll] = useState(null);
+  const [since, setSince] = useState(null);
+  const [showOld, setShowOld] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
-    try { setEntries((await getJSON("/api/journal")).entries || []); }
-    catch { setEntries([]); }
+    try { const d = await getJSON("/api/journal"); setAll(d.entries || []); setSince(d.freshStartAt || null); }
+    catch { setAll([]); }
     finally { setLoading(false); }
   }, []);
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+    const t = setInterval(load, REFRESH_MS * 2);
+    return () => clearInterval(t);
+  }, [load]);
+  // Trades from before the fresh start were filled by the old sandbox on
+  // delayed prices; they are history, not this account's record.
+  const isOld = (e) => e.legacy === true || (since && new Date(e.createdAt) < new Date(since));
+  const older = all ? all.filter(isOld).length : 0;
+  const entries = all ? (showOld ? all : all.filter((e) => !isOld(e))) : null;
 
   return (
     <div className="card" style={{ overflowX: "auto" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-        <span className="label" style={{ margin: 0 }}>Trade journal · auto-logged from real orders placed in this app</span>
-        <button className="chip" onClick={load} disabled={loading}>{loading ? "Loading…" : "Refresh"}</button>
+        <span className="label" style={{ margin: 0 }}>Trade journal · {showOld ? "all trades, including the old sandbox ones" : "this practice account"}</span>
+        <span style={{ display: "flex", gap: 6 }}>
+          {older > 0 && <button className="chip" onClick={() => setShowOld((v) => !v)}>{showOld ? "Hide" : "Show"} {older} older</button>}
+          <button className="chip" onClick={load} disabled={loading}>{loading ? "Loading…" : "Refresh"}</button>
+        </span>
       </div>
-      {entries && !entries.length && <div className="muted" style={{ fontSize: 13 }}>No trades placed through this app yet — placing an idea (or closing a position) logs one here automatically.</div>}
+      {entries && !entries.length && <div className="muted" style={{ fontSize: 13 }}>No trades on this practice account yet — each buy and sell is logged here automatically.</div>}
       {entries && entries.length > 0 && (
         <table>
           <thead><tr>
@@ -189,7 +264,7 @@ function AutoJournalPanel() {
           </tr></thead>
           <tbody>
             {entries.map((e) => (
-              <tr key={e.id}>
+              <tr key={e.id} style={isOld(e) ? { opacity: 0.55 } : undefined}>
                 <td style={{ textAlign: "left" }} className="muted">{new Date(e.entryAt || e.createdAt).toLocaleDateString()}</td>
                 <td style={{ textAlign: "left", fontWeight: 600 }}>{e.symbol}</td>
                 <td style={{ textAlign: "left" }} title={e.thesis || ""}>
@@ -273,6 +348,7 @@ export default function Journal() {
 
   return (
     <>
+      <AccountSummary />
       <PositionsPanel />
       <AutoJournalPanel />
 
@@ -299,7 +375,7 @@ export default function Journal() {
       </div>
 
       <div className="card">
-        <span className="label">Stats · closed trades only</span>
+        <span className="label">Stats · manual entries below only</span>
         {s.nClosed < 10 ? (
           <div className="muted" style={{ fontSize: 13 }}>insufficient data (&lt;10 closed trades — {s.nClosed} so far)</div>
         ) : (

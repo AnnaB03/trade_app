@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { listJournal } from "../store";
 import { reconcileJournal } from "../journalReconcile";
+import { readBaseline } from "../ledgerLib";
 
 // Every REAL order this app placed (open -> close), auto-linked to its
 // originating idea when there was one. See app/api/journalLib.js. Reads
@@ -14,5 +15,5 @@ export async function GET(req) {
      and every call to this route answered {skipped: true}. */
   const force = new URL(req.url).searchParams.get("force") === "true";
   const reconcile = await reconcileJournal({ force });
-  return NextResponse.json({ entries: listJournal(), reconcile });
+  return NextResponse.json({ entries: listJournal(), reconcile, freshStartAt: readBaseline().freshStartAt ?? null });
 }
