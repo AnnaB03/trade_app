@@ -69,7 +69,17 @@ export async function GET(req) {
   // Account size: query param (the UI's setting) -> ACCOUNT_SIZE env -> $1,000.
   // Everything downstream — which names get scanned, which vehicle fits, how
   // many shares/contracts — is sized off this. See sizingLib.js.
-  const account = Number(params.get("account")) > 0 ? Number(params.get("account")) : (Number(process.env.ACCOUNT_SIZE) > 0 ? Number(process.env.ACCOUNT_SIZE) : 1000);
+  /* The configured ACCOUNT_SIZE is a CEILING on what a caller may ask for. The
+     browser's Ideas tab sends its own saved account value, and the newest idea
+     per symbol is the one autotrade acts on, so a single browser refresh with a
+     stale $100,000 setting silently re-sized every idea ten times too large:
+     59 ideas written after the switch to the $10K account carried
+     accountSize 100000, including an MU call sized at 3 contracts ($15,473,
+     154.7% of the real account). The exposure gate caught that one; an idea
+     sized smaller would not have been. A caller may still ask for LESS. */
+  const askedAccount = Number(params.get("account")) > 0 ? Number(params.get("account")) : 0;
+  const envAccount = Number(process.env.ACCOUNT_SIZE) > 0 ? Number(process.env.ACCOUNT_SIZE) : 0;
+  const account = envAccount > 0 ? (askedAccount > 0 ? Math.min(askedAccount, envAccount) : envAccount) : (askedAccount || 1000);
   const limits = accountLimits(account);
   if (!process.env.ANTHROPIC_API_KEY) {
     return NextResponse.json(
