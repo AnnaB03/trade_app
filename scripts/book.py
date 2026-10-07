@@ -91,6 +91,14 @@ def line(r):
         g = (m - ent) * n
         gap, flag = "", ""
     tags = ("  (UNFILLED)" if r.get("entryFillPrice") is None else "") + ("  FROZEN" if r.get("frozen") else "")
+    if r.get("realisticEntry") and r.get("vehicle") == "OPTION":
+        # The sandbox filled this entry at a stale price far from the real market.
+        # Show what it is worth against the price that would really have been paid.
+        # Both ends on the REAL clock: production's mid now against the price that
+        # would actually have been paid. Using the sandbox mark here mixed clocks and
+        # printed -302 for a position that was really about -40.
+        real = (pm - r["realisticEntry"]) * n * 100
+        tags += f"  | REAL {real:+,.0f} (production mid {pm:.2f} vs realistic entry {r['realisticEntry']})"
     pct = (m - ent) / ent * 100 if ent else 0
     return key, n, ent, m, g, pct, tags + gap + flag
 
