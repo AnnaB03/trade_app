@@ -62,6 +62,52 @@ function nearestContract(options, type, strike) {
   );
 }
 
+/* When the contract the model chose does not fit the account, look for one that
+   expires in a day or two and does. Added 2026-10-07 at the user's call, after
+   MU (a ~$1,080 stock) priced its 10/30 at-the-money call at $5,155, 52% of a
+   $10K account, so the idea could never be traded. The 10/9 $1090 call was ~$1,300.
+
+   Said plainly, because the evidence behind it is one unfinished trade: a
+   short-dated option is cheaper only because it is less likely to pay. On that
+   MU call theta was ~$320 a day, about 25% of the premium, and it needed MU up
+   ~2.1% by expiry to break even. A winner pays more per percent the stock moves
+   (a 1% MU move was ~$300 on $1,300, against ~10% on the 10/30) and a loser
+   loses as fast. So it is fenced: only when the chosen contract does NOT fit,
+   only 1-3 calendar days out, delta of at least 0.25 so it is not a lottery
+   ticket, a spread of 8% or less, the nearest fit to the money, and the
+   position is marked flat-by-the-close so decay is never carried overnight. */
+const SHORT_DTE_MIN = 1, SHORT_DTE_MAX = 3, SHORT_MIN_DELTA = 0.25, SHORT_MAX_SPREAD_PCT = 8;
+async function shortDatedAlternative(idea, account) {
+  try {
+    const L = accountLimits(account);
+    const type = idea.action === "CALL" ? "call" : "put";
+    const today = todayET();
+    const dte = (e) => Math.round((Date.parse(e + "T00:00:00Z") - Date.parse(today + "T00:00:00Z")) / 86400000);
+    const d = await tradier(`/markets/options/expirations?symbol=${encodeURIComponent(idea.symbol)}&includeAllRoots=true`);
+    const exps = asArray(d?.expirations?.date).filter((e) => dte(e) >= SHORT_DTE_MIN && dte(e) <= SHORT_DTE_MAX).sort().reverse(); // later first: less decay
+    for (const exp of exps) {
+      const cd = await tradier(`/markets/options/chains?symbol=${encodeURIComponent(idea.symbol)}&expiration=${encodeURIComponent(exp)}&greeks=true`, { timeoutMs: 8000 });
+      const fits = asArray(cd?.options?.option)
+        .filter((o) => o.option_type === type)
+        .map((o) => {
+          const bid = Number(o.bid), ask = Number(o.ask), mid = bid >= 0 && ask > 0 ? (bid + ask) / 2 : 0;
+          return { o, bid, ask, mid, delta: Math.abs(Number(o.greeks?.delta) || 0), cost: mid * 100 };
+        })
+        .filter((c) => c.mid > 0 && c.cost <= L.optionHardCap && c.delta >= SHORT_MIN_DELTA && ((c.ask - c.bid) / c.mid) * 100 <= SHORT_MAX_SPREAD_PCT)
+        .sort((a, b) => b.delta - a.delta);
+      if (fits.length) {
+        const c = fits[0];
+        return {
+          expiration: exp, dte: dte(exp), strike: Number(c.o.strike),
+          leg: { occ: c.o.symbol, strike: Number(c.o.strike), bid: c.bid, ask: c.ask, mid: c.mid, delta: c.o.greeks?.delta != null ? Number(c.o.greeks.delta) : null },
+          thetaPerDay: c.o.greeks?.theta != null ? Math.abs(Number(c.o.greeks.theta)) * 100 : null,
+        };
+      }
+    }
+  } catch {}
+  return null;
+}
+
 export async function GET(req) {
   const params = new URL(req.url).searchParams;
   const symbols = params.get("symbols");
@@ -557,6 +603,17 @@ action is one of BUY, SELL, CALL, PUT, WAIT (BUY/SELL pair with vehicle SHARES; 
       const { sizing, affordable: fits } = sizeIdea(idea, account);
       idea.sizing = sizing;
       idea.affordable = fits;
+      if (idea.vehicle === "OPTION" && fits === false && (idea.action === "CALL" || idea.action === "PUT")) {
+        const alt = await shortDatedAlternative(idea, account);
+        if (alt) {
+          idea.shortDated = { fromExpiration: idea.expiration, fromStrike: idea.strike, dte: alt.dte, thetaPerDay: alt.thetaPerDay };
+          idea.expiration = alt.expiration; idea.strike = alt.strike; idea.leg = alt.leg;
+          idea.flatByClose = true;
+          const re = sizeIdea(idea, account);
+          idea.sizing = re.sizing; idea.affordable = re.affordable;
+          if (idea.sizing) idea.sizing.note = `SHORT-DATED ${alt.expiration} (${alt.dte}d) instead of ${idea.shortDated.fromExpiration}, which did not fit: ${idea.sizing.note}. Decays ~$${(alt.thetaPerDay ?? 0).toFixed(0)}/day; flat by the close.`;
+        }
+      }
     }
 
     const RISK_ORDER = { LOW: 0, MEDIUM: 1, HIGH: 2 };
@@ -576,6 +633,7 @@ action is one of BUY, SELL, CALL, PUT, WAIT (BUY/SELL pair with vehicle SHARES; 
         risk: idea.risk ?? null, why_pro: idea.why_pro ?? null, why_plain: idea.why_plain ?? idea.why ?? null,
         leg: idea.leg ?? null,
         sizing: idea.sizing ?? null, affordable: idea.affordable ?? null, accountSize: account,
+        shortDated: idea.shortDated ?? null, flatByClose: idea.flatByClose ?? false,
         todayChangePct: idea.todayChangePct ?? null,
         entryPrice: lastBySym[idea.symbol] ?? pennyPriceBySym[idea.symbol] ?? null,
         regimeTrend: regime?.available ? regime.spy.trend : null,

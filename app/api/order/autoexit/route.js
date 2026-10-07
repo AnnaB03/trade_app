@@ -624,6 +624,17 @@ export async function GET(req) {
       // carry it overnight. Deliberately ahead of the trail and the target,
       // because at 15:56 the question is no longer "is there more in this?"
       const gainUsd = markNow > 0 && entryPremium > 0 ? (markNow - entryPremium) * qty * mult : null;
+      /* A position flagged closeByEod is a short-dated contract that decays ~25%
+         of its price a day. The end-of-day dollar bar below only ever banks
+         GAINS, so a loser would be carried overnight and lose that again. These
+         close in the last 15 minutes whatever the P&L. Gated on the clock so the
+         15:03 and 15:18 late-session passes leave it alone. */
+      if (!exit && eod && pos.closeByEod) {
+        const hm = new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour12: false, hour: "2-digit", minute: "2-digit" }).split(":").map(Number);
+        if (hm[0] * 60 + hm[1] >= 15 * 60 + 45) {
+          exit = { tag: "eod_flat", detail: `Flat by the close: short-dated contract, up/down ${gainUsd != null ? "$" + gainUsd.toFixed(0) : "?"}, not carrying overnight decay` };
+        }
+      }
       if (!exit && eod && gainUsd != null && gainUsd >= eodMin) {
         exit = {
           tag: "eod_take_profit",
