@@ -35,8 +35,8 @@ function ClosePositionControl({ position, onClosed }) {
   const [state, setState] = useState({ status: "idle" });
 
   const body = () => position.vehicle === "OPTION"
-    ? { legs: [{ action: "sell", type: position.optionType, strike: String(position.strike), premium: price, qty: Number(qty), occ: position.symbol }], closing: true, outcome_note: reason }
-    : { equity: { symbol: position.underlying, quantity: Number(qty), price: Number(price) }, closing: true, outcome_note: reason };
+    ? { legs: [{ action: "sell", type: position.optionType, strike: String(position.strike), premium: price, qty: Number(qty), occ: position.symbol }], closing: true, outcome_note: reason, outcome_tag: "manual" }
+    : { equity: { symbol: position.underlying, quantity: Number(qty), price: Number(price) }, closing: true, outcome_note: reason, outcome_tag: "manual" };
 
   const submit = async (url) => {
     const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body()) });
@@ -48,7 +48,7 @@ function ClosePositionControl({ position, onClosed }) {
     setState({ status: "previewing" });
     try {
       await submit("/api/order/stage");
-      setState({ status: "previewed", msg: `Preview only, nothing sent to Tradier yet — closing ${qty} @ $${Number(price || 0).toFixed(2)}` });
+      setState({ status: "previewed", msg: `Preview only, nothing sent yet — closing ${qty} @ $${Number(price || 0).toFixed(2)}` });
     } catch (e) { setState({ status: "error", msg: e.message }); }
   };
   const place = async () => {
