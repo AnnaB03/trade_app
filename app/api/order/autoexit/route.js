@@ -345,7 +345,7 @@ export async function GET(req) {
   const eodMin = EOD_TAKE_PROFIT_USD;
   try {
     const open = listJournal().filter((r) => r.status === "open");
-    if (!open.length) return NextResponse.json({ checked: 0, closed: 0, results: [] });
+    if (!open.length) return NextResponse.json({ checked: 0, closed: 0, accountSize: ACCOUNT_SIZE, eodBarUsd: Number(EOD_TAKE_PROFIT_USD.toFixed(2)), results: [] });
     /* AI ideas only, matching the entry path. autotrade already filters
        `!i.strategy` so "a sweep scan landing last must never become this
        route's latest idea for a symbol" — the reversal rule needs the same
