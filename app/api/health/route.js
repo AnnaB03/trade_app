@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { listJournal, listIdeas } from "../store";
-import { tradier } from "../tradier";
+import { getClock } from "../clockLib";
 import { tradeFetch, accountId, asArray, BROKER } from "../tradeClient";
 
 /* End-to-end health, for the scheduled jobs to gate on.
@@ -26,10 +26,10 @@ export async function GET() {
       frozenRows: j.filter((r) => r.status === "open" && r.frozen).length };
   } catch (e) { checks.store = { ok: false, error: String(e.message || e) }; }
 
-  try {
-    const d = await tradier("/markets/clock", { timeoutMs: 6000 });
-    checks.marketData = { ok: Boolean(d?.clock?.state), state: d?.clock?.state ?? null };
-  } catch (e) { checks.marketData = { ok: false, error: String(e.message || e) }; }
+  {
+    const c = await getClock();
+    checks.marketData = { ok: c.state !== "unknown", state: c.state, ...(c.stale ? { stale: true, staleSeconds: c.staleSeconds } : {}), ...(c.state === "unknown" ? { error: c.error } : {}) };
+  }
 
   try {
     const acct = await accountId();

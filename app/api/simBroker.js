@@ -35,6 +35,7 @@
 import fs from "fs";
 import path from "path";
 import { tradier, asArray } from "./tradier";
+import { getClock } from "./clockLib";
 
 const FILE = path.join(process.cwd(), "data", "sim.json");
 export const SIM_ACCOUNT = "SIM-CASH";
@@ -110,16 +111,10 @@ export function cashState(state = load(), now = new Date()) {
   return { startCash: state.startCash, settled, unsettled, committedToOpenBuys: committed, available: settled - committed, totalCash: settled + unsettled, feesPaid: fees };
 }
 
-let clockCache = { at: 0, open: false };
+// Shares the app's clock, including its tolerance for a slow broker call.
+// "unknown" is treated as closed: no fill is ever assumed.
 async function marketOpen() {
-  if (Date.now() - clockCache.at < 20000) return clockCache.open;
-  try {
-    const d = await tradier("/markets/clock", { timeoutMs: 6000 });
-    clockCache = { at: Date.now(), open: d?.clock?.state === "open" };
-  } catch {
-    clockCache = { at: Date.now(), open: false }; // unknown is treated as closed: no fill is ever assumed
-  }
-  return clockCache.open;
+  return (await getClock()).state === "open";
 }
 
 function fill(leg, price, now) {
