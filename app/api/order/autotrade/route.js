@@ -524,7 +524,23 @@ async function run(req) {
         }
         const live = liveBySym[idea.symbol];
         if (live == null) { results.push({ ...tag, placed: false, reason: "Couldn't get a live quote to check the trigger." }); continue; }
-        const effectiveTrigger = easiestTrigger(all, idea, now);
+        /* A same-day idea is taken at ITS OWN trigger, with price beyond it right
+           now. The two allowances below were built for the 15-minute check,
+           where a cross can happen unseen between looks: borrowing the easiest
+           trigger from an earlier refresh, and counting a level "crossed
+           earlier and still within 0.5%". Same-day ideas are checked every
+           minute, so neither is needed, and together they bought the wrong side
+           of the level on 4 of the 5 entries of 2026-10-08:
+             NVDA call  trigger 237.10 (borrowed 237.05), bought at 236.77 —
+                        the session high of 237.07 the thesis needed never broke;
+             ORCL put   trigger 135.50, bought at 136.31 after a bounce off 135.33;
+             INTC put   trigger 105.35, bought at 105.77 after a bounce off 105.24;
+             GOOGL put  trigger 349.30, bought at 349.42 (the one that worked).
+           A 0.5% band on a same-day trade is most of its stop: NVDA's stop was
+           $1.45 away and the band allowed $1.18 of slip. Buying a breakout that
+           has already come back is buying the failure. */
+        const intraday = idea.strategy === "intraday";
+        const effectiveTrigger = intraday ? Number(idea.triggerPrice) : easiestTrigger(all, idea, now);
         const above = idea.triggerDirection === "above";
         let nowTriggered = above ? live >= effectiveTrigger : live <= effectiveTrigger;
 
@@ -533,7 +549,7 @@ async function run(req) {
         // route. That is a real confirmation the poll simply didn't witness.
         let crossedAt = null;
         let skipThisIdea = false;
-        if (!nowTriggered) {
+        if (!nowTriggered && !intraday) {
           const ext = await extremeSince(idea.symbol, idea.createdAt);
           const reached = above ? ext?.high : ext?.low;
           if (reached != null && (above ? reached >= effectiveTrigger : reached <= effectiveTrigger)) {
