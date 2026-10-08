@@ -82,6 +82,13 @@ case "${1:-exits}" in
     run autoexit-eod "$BASE/api/order/autoexit?eod=true" ;;
   entries)
     run autotrade "$BASE/api/order/autotrade" ;;
+  entries-intraday)
+    # Same-day ideas only, every minute. Their triggers sit close to the price
+    # and their targets are small, so by the next 15-minute entry check the move
+    # has usually happened: on 2026-10-08 the ORCL and GOOGL fade puts both
+    # triggered between checks and were then refused as too late or as having
+    # too little reward left. Quotes only, no AI cost.
+    run autotrade-intraday "$BASE/api/order/autotrade?playbook=intraday" ;;
   refresh)
     # The only billed call. Hourly.
     # "auto" = the app's own core list plus extras (app/api/watchCore.js), so

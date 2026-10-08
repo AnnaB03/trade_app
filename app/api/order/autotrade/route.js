@@ -850,7 +850,9 @@ export function GET(req) {
         }
       } catch (e) { console.error("autotrade intraday pass failed:", e); }
     }
-    if (u.searchParams.get("dryRun") !== "true") {
+    // Stamped by the full two-playbook run only, so the every-minute intraday
+    // pass does not overwrite the list of what is being watched.
+    if (u.searchParams.get("dryRun") !== "true" && new URL(req.url).searchParams.get("playbook") == null) {
       try {
         const d = await out.clone().json();
         // The setups still waiting on their price, so the screen can show what

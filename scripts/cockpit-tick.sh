@@ -5,7 +5,7 @@
 # will not let a background job read.
 #
 #   exits    every minute, 9:30-15:59 (with the end-of-day rules every 5 min in the last hour)
-#   entries  at :03 :18 :33 :48
+#   entries  at :03 :18 :33 :48 (same-day ideas: every minute until 15:00)
 #   refresh  9:21, 9:42, then :12 and :42 from 10:00 to 14:59 (the one billed call)
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -24,5 +24,10 @@ fi
 
 [ "$hm" -ge 930 ] || exit 0
 if [ "$h" -eq 15 ] && [ $((m % 5)) -eq 0 ]; then "$RUN" eod; else "$RUN" exits; fi
-case "$m" in 3|18|33|48) "$RUN" entries ;; esac
+# The full entry check runs both playbooks; in between, same-day ideas get
+# their own look every minute until 15:00, after which none are opened.
+case "$m" in
+  3|18|33|48) "$RUN" entries ;;
+  *) [ "$h" -lt 15 ] && "$RUN" entries-intraday ;;
+esac
 exit 0
