@@ -116,6 +116,7 @@ const MAX_SYMBOL_EXPOSURE_PCT = 20;
 const MAX_TOTAL_EXPOSURE_PCT = Number(process.env.MAX_TOTAL_EXPOSURE_PCT) > 0 ? Number(process.env.MAX_TOTAL_EXPOSURE_PCT) : 100;
 const ACCOUNT_SIZE = Number(process.env.ACCOUNT_SIZE) > 0 ? Number(process.env.ACCOUNT_SIZE) : 1000;
 const DIRECTION_SIGN = { CALL: 1, BUY: 1, PUT: -1, SELL: -1 };
+const INTRADAY_RISK_PCT = 1; // % of the account a same-day trade may lose at its stop
 const LAST_FLAT_BY_CLOSE_ENTRY_MIN = 15 * 60; // ET minutes; flat-by-close contracts are not opened after this
 const REENTRY_COOLDOWN_MIN = 45; // no re-entry on a just-exited symbol without a newer idea
 const MAX_ENTRIES_PER_SYMBOL_DAY = 2; // churn cap; each lot clears the exposure gate on its own
@@ -699,6 +700,35 @@ async function run(req) {
           results.push({ ...tag, placed: false, reason: "Short-dated contract that is sold before the close — too late in the day to open one (no entries after 15:00 ET)." });
           continue;
         }
+      }
+
+      /* Same-day trades are sized by what they can LOSE, not by what they cost.
+         The 15% position size was set for multi-day contracts. On a 1-day
+         option it bought three NVDA 10/9 $232.50 calls on 2026-10-08, which
+         stopped out twenty minutes later for -$257: 2.6% of the account on one
+         same-day idea. Loss at the stop per contract is the option's delta
+         times the distance to the idea's invalidation, plus the spread paid to
+         get out. One contract is still allowed when it runs a little over the
+         budget; beyond 1.5x the budget the trade is not taken. */
+      if (idea.strategy === "intraday" && idea.vehicle === "OPTION") {
+        const delta = Math.abs(Number(idea.leg?.delta)) || 0.6;
+        const stopDist = Math.abs(Number(idea.entryPrice) - Number(idea.invalidation));
+        const spread = Math.max(0, (Number(idea.leg?.ask) || 0) - (Number(idea.leg?.bid) || 0));
+        const riskPer = (delta * stopDist + spread) * 100;
+        const budget = (ACCOUNT_SIZE * INTRADAY_RISK_PCT) / 100;
+        if (!(riskPer > 0)) { results.push({ ...tag, placed: false, reason: "Cannot size this same-day trade: no usable stop distance." }); continue; }
+        let n = Math.floor(budget / riskPer);
+        if (n < 1) {
+          if (riskPer > budget * 1.5) {
+            results.push({ ...tag, placed: false, reason: `One contract would lose about $${riskPer.toFixed(0)} at the stop — over the $${(budget * 1.5).toFixed(0)} most a same-day trade may risk (${INTRADAY_RISK_PCT}% of the account, with half again of leeway).` });
+            continue;
+          }
+          n = 1;
+        }
+        const perContract = (Number(payPrice(idea.leg)) || 0) * 100;
+        if (perContract > 0) n = Math.max(1, Math.min(n, Math.floor((ACCOUNT_SIZE * OPTION_HARD_PCT) / perContract) || 1));
+        idea.sizing = { ...(idea.sizing || {}), contracts: n, riskAtStop: Number((riskPer * n).toFixed(0)) };
+        tag.sizedByRisk = `${n} contract${n === 1 ? "" : "s"}, about $${(riskPer * n).toFixed(0)} at risk to the stop`;
       }
 
       /* Re-check the position cap at the price actually being paid. Sizing
