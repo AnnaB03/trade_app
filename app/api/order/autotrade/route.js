@@ -8,6 +8,7 @@ import { isLegacy, readBaseline } from "../../ledgerLib";
 import { journalOpen } from "../../journalLib";
 import { OPTION_HARD_PCT } from "../../sizingLib";
 import { markActivity } from "../../activityLib";
+import { recordShadowEntry } from "../../shadowLib";
 import { buildOptionStopEstimate } from "../../../lib/orders";
 
 /* Paper-only autopilot: scans the most recent Ideas refresh, places the
@@ -116,6 +117,10 @@ const MAX_SYMBOL_EXPOSURE_PCT = 20;
 const MAX_TOTAL_EXPOSURE_PCT = Number(process.env.MAX_TOTAL_EXPOSURE_PCT) > 0 ? Number(process.env.MAX_TOTAL_EXPOSURE_PCT) : 100;
 const ACCOUNT_SIZE = Number(process.env.ACCOUNT_SIZE) > 0 ? Number(process.env.ACCOUNT_SIZE) : 1000;
 const DIRECTION_SIGN = { CALL: 1, BUY: 1, PUT: -1, SELL: -1 };
+/* The same-day playbook records its trades and does not place them, until it
+   has shown what it would have done. Set INTRADAY_LIVE=true in .env.local (and
+   restart the server) to let it trade the account again. */
+const INTRADAY_WATCH_ONLY = process.env.INTRADAY_LIVE !== "true";
 const INTRADAY_RISK_PCT = 1; // % of the account a same-day trade may lose at its stop
 const LAST_FLAT_BY_CLOSE_ENTRY_MIN = 15 * 60; // ET minutes; flat-by-close contracts are not opened after this
 const REENTRY_COOLDOWN_MIN = 45; // no re-entry on a just-exited symbol without a newer idea
@@ -817,6 +822,22 @@ async function run(req) {
           continue;
         }
         idea.__addingCost = adding;
+      }
+
+      /* Watch-only playbooks stop here: every gate above has passed, so this is
+         exactly the trade that would have been placed. It is recorded and not
+         sent. See shadowLib.js. */
+      if (idea.strategy === "intraday" && INTRADAY_WATCH_ONLY) {
+        const contracts = Math.max(1, Number(idea.sizing?.contracts) || 1);
+        const row = dryRun ? null : recordShadowEntry({
+          playbook: "intraday", ideaId: idea.id, symbol: idea.symbol, action: idea.action,
+          occ: idea.leg?.occ ?? null, strike: idea.leg?.strike ?? idea.strike ?? null, expiration: idea.expiration ?? null,
+          contracts, optionBid: idea.leg?.bid ?? null, optionAsk: idea.leg?.ask ?? null, delta: idea.leg?.delta ?? null,
+          underlying: idea.entryPrice ?? null, triggerPrice: idea.triggerPrice ?? null, triggerDirection: idea.triggerDirection ?? null,
+          invalidation: idea.invalidation ?? null, target: idea.target ?? null, catalyst: idea.catalyst ?? null,
+        });
+        results.push({ ...tag, placed: false, watchOnly: true, recorded: Boolean(row), reason: `Watch-only: would have bought ${contracts} ${idea.leg?.occ ?? idea.symbol} at $${idea.leg?.ask ?? "?"} — recorded, not placed.` });
+        continue;
       }
 
       let r;
