@@ -473,7 +473,10 @@ async function run(req) {
     // same ledger (tagged `strategy`) and has its own autopilot at
     // /api/sweeps/autotrade; a sweep scan landing last must never become
     // this route's "latest idea" for a symbol.
-    const all = listIdeas().filter((i) => !i.strategy);
+    // Two playbooks share this route and never read each other's ideas: the
+    // multi-day AI ideas (no strategy tag) and the intraday ones.
+    const playbook = params.get("playbook") === "intraday" ? "intraday" : null;
+    const all = listIdeas().filter((i) => (playbook ? i.strategy === playbook : !i.strategy));
     const batch = latestPerSymbol(all);
     if (!batch.length) return NextResponse.json({ error: "No ideas in the ledger yet — refresh the Ideas tab first." }, { status: 404 });
     const openJournal = listJournal().filter((r) => r.status === "open");
@@ -795,18 +798,40 @@ let queue = Promise.resolve();
 export function GET(req) {
   const next = queue.then(async () => {
     const res = await run(req);
-    if (new URL(req.url).searchParams.get("dryRun") !== "true") {
+    // Second pass: the intraday playbook, through the same gates.
+    const u = new URL(req.url);
+    let out = res;
+    if (u.searchParams.get("playbook") == null) {
+      u.searchParams.set("playbook", "intraday");
       try {
-        const d = await res.clone().json();
+        const res2 = await run(new Request(u));
+        const d2 = res2.ok ? await res2.json() : null;
+        if (d2) {
+          const d1 = res.ok ? await res.clone().json() : { results: [], placed: 0, candidateCount: 0 };
+          const tagged = (d2.results || []).map((r) => ({ ...r, playbook: "intraday" }));
+          out = NextResponse.json({
+            ...d2, ...d1,
+            candidateCount: (d1.candidateCount || 0) + (d2.candidateCount || 0),
+            placed: (d1.placed || 0) + (d2.placed || 0),
+            skipped: (d1.skipped || 0) + (d2.skipped || 0),
+            intradayCandidates: d2.candidateCount || 0,
+            results: [...(d1.results || []), ...tagged],
+          });
+        }
+      } catch (e) { console.error("autotrade intraday pass failed:", e); }
+    }
+    if (u.searchParams.get("dryRun") !== "true") {
+      try {
+        const d = await out.clone().json();
         // The setups still waiting on their price, so the screen can show what
         // the automation is watching and how far away each one is.
         const watching = (d.results || [])
           .filter((r) => r.placed || /^Not triggered|^Crossed/.test(String(r.reason || "")))
-          .map((r) => ({ symbol: r.symbol, action: r.action, placed: Boolean(r.placed), note: r.placed ? "bought" : String(r.reason).slice(0, 160) }));
+          .map((r) => ({ symbol: r.symbol, action: r.action, intraday: r.playbook === "intraday", placed: Boolean(r.placed), note: r.placed ? "bought" : String(r.reason).slice(0, 160) }));
         markActivity("entries", { ok: !d.error, error: d.error ?? null, candidates: d.candidateCount ?? 0, placed: d.placed ?? 0, watching });
       } catch {}
     }
-    return res;
+    return out;
   });
   queue = next.catch(() => {});
   return next;

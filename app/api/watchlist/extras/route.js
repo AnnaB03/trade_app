@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { listExtras, addExtra, removeExtra, pruneStale } from "../../watchExtrasLib";
+import { CORE_SYMBOLS } from "../../watchCore";
 
 /* The self-pruning "extras" watchlist — see watchExtrasLib.js for the
    eviction/staleness logic. GET returns the current list (and the CSV of
@@ -9,7 +10,10 @@ import { listExtras, addExtra, removeExtra, pruneStale } from "../../watchExtras
 
 export async function GET() {
   const extras = listExtras();
-  return NextResponse.json({ extras, symbols: extras.map((e) => e.symbol), csv: extras.map((e) => e.symbol).join(",") });
+  const symbols = extras.map((e) => e.symbol);
+  // `all` is what a scheduled refresh should analyse: the core list plus extras.
+  const all = [...new Set([...CORE_SYMBOLS, ...symbols])];
+  return NextResponse.json({ extras, symbols, csv: symbols.join(","), core: CORE_SYMBOLS, all });
 }
 
 export async function POST(req) {

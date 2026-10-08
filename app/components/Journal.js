@@ -118,7 +118,7 @@ function AutomationStatus({ activity }) {
           <span className="muted">Waiting on: </span>
           {watching.map((w, i) => (
             <span key={w.symbol + i} style={{ marginRight: 14 }}>
-              <b>{w.symbol}</b> {String(w.action || "").toLowerCase()} <span className="muted">— {w.note.replace(/^Not triggered — /, "")}</span>
+              <b>{w.symbol}</b> {String(w.action || "").toLowerCase()}{w.intraday ? " (same-day)" : ""} <span className="muted">— {w.note.replace(/^Not triggered — /, "")}</span>
             </span>
           ))}
         </div>
@@ -257,7 +257,7 @@ function PositionsPanel() {
   );
 }
 
-const STRATEGY_TAG = { ai: "AI idea", sweep_limit: "sweep · limit", sweep_reclaim: "sweep · reclaim" };
+const STRATEGY_TAG = { ai: "AI idea", intraday: "same-day", sweep_limit: "sweep · limit", sweep_reclaim: "sweep · reclaim" };
 const GRADE_TONE = (v) => v == null ? "muted" : v >= 0 ? "up" : "down";
 
 function AutoJournalPanel() {

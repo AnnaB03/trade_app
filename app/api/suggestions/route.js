@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { markActivity } from "../activityLib";
+import { CORE_SYMBOLS } from "../watchCore";
+import { listExtras } from "../watchExtrasLib";
 import { Anthropic } from "@anthropic-ai/sdk";
 import { tradier, asArray } from "../tradier";
 import { fetchStockNews } from "../fmp";
@@ -25,7 +27,12 @@ import { touchNotable, isNotable } from "../watchExtrasLib";
 // the 2nd-most-extreme name (SVRN, GRAL, CRML, SMX, CUE and others on
 // 2026-09-21) were never even looked at. Restored, since the real lever for
 // speed was model effort, not symbol count.
-const TRENDING_CAP = 6;
+/* 6 -> 2, and only names at $10 or more, on 2026-10-08. The six slots were
+   going to tickers like BBCI, APUS, GIBO and WORX — thin, sub-$10, no usable
+   options — which the model answered WAIT on every time. The slots are better
+   spent on the liquid core list (watchCore.js). */
+const TRENDING_CAP = 2;
+const TRENDING_MIN_PRICE = 10;
 // Penny candidates ($0.10-$5) get their own small cap — each one costs an
 // extra FMP profile/float/news round trip (computeReality), and a handful of
 // well-checked candidates beats a long list of raw, unverified movers.
@@ -45,7 +52,8 @@ const PENNY_CAP = 0;
 // Cheaper, liquid, optionable names added for a small account — the default
 // watchlist is all $200+ underlyings whose contracts cost most of a ~$1k
 // account. Bounded like TRENDING_CAP: each one is a full chain fan-out.
-const AFFORDABLE_CAP = 2;
+// 2 -> 0 on 2026-10-08: the core list is now screened for exactly this.
+const AFFORDABLE_CAP = 0;
 
 const fmt = (v, dp = 2) => {
   if (v == null || v === "") return "N/A";
@@ -77,6 +85,19 @@ function nearestContract(options, type, strike) {
    only 1-3 calendar days out, delta of at least 0.25 so it is not a lottery
    ticket, a spread of 8% or less, the nearest fit to the money, and the
    position is marked flat-by-the-close so decay is never carried overnight. */
+/* The intraday playbook, added 2026-10-08 at the user's call. Until now every
+   idea was a multi-day position (21 of 36 setups that week used a three-week
+   expiry, 33 of 36 were calls) and any same-day behaviour came from the exit
+   rules. These are asked for explicitly, in both directions, and are kept
+   apart from the multi-day ideas by `strategy: "intraday"` so neither pipeline
+   reads the other's ideas as its own "latest read" on a symbol. */
+const INTRADAY_MAX = 4;
+const INTRADAY_LAST_IDEA_MIN = 14 * 60 + 30; // ET; no new same-day ideas after 14:30
+const etMinutesNow = () => {
+  const [h, m] = new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour12: false, hour: "2-digit", minute: "2-digit" }).split(":").map(Number);
+  return (h % 24) * 60 + m;
+};
+const SHORT_TARGET_DELTA = 0.6;
 const SHORT_DTE_MIN = 1, SHORT_DTE_MAX = 3, SHORT_MIN_DELTA = 0.25, SHORT_MAX_SPREAD_PCT = 8;
 async function shortDatedAlternative(idea, account) {
   try {
@@ -95,7 +116,14 @@ async function shortDatedAlternative(idea, account) {
           return { o, bid, ask, mid, delta: Math.abs(Number(o.greeks?.delta) || 0), cost: mid * 100 };
         })
         .filter((c) => c.mid > 0 && c.cost <= L.optionHardCap && c.delta >= SHORT_MIN_DELTA && ((c.ask - c.bid) / c.mid) * 100 <= SHORT_MAX_SPREAD_PCT)
-        .sort((a, b) => b.delta - a.delta);
+        /* Closest to a 0.60 delta, not simply the highest. "Highest that fits"
+           was written for names where nothing near the money fits (MU), and
+           there it still picks the nearest. On a cheaper stock it walked all
+           the way in: NVDA at $236.80 was given the $222.50 call and ORCL at
+           $142 the $155 put, each spending the whole position cap on what is
+           nearly stock. Slightly in the money moves with the stock without
+           being all decay (at the money) or all capital (deep in). */
+        .sort((a, b) => Math.abs(a.delta - SHORT_TARGET_DELTA) - Math.abs(b.delta - SHORT_TARGET_DELTA));
       if (fits.length) {
         const c = fits[0];
         return {
@@ -137,14 +165,17 @@ export async function GET(req) {
   const client = new Anthropic();
 
   try {
-    const watchSyms = symbols.split(",").map(s => s.trim()).filter(Boolean);
+    // symbols=auto is the scheduled refresh: the core list plus the extras.
+    const watchSyms = symbols.trim().toLowerCase() === "auto"
+      ? [...new Set([...CORE_SYMBOLS, ...listExtras().map((e) => e.symbol)])]
+      : symbols.split(",").map(s => s.trim()).filter(Boolean);
 
     // Pull a fresh news-driven top-movers scan every refresh, so ideas aren't
     // limited to the watchlist — a big mover with real news behind it gets
     // analyzed even if it was never added to the watchlist.
     const moversData = await getMovers();
     const trending = [...moversData.session.gainers, ...moversData.session.losers, ...moversData.extended]
-      .filter(m => !watchSyms.includes(m.symbol))
+      .filter(m => !watchSyms.includes(m.symbol) && Number(m.price) >= TRENDING_MIN_PRICE)
       .sort((a, b) => Math.abs(b.changePct ?? b.extChangePct ?? 0) - Math.abs(a.changePct ?? a.extChangePct ?? 0));
     const trendingSyms = [];
     for (const m of trending) {
@@ -458,6 +489,8 @@ export async function GET(req) {
       ? `The regular session is closed but EXTENDED-HOURS trading is active (${clock.state}). MARKET DATA below shows the last regular-session close; the EXTENDED-HOURS PRICES section shows where each stock is trading RIGHT NOW — treat those as the current prices and base each idea on them, mentioning the extended-hours move when it is meaningful. Option chains do not trade in extended hours, so option quotes are stale until the open. Frame every idea as a PLAN for the next regular session open, and remind the trader once at the top, in one short sentence, that opening prices can differ.`
       : `The market is CLOSED (${clock.description || "weekend/holiday"}). Every price below is from the LAST SESSION'S CLOSE, not live. Frame every idea as a PLAN for the next market open: use wording like "plan to buy at the open" (never "buy now"), and remind the trader once at the top, in one short sentence, that prices can gap at the open so they must re-check before acting.`;
 
+    // Same-day ideas only make sense with the market open and time left to work.
+    const intradayOk = marketOpen && etMinutesNow() < INTRADAY_LAST_IDEA_MIN;
     const prompt = `You are a professional day trader with decades of screen time, deciding for your own book. A beginner is watching over your shoulder through this app, but your REASONING must be full professional quality — do not dumb down the analysis, only the way one field of the output is phrased.
 
 ${accountText(account)}
@@ -515,8 +548,14 @@ REQUIREMENTS:
 8b. This is NOT only a penny-stock rule — it applies at ANY price. If a symbol's data says "RVOL UNAVAILABLE" (no average-volume baseline to confirm real participation) OR if your own read of the news classifies the catalyst as stale (already priced in days ago, "days to weeks old", a rehash of old coverage) — that combination is WAIT, full stop, no matter how cleanly the stock is "holding near its high." A thin, illiquid name grinding higher on old news is a stale rally that can round-trip in minutes once the last buyer is out, regardless of whether it costs $2 or $20 a share. Do not let "it's still near its high" override a volume or news-freshness problem you've already identified in your own reasoning — if your why_pro names either red flag, the action must be WAIT, not a smaller/hedged version of the same trade.
 8c. Exception to 8b's "no fresh headline = WAIT" half, narrowly: extreme, VERIFIED RVOL (meaningfully above 10x, a real number, not "UNAVAILABLE") is itself a catalyst — a move that big on that much real volume is not "unexplained," it IS the news, even before a headline catches up. When you see this combination — RVOL genuinely ≥10x AND no headline yet, or only a stale one — a tight-risk continuation idea is allowed (never a fresh reversal bet against it), capped at conviction 3, invalidation tight enough to round-trip fast, and why_pro must say plainly that the thesis is "volume as its own catalyst, no confirming headline yet" so this is never mistaken for a news-backed idea. This does NOT relax the dilution check in rule 8, and does not apply when RVOL itself is unavailable — that combination is still a hard WAIT per 8b.
 
-Respond with ONLY a raw JSON array, no markdown code fences, no prose before or after it, and no other commentary — one object per symbol listed under MARKET DATA or PENNY STOCK CANDIDATES above, shaped exactly like:
-[{"symbol":"AAPL","emoji":"📈","action":"CALL","vehicle":"OPTION","expiration":"2026-09-20","strike":230,"entryTrigger":"...","triggerPrice":232.50,"triggerDirection":"above","invalidation":225.5,"target":238,"staleMinutes":90,"conviction":3,"catalyst":"technical breakout","risk":"MEDIUM","why_pro":"1-2 sentences, real terms ok","why_plain":"1-2 simple sentences"}]
+${intradayOk ? `9. INTRADAY PLAYBOOK — a second, separate kind of idea. Everything above produces one object per symbol, which the app treats as a multi-day position. In ADDITION you may append up to ${INTRADAY_MAX} extra objects with "horizon":"intraday" (at most one per symbol) for trades that should be opened AND closed today. Look for them actively on the liquid names; two shapes qualify:
+   (a) CONTINUATION: price is breaking, or about to break, today's high or low with real participation, and there is room to run before the next obvious level.
+   (b) FADE: price is stretched — at or near today's high (or a multi-week high) after a fast run and stalling there, or the mirror image at the low — and the trade is the pullback toward the middle of today's range. Fading a run-up is a PUT; fading a flush is a CALL. A fade needs evidence of stalling in the data above (it is off the extreme, or has failed there), not just "it went up a lot".
+   Rules for an intraday object: vehicle "OPTION", action "CALL" or "PUT" — either direction is equally welcome, and a symbol's intraday object may point the opposite way from its multi-day one. triggerPrice/triggerDirection close to the current price (it should be able to trigger within the hour). target reachable TODAY: typically 0.4%-1.5% of the underlying and inside today's normal range, not a multi-day objective. invalidation tight, just beyond the extreme being broken or faded. Reward at least 1.5x risk. staleMinutes 20-60. expiration: the nearest one listed (the app substitutes a 1-3 day contract and closes it before the bell). catalyst "intraday continuation" or "intraday fade". risk HIGH. conviction honest, usually 2-3.
+   Do not restate a symbol's multi-day idea as an intraday one, and do not force these: zero intraday objects is a fine answer on a dead tape. Every other object carries "horizon":"swing".
+
+` : ""}Respond with ONLY a raw JSON array, no markdown code fences, no prose before or after it, and no other commentary — one object per symbol listed under MARKET DATA or PENNY STOCK CANDIDATES above${intradayOk ? ", followed by any intraday objects" : ""}, shaped exactly like:
+[{"symbol":"AAPL","emoji":"📈","action":"CALL","vehicle":"OPTION","expiration":"2026-09-20","strike":230,"entryTrigger":"...","triggerPrice":232.50,"triggerDirection":"above","invalidation":225.5,"target":238,"staleMinutes":90,"conviction":3,"catalyst":"technical breakout","risk":"MEDIUM","horizon":"swing","why_pro":"1-2 sentences, real terms ok","why_plain":"1-2 simple sentences"}]
 
 action is one of BUY, SELL, CALL, PUT, WAIT (BUY/SELL pair with vehicle SHARES; CALL/PUT pair with vehicle OPTION). vehicle is OPTION, SHARES, or null for WAIT. strike/expiration are null unless vehicle is OPTION. emoji is a single emoji (📈 bullish, 📉 bearish, ⚡ options, ⏸ wait).`;
 
@@ -536,7 +575,7 @@ action is one of BUY, SELL, CALL, PUT, WAIT (BUY/SELL pair with vehicle SHARES; 
     // caps above), not this setting.
     const message = await client.messages.create({
       model: process.env.SUGGESTIONS_MODEL || "claude-opus-5",
-      max_tokens: 8000,
+      max_tokens: 14000, // ~25 symbols plus up to four intraday objects
       output_config: { effort: "low" },
       messages: [{ role: "user", content: prompt }],
     });
@@ -553,6 +592,21 @@ action is one of BUY, SELL, CALL, PUT, WAIT (BUY/SELL pair with vehicle SHARES; 
       if (!Array.isArray(ideas)) throw new Error("not an array");
     } catch {
       return NextResponse.json({ error: "The model returned an unparseable response. Try Refresh again." }, { status: 502 });
+    }
+
+    // Intraday objects: keep only well-formed ones, and tag them as their own
+    // strategy so the multi-day pipeline never mistakes one for its own idea.
+    {
+      const seen = new Set();
+      let kept = 0;
+      ideas = ideas.filter((i) => {
+        if (i.horizon !== "intraday") { i.horizon = "swing"; return true; }
+        const okShape = intradayOk && i.vehicle === "OPTION" && (i.action === "CALL" || i.action === "PUT") && i.triggerPrice != null && i.invalidation != null && i.target != null;
+        if (!okShape || seen.has(i.symbol) || kept >= INTRADAY_MAX) return false;
+        seen.add(i.symbol); kept++;
+        i.strategy = "intraday"; i.flatByClose = true;
+        return true;
+      });
     }
 
     // Spot price at generation time, for every idea — options resolve their
@@ -604,7 +658,9 @@ action is one of BUY, SELL, CALL, PUT, WAIT (BUY/SELL pair with vehicle SHARES; 
       const { sizing, affordable: fits } = sizeIdea(idea, account);
       idea.sizing = sizing;
       idea.affordable = fits;
-      if (idea.vehicle === "OPTION" && fits === false && (idea.action === "CALL" || idea.action === "PUT")) {
+      // An intraday idea always takes the 1-3 day contract when one qualifies,
+      // whether or not the model's own choice happened to fit.
+      if (idea.vehicle === "OPTION" && (fits === false || idea.strategy === "intraday") && (idea.action === "CALL" || idea.action === "PUT")) {
         const alt = await shortDatedAlternative(idea, account);
         if (alt) {
           idea.shortDated = { fromExpiration: idea.expiration, fromStrike: idea.strike, dte: alt.dte, thetaPerDay: alt.thetaPerDay };
@@ -612,7 +668,7 @@ action is one of BUY, SELL, CALL, PUT, WAIT (BUY/SELL pair with vehicle SHARES; 
           idea.flatByClose = true;
           const re = sizeIdea(idea, account);
           idea.sizing = re.sizing; idea.affordable = re.affordable;
-          if (idea.sizing) idea.sizing.note = `SHORT-DATED ${alt.expiration} (${alt.dte}d) instead of ${idea.shortDated.fromExpiration}, which did not fit: ${idea.sizing.note}. Decays ~$${(alt.thetaPerDay ?? 0).toFixed(0)}/day; flat by the close.`;
+          if (idea.sizing) idea.sizing.note = `SHORT-DATED ${alt.expiration} (${alt.dte}d) instead of ${idea.shortDated.fromExpiration}${idea.strategy === "intraday" ? " for a same-day trade" : ", which did not fit"}: ${idea.sizing.note}. Decays ~$${(alt.thetaPerDay ?? 0).toFixed(0)}/day; flat by the close.`;
         }
       }
     }
@@ -635,6 +691,7 @@ action is one of BUY, SELL, CALL, PUT, WAIT (BUY/SELL pair with vehicle SHARES; 
         leg: idea.leg ?? null,
         sizing: idea.sizing ?? null, affordable: idea.affordable ?? null, accountSize: account,
         shortDated: idea.shortDated ?? null, flatByClose: idea.flatByClose ?? false,
+        horizon: idea.horizon ?? "swing", ...(idea.strategy ? { strategy: idea.strategy } : {}),
         todayChangePct: idea.todayChangePct ?? null,
         entryPrice: lastBySym[idea.symbol] ?? pennyPriceBySym[idea.symbol] ?? null,
         regimeTrend: regime?.available ? regime.spy.trend : null,
@@ -652,7 +709,7 @@ action is one of BUY, SELL, CALL, PUT, WAIT (BUY/SELL pair with vehicle SHARES; 
 
     markActivity("refresh", {
       ok: true, ideas: ideas.length,
-      setups: ideas.filter((i) => i.action !== "WAIT").map((i) => ({ symbol: i.symbol, action: i.action, triggerDirection: i.triggerDirection ?? null, triggerPrice: i.triggerPrice ?? null })),
+      setups: ideas.filter((i) => i.action !== "WAIT").map((i) => ({ symbol: i.symbol, action: i.action, intraday: i.strategy === "intraday", triggerDirection: i.triggerDirection ?? null, triggerPrice: i.triggerPrice ?? null })),
     });
     return NextResponse.json({ ideas, market_state: clock.state, timestamp: new Date().toISOString() });
   } catch (e) {

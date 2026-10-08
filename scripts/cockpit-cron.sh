@@ -84,10 +84,10 @@ case "${1:-exits}" in
     run autotrade "$BASE/api/order/autotrade" ;;
   refresh)
     # The only billed call. Hourly.
-    # The fixed list plus whatever the watchlist maintenance has added.
-    extras=$(curl -s --max-time 15 "$BASE/api/watchlist/extras" | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)["symbols"]))' 2>/dev/null || true)
+    # "auto" = the app's own core list plus extras (app/api/watchCore.js), so
+    # the list lives in one place and not in this script.
     code=$(curl -s -o /tmp/cockpit-sugg.json -w '%{http_code}' --max-time 300 \
-      "$BASE/api/suggestions?symbols=NVDA,TSLA,AAL,NOK,FEIM,QQQ,SPY${extras:+,$extras}&account=${ACCOUNT_SIZE}")
+      "$BASE/api/suggestions?symbols=auto&account=${ACCOUNT_SIZE}")
     log "refresh http=$code $(python3 "$HERE/summarize.py" /tmp/cockpit-sugg.json)" ;;
   *) log "unknown mode ${1:-}"; exit 2 ;;
 esac

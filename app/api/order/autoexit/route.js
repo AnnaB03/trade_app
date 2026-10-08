@@ -698,9 +698,14 @@ async function run(req) {
       }
 
       // 2. Target hit — anywhere in today's range, not just the current tick.
-      if (!exit && pos.target != null && favorableExtreme != null) {
-        const hit = dir > 0 ? favorableExtreme >= pos.target : favorableExtreme <= pos.target;
-        if (hit) exit = { tag: "target", detail: `Hit its $${pos.target} target intraday (day's ${dir > 0 ? "high" : "low"} $${favorableExtreme}, now $${underlyingPx})` };
+      /* An intraday position is judged on the LIVE price only. Its target sits
+         inside today's range by design — a fade aims back at the middle — so
+         the day's extreme has usually already been through it before entry,
+         and would read as "target hit" the minute the position opened. */
+      const targetRef = pos.strategy === "intraday" ? underlyingPx : favorableExtreme;
+      if (!exit && pos.target != null && targetRef != null) {
+        const hit = dir > 0 ? targetRef >= pos.target : targetRef <= pos.target;
+        if (hit) exit = { tag: "target", detail: pos.strategy === "intraday" ? `Reached its $${pos.target} same-day target (now $${underlyingPx})` : `Hit its $${pos.target} target intraday (day's ${dir > 0 ? "high" : "low"} $${favorableExtreme}, now $${underlyingPx})` };
       }
       // 3. Invalidation breached with no stop to have caught it. Deliberately
       // asymmetric with the target check above: this one stays on the LIVE
@@ -714,8 +719,9 @@ async function run(req) {
         const hit = dir > 0 ? underlyingPx <= pos.invalidation : underlyingPx >= pos.invalidation;
         if (hit) exit = { tag: "invalidation", detail: `Breached its $${pos.invalidation} invalidation with no stop resting to catch it (underlying now $${underlyingPx})` };
       }
-      // 4. Thesis reversed.
-      if (!exit) {
+      // 4. Thesis reversed. Not for intraday positions: the multi-day read on a
+      // symbol may point the other way from a same-day fade by design.
+      if (!exit && pos.strategy !== "intraday") {
         // Anchor to when this position's OWN thesis was written, so only a
         // genuinely later read can overturn it.
         const ownIdea = pos.ideaId ? allIdeas.find((i) => i.id === pos.ideaId) : null;
