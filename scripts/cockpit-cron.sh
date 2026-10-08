@@ -88,6 +88,14 @@ case "${1:-exits}" in
     # the list lives in one place and not in this script.
     code=$(curl -s -o /tmp/cockpit-sugg.json -w '%{http_code}' --max-time 300 \
       "$BASE/api/suggestions?symbols=auto&account=${ACCOUNT_SIZE}")
+    # One retry. The model API answers 500 now and then (10:43 on 2026-10-08),
+    # and a missed refresh means half an hour with no new ideas.
+    if [ "$code" != "200" ]; then
+      log "refresh http=$code $(python3 "$HERE/summarize.py" /tmp/cockpit-sugg.json) — retrying once"
+      sleep 20
+      code=$(curl -s -o /tmp/cockpit-sugg.json -w '%{http_code}' --max-time 300 \
+        "$BASE/api/suggestions?symbols=auto&account=${ACCOUNT_SIZE}")
+    fi
     log "refresh http=$code $(python3 "$HERE/summarize.py" /tmp/cockpit-sugg.json)" ;;
   *) log "unknown mode ${1:-}"; exit 2 ;;
 esac
