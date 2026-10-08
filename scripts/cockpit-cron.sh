@@ -57,6 +57,12 @@ esac
 # autopilot, which is exactly what went unnoticed before.
 hc=$(curl -s -o /tmp/cockpit-health.json -w '%{http_code}' --max-time 30 "$BASE/api/health")
 if [ "$hc" != "200" ]; then
+  # One retry: the broker's clock endpoint times out now and then (three times
+  # in half an hour on 2026-10-08), and each miss cost a minute of exit checks.
+  sleep 4
+  hc=$(curl -s -o /tmp/cockpit-health.json -w '%{http_code}' --max-time 30 "$BASE/api/health")
+fi
+if [ "$hc" != "200" ]; then
   log "UNHEALTHY http=$hc $(head -c 400 /tmp/cockpit-health.json 2>/dev/null)"
   exit 1
 fi
