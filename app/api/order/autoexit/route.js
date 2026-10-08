@@ -296,6 +296,8 @@ async function cancelResting(orderId) {
    more than the position) and wrong for the gain, which would be overstated by
    the unfilled remainder. Share orders here now run to thousands of shares, so
    a partial is a question of when, not whether. */
+const MAX_LOSS_PCT = 1; // % of the account one trade may lose before it is sold
+const MAX_LOSS_USD = (ACCOUNT_SIZE * MAX_LOSS_PCT) / 100;
 const SHORT_DATED_TARGET_PCT = 7; // sell a closeByEod contract outright at this gain
 const ENTRY_REST_MAX_MIN = 5; // how long an unfilled entry may rest before it is withdrawn
 const heldQuantity = (pos) => Number(pos.entryFilledQuantity ?? pos.entryQuantity) || 0;
@@ -642,6 +644,17 @@ async function run(req) {
          GAINS, so a loser would be carried overnight and lose that again. These
          close in the last 15 minutes whatever the P&L. Gated on the clock so the
          15:03 and 15:18 late-session passes leave it alone. */
+      /* The most one trade may lose: 1% of the account, about $100. The user
+         stated this as the rule for every trade. On 2026-10-08 it had only been
+         built into the SIZE of same-day trades, so a multi-day INTC put bought
+         as four contracts sat at -$436 with nothing to sell it: its own
+         invalidation was still $2 away and would have cost about $650. This is
+         a hard stop on the position's dollars, measured at the bid, whatever
+         the idea's own levels say. Checked once a minute, so a fast move can
+         overshoot it. */
+      if (!exit && gainUsd != null && gainUsd <= -MAX_LOSS_USD) {
+        exit = { tag: "max_loss", detail: `Down $${Math.abs(gainUsd).toFixed(0)} at the bid — at the $${MAX_LOSS_USD.toFixed(0)} most one trade may lose (${MAX_LOSS_PCT}% of the account)` };
+      }
       if (!exit && eod && pos.closeByEod) {
         const hm = new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour12: false, hour: "2-digit", minute: "2-digit" }).split(":").map(Number);
         if (hm[0] * 60 + hm[1] >= 15 * 60 + 45) {

@@ -726,16 +726,24 @@ async function run(req) {
          times the distance to the idea's invalidation, plus the spread paid to
          get out. One contract is still allowed when it runs a little over the
          budget; beyond 1.5x the budget the trade is not taken. */
-      if (idea.strategy === "intraday" && idea.vehicle === "OPTION") {
+      /* Extended to EVERY option trade on 2026-10-08, the same afternoon: the
+         user's rule is $100 per trade, not per same-day trade. A multi-day idea
+         has a wider stop, so its loss at the idea's own invalidation is often
+         more than the budget even for one contract; it is still allowed one
+         contract, because autoexit now sells any position at -$100 (max_loss)
+         before that level is reached. Only same-day trades are refused outright
+         when one contract is too much. */
+      if (idea.vehicle === "OPTION") {
+        const intradayIdea = idea.strategy === "intraday";
         const delta = Math.abs(Number(idea.leg?.delta)) || 0.6;
         const stopDist = Math.abs(Number(idea.entryPrice) - Number(idea.invalidation));
         const spread = Math.max(0, (Number(idea.leg?.ask) || 0) - (Number(idea.leg?.bid) || 0));
         const riskPer = (delta * stopDist + spread) * 100;
         const budget = (ACCOUNT_SIZE * INTRADAY_RISK_PCT) / 100;
-        if (!(riskPer > 0)) { results.push({ ...tag, placed: false, reason: "Cannot size this same-day trade: no usable stop distance." }); continue; }
+        if (!(riskPer > 0)) { results.push({ ...tag, placed: false, reason: "Cannot size this trade: no usable stop distance." }); continue; }
         let n = Math.floor(budget / riskPer);
         if (n < 1) {
-          if (riskPer > budget * 1.5) {
+          if (intradayIdea && riskPer > budget * 1.5) {
             results.push({ ...tag, placed: false, reason: `One contract would lose about $${riskPer.toFixed(0)} at the stop — over the $${(budget * 1.5).toFixed(0)} most a same-day trade may risk (${INTRADAY_RISK_PCT}% of the account, with half again of leeway).` });
             continue;
           }
