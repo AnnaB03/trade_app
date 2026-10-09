@@ -97,6 +97,10 @@ case "${1:-exits}" in
     run autotrade-intraday "$BASE/api/order/autotrade?playbook=intraday" ;;
   refresh)
     # The only billed call. Hourly.
+    # Clear the last result first: when the call fails outright (http=000) the
+    # log line below used to summarise the PREVIOUS refresh's file, so a dead
+    # refresh read like a successful one ("ideas=23 ...") all of 2026-10-09.
+    rm -f /tmp/cockpit-sugg.json
     # "auto" = the app's own core list plus extras (app/api/watchCore.js), so
     # the list lives in one place and not in this script.
     code=$(curl -s -o /tmp/cockpit-sugg.json -w '%{http_code}' --max-time 300 \
@@ -106,6 +110,7 @@ case "${1:-exits}" in
     if [ "$code" != "200" ]; then
       log "refresh http=$code $(python3 "$HERE/summarize.py" /tmp/cockpit-sugg.json) — retrying once"
       sleep 20
+      rm -f /tmp/cockpit-sugg.json
       code=$(curl -s -o /tmp/cockpit-sugg.json -w '%{http_code}' --max-time 300 \
         "$BASE/api/suggestions?symbols=auto&account=${ACCOUNT_SIZE}")
     fi
