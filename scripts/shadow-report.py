@@ -68,8 +68,14 @@ def replay(r):
     u0 = r.get("underlying") or next((ub[k]["close"] for k in sorted(ub) if k >= start), None)
     last_opt, t = None, at.replace(second=0, microsecond=0)
     end = t.replace(hour=15, minute=45)
+    now = datetime.now(t.tzinfo)
+    last_pnl = None
     while True:
         t += timedelta(minutes=1)
+        # Never replay past the present: a trade recorded this morning is still
+        # open, not "flat by the close".
+        if t > now:
+            return day, start, last_pnl, "STILL OPEN (so far)", now.strftime("%H:%M")
         k = t.strftime("%H:%M")
         u = ub.get(k)
         if k in ob:
@@ -84,6 +90,7 @@ def replay(r):
         else:
             est_bid = bid or ask
         pnl = (est_bid - ask) * 100 * n - 2 * FEE * n
+        last_pnl = pnl
         why = None
         if est_bid >= ask * (1 + TARGET_PCT / 100):
             why = "quick_target"
@@ -111,11 +118,14 @@ for r in rows:
     if pnl is None:
         print(f"{head}  -> {why}")
         continue
+    if why.startswith("STILL OPEN"):
+        print(f"{head}  -> still open at {when}, about {pnl:+,.0f} so far")
+        continue
     n += 1
     tot += pnl
     wins += pnl > 0
     print(f"{head}  -> {why} at {when}, about {pnl:+,.0f}")
 if n:
-    print(f"  {n} trades, {wins} won, estimated total {tot:+,.0f}")
+    print(f"  {n} finished trades, {wins} won, estimated total {tot:+,.0f}")
 else:
     print("  none recorded" + (f" for {want}" if want else ""))
