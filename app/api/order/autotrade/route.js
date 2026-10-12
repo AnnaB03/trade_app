@@ -121,6 +121,7 @@ const DIRECTION_SIGN = { CALL: 1, BUY: 1, PUT: -1, SELL: -1 };
    has shown what it would have done. Set INTRADAY_LIVE=true in .env.local (and
    restart the server) to let it trade the account again. */
 const INTRADAY_WATCH_ONLY = process.env.INTRADAY_LIVE !== "true";
+const MAX_SPREAD_SHARE_OF_LOSS = 0.4; // of the per-trade loss limit
 const INTRADAY_RISK_PCT = 1; // % of the account a same-day trade may lose at its stop
 const LAST_FLAT_BY_CLOSE_ENTRY_MIN = 15 * 60; // ET minutes; flat-by-close contracts are not opened after this
 const REENTRY_COOLDOWN_MIN = 45; // no re-entry on a just-exited symbol without a newer idea
@@ -756,6 +757,19 @@ async function run(req) {
         }
         const perContract = (Number(payPrice(idea.leg)) || 0) * 100;
         if (perContract > 0) n = Math.max(1, Math.min(n, Math.floor((ACCOUNT_SIZE * OPTION_HARD_PCT) / perContract) || 1));
+        /* The spread is paid the moment the order fills: bought at the ask,
+           worth the bid. GOOGL 11/6 $355c was bought on 2026-10-12 at $14.55
+           against a $13.60 bid — down $95 on arrival, against a $100 loss
+           limit, so the first tick lower would sell it for the spread alone.
+           Wide-spread orders used to be waved through ("nothing to protect in a
+           paper account"); with honest fills and a hard loss limit that is a
+           guaranteed loser. An entry may spend at most 40% of the loss limit on
+           the spread. */
+        const spreadCost = spread * 100 * n;
+        if (spreadCost > budget * MAX_SPREAD_SHARE_OF_LOSS) {
+          results.push({ ...tag, placed: false, reason: `Spread too wide: buying at $${idea.leg?.ask} against a $${idea.leg?.bid} bid costs $${spreadCost.toFixed(0)} on arrival — over ${(MAX_SPREAD_SHARE_OF_LOSS * 100).toFixed(0)}% of the $${budget.toFixed(0)} a trade may lose.` });
+          continue;
+        }
         idea.sizing = { ...(idea.sizing || {}), contracts: n, riskAtStop: Number((riskPer * n).toFixed(0)) };
         tag.sizedByRisk = `${n} contract${n === 1 ? "" : "s"}, about $${(riskPer * n).toFixed(0)} at risk to the stop`;
       }
