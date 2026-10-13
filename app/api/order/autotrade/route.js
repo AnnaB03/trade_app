@@ -131,7 +131,9 @@ const DIRECTION_SIGN = { CALL: 1, BUY: 1, PUT: -1, SELL: -1 };
 const INTRADAY_WATCH_ONLY = process.env.INTRADAY_LIVE !== "true";
 // Playbooks that open and close inside one session: sized by risk, refused
 // outright when one contract is too much, and flat by the close.
-const SAME_DAY = new Set(["intraday", "contrarian"]);
+const SAME_DAY = new Set(["intraday", "contrarian", "fade_scan"]);
+// Playbooks that record what they would have bought and place nothing (shadowLib.js).
+const watchOnly = (strategy) => strategy === "fade_scan" || (strategy === "intraday" && INTRADAY_WATCH_ONLY);
 const STRICT_TRIGGERS = process.env.LOOSE_TRIGGERS !== "true";
 const etNowMinutes = () => {
   const [h, m] = new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour12: false, hour: "2-digit", minute: "2-digit" }).split(":").map(Number);
@@ -141,7 +143,12 @@ const MAX_SPREAD_SHARE_OF_LOSS = 0.4; // of the per-trade loss limit
 const INTRADAY_RISK_PCT = 1; // % of the account a same-day trade may lose at its stop
 const LAST_FLAT_BY_CLOSE_ENTRY_MIN = 15 * 60; // ET minutes; flat-by-close contracts are not opened after this
 const REENTRY_COOLDOWN_MIN = 45; // no re-entry on a just-exited symbol without a newer idea
-const MAX_ENTRIES_PER_SYMBOL_DAY = 2; // churn cap; each lot clears the exposure gate on its own
+/* 2 -> 4 on 2026-10-13. At 2 it stopped the fade playbook on the one name that
+   was active: NVDA had used both entries by 12:25, and the two fades derived
+   after that (13:12 at $227.54 and 14:27 at $227.70, each aiming ~$0.85 lower)
+   were refused as churn while NVDA went to $226.93. The 45-minute cooldown
+   after an exit still applies, so this is at most one entry an hour. */
+const MAX_ENTRIES_PER_SYMBOL_DAY = 4;
 const MAX_BATCH_AGE_MIN = 20; // non-conditional ideas: reject a batch older than this
 const DEFAULT_TRIGGER_STALE_MIN = 120; // conditional ideas with no staleMinutes of their own
 const LOOKBACK_HOURS = 24; // how far back to search for each symbol's own latest idea
@@ -600,6 +607,55 @@ async function deriveFades(now = Date.now()) {
   return made;
 }
 
+/* ---------- The fade scan (WATCH-ONLY) ----------
+   The live fade only fires when the model has a bullish idea that is
+   triggering, and on a quiet afternoon the model says WAIT to 24 of 25 names,
+   so the playbook has almost nothing to act on. This asks the wider question
+   without the model: in an uptrend, is ANY watched name pressing the top of
+   its day's range worth fading?
+
+   The evidence for the live fade does not cover this. That evidence is about
+   ideas the model chose; a stock at its high with no idea behind it is a
+   different population. So this records what it would have bought
+   (shadowLib.js) and places nothing. scripts/shadow-report.py scores it. */
+const SCAN_RANGE_POS = 95, SCAN_MIN_RANGE_PCT = 0.8, SCAN_FROM_ET_MIN = 10 * 60, SCAN_REGIME_MAX_AGE_MIN = 60, SCAN_REPEAT_MIN = 45;
+
+async function deriveScanFades(now = Date.now()) {
+  const made = [];
+  try {
+    const mins = etNowMinutes();
+    if (mins < SCAN_FROM_ET_MIN || mins >= LAST_FLAT_BY_CLOSE_ENTRY_MIN) return made;
+    const all = listIdeas();
+    const recentScan = new Set(all.filter((i) => i.strategy === "fade_scan" && now - new Date(i.createdAt).getTime() < SCAN_REPEAT_MIN * 60000).map((i) => i.symbol));
+    // The regime each name was last read in, from the model's own latest row.
+    const latest = latestPerSymbol(all.filter((i) => !i.strategy));
+    for (const base of latest) {
+      if (recentScan.has(base.symbol) || base.regimeTrend !== "uptrend") continue;
+      if (now - new Date(base.createdAt).getTime() > SCAN_REGIME_MAX_AGE_MIN * 60000) continue;
+      const q = await dayQuote(base.symbol);
+      if (!(q.last > 0) || !(q.high > q.low)) continue;
+      if (((q.high - q.low) / q.last) * 100 < SCAN_MIN_RANGE_PCT) continue; // a dead range has no "top"
+      const plan = fadePlan({ action: "CALL", price: q.last, low: q.low, high: q.high, force: true });
+      if (!plan || plan.rangePos < SCAN_RANGE_POS) continue;
+      const alt = await fadeContract(base.symbol, "put", q.last);
+      if (!alt) continue;
+      const why = `${base.symbol} is at ${plan.rangePos}% of today's $${q.low}-$${q.high} range in an uptrend, with no idea behind it. Watch-only: would a put work here? Wrong above $${plan.invalidation}, aiming for $${plan.target}.`;
+      const row = appendIdea({
+        symbol: base.symbol, action: "PUT", vehicle: "OPTION", strike: alt.strike, expiration: alt.expiration,
+        entryTrigger: `scan: ${plan.rangePos}% of the day's range in an uptrend`, triggerPrice: null, triggerDirection: null, triggered: true,
+        invalidation: plan.invalidation, target: plan.target, staleMinutes: 15,
+        conviction: 3, catalyst: "range-top scan", risk: "HIGH", regimeTrend: "uptrend",
+        why_pro: why, why_plain: why, leg: alt.leg, sizing: { vehicle: "OPTION", contracts: 1 }, affordable: true, accountSize: ACCOUNT_SIZE,
+        flatByClose: true, horizon: "intraday", strategy: "fade_scan", entryPrice: q.last, marketState: "open",
+      });
+      made.push(row.id);
+    }
+  } catch (e) {
+    console.error("deriveScanFades failed:", e);
+  }
+  return made;
+}
+
 async function run(req) {
   const params = new URL(req.url).searchParams;
   const dryRun = params.get("dryRun") === "true";
@@ -613,8 +669,8 @@ async function run(req) {
     // Two playbooks share this route and never read each other's ideas: the
     // multi-day AI ideas (no strategy tag) and the intraday ones.
     const asked = params.get("playbook");
-    const playbook = asked === "intraday" || asked === "contrarian" ? asked : null;
-    const derived = playbook === "contrarian" ? await deriveFades() : [];
+    const playbook = ["intraday", "contrarian", "fade_scan"].includes(asked) ? asked : null;
+    const derived = playbook === "contrarian" ? await deriveFades() : playbook === "fade_scan" ? await deriveScanFades() : [];
     const all = listIdeas().filter((i) => (playbook ? i.strategy === playbook : !i.strategy));
     const batch = latestPerSymbol(all);
     /* An empty playbook is not an error: the fade only has ideas while a
@@ -682,7 +738,7 @@ async function run(req) {
       }
       /* Selection (selectionLib.js): which ideas are taken as written. The fade
          playbook is exempt — it is the other side of exactly these refusals. */
-      if (rawIdea.strategy !== "contrarian") {
+      if (rawIdea.strategy !== "contrarian" && rawIdea.strategy !== "fade_scan") {
         const sv = selectionVerdict({ action: rawIdea.action, regime: rawIdea.regimeTrend, etMinutes: etNowMinutes(), catalyst: rawIdea.catalyst });
         if (!sv.ok) { results.push({ ...tag, placed: false, selection: sv.rule, reason: sv.reason }); continue; }
       }
@@ -769,7 +825,7 @@ async function run(req) {
            of the range are 3 winners in 8, while the fade playbook now takes
            the other side there (fadeLib.js). Honest cost: this also blocks the
            trending-day breakouts that worked on 2026-10-09. */
-        if (idea.strategy !== "contrarian") {
+        if (idea.strategy !== "contrarian" && idea.strategy !== "fade_scan") {
           const q = quoteBySym[idea.symbol] || {};
           const read = extremeRead({ action: idea.action, price: live, low: q.low, high: q.high });
           if (read.atExtreme && fadeEnabled(read.side)) {
@@ -1045,10 +1101,10 @@ async function run(req) {
       /* Watch-only playbooks stop here: every gate above has passed, so this is
          exactly the trade that would have been placed. It is recorded and not
          sent. See shadowLib.js. */
-      if (idea.strategy === "intraday" && INTRADAY_WATCH_ONLY) {
+      if (watchOnly(idea.strategy)) {
         const contracts = Math.max(1, Number(idea.sizing?.contracts) || 1);
         const row = dryRun ? null : recordShadowEntry({
-          playbook: "intraday", ideaId: idea.id, symbol: idea.symbol, action: idea.action,
+          playbook: idea.strategy, ideaId: idea.id, symbol: idea.symbol, action: idea.action,
           occ: idea.leg?.occ ?? null, strike: idea.leg?.strike ?? idea.strike ?? null, expiration: idea.expiration ?? null,
           contracts, optionBid: idea.leg?.bid ?? null, optionAsk: idea.leg?.ask ?? null, delta: idea.leg?.delta ?? null,
           underlying: idea.entryPrice ?? null, triggerPrice: idea.triggerPrice ?? null, triggerDirection: idea.triggerDirection ?? null,
@@ -1096,7 +1152,7 @@ export function GET(req) {
     const u = new URL(req.url);
     let out = res;
     if (u.searchParams.get("playbook") == null) {
-      for (const pb of ["intraday", "contrarian"]) {
+      for (const pb of ["intraday", "contrarian", "fade_scan"]) {
         const pu = new URL(u);
         pu.searchParams.set("playbook", pb);
         try {
