@@ -8,7 +8,7 @@ that is not allowed to trade yet) and replays each one minute by minute against
 real prices, applying the live exit rules for a same-day position:
 
   +7% at the bid          -> sold (quick_target)
-  down $100 at the bid    -> sold (max_loss)
+  down 1% of the account at the bid -> sold (max_loss)
   stock through the idea's invalidation or target -> sold
   15:45 ET                -> sold (flat by the close)
 
@@ -27,7 +27,20 @@ from datetime import datetime, timedelta, timezone
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FEE = 0.35
-TARGET_PCT, MAX_LOSS = 7.0, 100.0
+# The per-trade loss limit is 1% of the account, read from the same place the
+# app reads it. It was a fixed $100 here and scored a $25K account's trades
+# against the $10K limit.
+def account_size():
+    try:
+        for line in open(os.path.join(ROOT, ".env.local")):
+            if line.startswith("ACCOUNT_SIZE="):
+                return float(line.split("=", 1)[1].strip().strip('"').strip("'"))
+    except Exception:
+        pass
+    return 10000.0
+
+
+TARGET_PCT, MAX_LOSS = 7.0, account_size() * 0.01
 
 
 def token():
