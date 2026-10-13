@@ -24,11 +24,19 @@
    Nothing is deleted. STORE_FILE overrides the database path (tests). */
 import fs from "fs";
 import path from "path";
+import { isGradable, gradeStart } from "./gradeLib.js";
 
 const DIR = path.join(process.cwd(), "data");
 const DB_FILE = process.env.STORE_FILE || path.join(DIR, "cockpit.db");
 
 let db = null;
+// Prepared statements, reused across calls; dropped with the handle.
+const stmts = new Map();
+function stmt(sql) {
+  let s = stmts.get(sql);
+  if (!s) { s = open().prepare(sql); stmts.set(sql, s); }
+  return s;
+}
 function open() {
   if (db) return db;
   const sqlite = process.getBuiltinModule?.("node:sqlite");
@@ -41,8 +49,17 @@ function open() {
              CREATE INDEX IF NOT EXISTS ${t}_createdAt ON ${t}(createdAt);`);
   }
   db.exec("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updatedAt TEXT NOT NULL);");
-  migrateJson("ideas", "ideas.json");
-  migrateJson("journal", "journal.json");
+  // A failed import must not leave the handle cached: the next open() would
+  // skip the import, the first append would make the table non-empty, and
+  // the JSON history would never be imported at all.
+  try {
+    migrateJson("ideas", "ideas.json");
+    migrateJson("journal", "journal.json");
+  } catch (e) {
+    try { db.close(); } catch {}
+    db = null;
+    throw e;
+  }
   return db;
 }
 
@@ -70,10 +87,10 @@ function collection(table) {
   const parse = (r) => JSON.parse(r.data);
   return {
     // Newest first, as the JSON store sorted.
-    list: () => open().prepare(`SELECT data FROM ${table} ORDER BY createdAt DESC, rowid DESC`).all().map(parse),
+    list: () => stmt(`SELECT data FROM ${table} ORDER BY createdAt DESC, rowid DESC`).all().map(parse),
     append: (data, extra = {}) => {
       const row = { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, createdAt: new Date().toISOString(), ...extra, ...data };
-      open().prepare(`INSERT INTO ${table} (id, createdAt, data) VALUES (?, ?, ?)`).run(row.id, row.createdAt, JSON.stringify(row));
+      stmt(`INSERT INTO ${table} (id, createdAt, data) VALUES (?, ?, ?)`).run(row.id, row.createdAt, JSON.stringify(row));
       return row;
     },
     // Read-merge-write inside one transaction, so two routes patching the
@@ -83,16 +100,18 @@ function collection(table) {
       const d = open();
       d.exec("BEGIN IMMEDIATE");
       try {
-        const cur = d.prepare(`SELECT data FROM ${table} WHERE id = ?`).get(String(id));
+        const cur = stmt(`SELECT data FROM ${table} WHERE id = ?`).get(String(id));
         if (!cur) { d.exec("COMMIT"); return null; }
         const next = { ...parse(cur), ...patch, updatedAt: new Date().toISOString() };
-        d.prepare(`UPDATE ${table} SET data = ?, createdAt = ? WHERE id = ?`).run(JSON.stringify(next), String(next.createdAt || ""), String(id));
+        stmt(`UPDATE ${table} SET data = ?, createdAt = ? WHERE id = ?`).run(JSON.stringify(next), String(next.createdAt || ""), String(id));
         d.exec("COMMIT");
         return next;
       } catch (e) { d.exec("ROLLBACK"); throw e; }
     },
+    // Oldest first, as the JSON store's Array.find scanned it: with two open
+    // lots of one contract, a close books against the first one bought.
     find: (pred) => {
-      for (const r of open().prepare(`SELECT data FROM ${table} ORDER BY createdAt DESC, rowid DESC`).iterate()) {
+      for (const r of stmt(`SELECT data FROM ${table} ORDER BY createdAt ASC, rowid ASC`).iterate()) {
         const row = parse(r);
         if (pred(row)) return row;
       }
@@ -112,8 +131,8 @@ export const updateIdea = (id, patch) => ideasStore.update(id, patch);
 // checkpoints: [{ key, afterMs }] — e.g. { key: "h1", afterMs: 3600000 }
 export function dueForGrading(checkpoints, now = Date.now()) {
   return listIdeas().filter((idea) => {
-    if (!["CALL", "PUT", "BUY", "SELL"].includes(idea.action)) return false;
-    const age = now - new Date(idea.createdAt).getTime();
+    if (!isGradable(idea)) return false; // a resting limit not yet filled, or never filled
+    const age = now - gradeStart(idea);
     return checkpoints.some((cp) => age >= cp.afterMs && !idea.grades?.[cp.key]);
   });
 }
@@ -127,15 +146,15 @@ export const findOpenJournalEntry = (pred) => journalStore.find((r) => r.status 
 
 /* ---------- Key/value state ---------- */
 export function kvGet(key) {
-  const r = open().prepare("SELECT value FROM kv WHERE key = ?").get(key);
+  const r = stmt("SELECT value FROM kv WHERE key = ?").get(key);
   return r ? JSON.parse(r.value) : null;
 }
 export function kvSet(key, value) {
-  open().prepare("INSERT INTO kv (key, value, updatedAt) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updatedAt = excluded.updatedAt")
+  stmt("INSERT INTO kv (key, value, updatedAt) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updatedAt = excluded.updatedAt")
     .run(key, JSON.stringify(value), new Date().toISOString());
   return value;
 }
-export function kvDelete(key) { open().prepare("DELETE FROM kv WHERE key = ?").run(key); }
+export function kvDelete(key) { stmt("DELETE FROM kv WHERE key = ?").run(key); }
 
 // Tests only: close the handle so a temp database file can be removed.
-export function _closeForTests() { if (db) { db.close(); db = null; } }
+export function _closeForTests() { stmts.clear(); if (db) { db.close(); db = null; } }

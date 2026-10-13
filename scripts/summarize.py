@@ -6,6 +6,7 @@ bury real events in the log. Prints a line whenever something was closed,
 opened, or went wrong.
 """
 import json
+import os
 import sys
 from collections import Counter
 
@@ -29,10 +30,31 @@ if isinstance(ideas, list):
     print(line)
     sys.exit(0)
 
-# A halted book places nothing, which would otherwise read as a quiet run.
-if isinstance(d, dict) and d.get("halted"):
-    print(f"HALTED ({d.get('haltKind')}): {str(d.get('haltReason'))[:200]}")
-    sys.exit(0)
+# A halted book places nothing, which would otherwise read as a quiet run —
+# but the same-day entry pass runs every minute, so a halt is logged when it
+# starts (or its reason changes) and when it lifts, not on every run. The
+# marker is shared by both entry passes, since they share one halt.
+HALT_MARK = os.environ.get("COCKPIT_HALT_MARK", "/tmp/cockpit-halt-state")
+if isinstance(d, dict) and "candidateCount" in d:  # an entry-route response
+    try:
+        before = open(HALT_MARK).read()
+    except OSError:
+        before = None
+    if d.get("halted"):
+        now = f"{d.get('haltKind')}: {str(d.get('haltReason'))[:200]}"
+        if now != before:
+            print(f"HALTED ({now.split(': ', 1)[0]}): {now.split(': ', 1)[1]}")
+            try:
+                open(HALT_MARK, "w").write(now)
+            except OSError:
+                pass
+        sys.exit(0)
+    if before is not None:
+        print("RESUMED: new entries allowed again")
+        try:
+            os.remove(HALT_MARK)
+        except OSError:
+            pass
 
 acted = []
 for r in d.get("results") or []:

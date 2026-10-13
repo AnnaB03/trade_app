@@ -92,3 +92,25 @@ test("first open imports the legacy JSON files once and renames them", async () 
   assert.deepEqual(second.ideas, ["i2", "i1"]);
   fs.rmSync(cwd, { recursive: true, force: true });
 });
+
+test("findOpenJournalEntry returns the OLDEST open lot, as the JSON store did", async () => {
+  const first = store.appendJournalEntry({ symbol: "MRVL", occ: "MRVL-LOT", entryLimitPrice: 2.0 });
+  await new Promise((r) => setTimeout(r, 5));
+  store.appendJournalEntry({ symbol: "MRVL", occ: "MRVL-LOT", entryLimitPrice: 3.0 });
+  assert.equal(store.findOpenJournalEntry((r) => r.occ === "MRVL-LOT").id, first.id, "a close books against the first lot bought");
+  assert.equal(store.findOpenJournalEntry((r) => r.occ === "MRVL-LOT").id, first.id, "and again, on the reused statement");
+});
+
+test("dueForGrading skips resting limits that have not filled, and times the rest from their fill", () => {
+  const twoHoursAgo = new Date(Date.now() - 2 * 3600000).toISOString();
+  const pending = store.appendIdea({ symbol: "PEND", action: "BUY", pendingFill: true });
+  store.updateIdea(pending.id, { createdAt: twoHoursAgo });
+  const never = store.appendIdea({ symbol: "NEVR", action: "BUY", unfilled: true });
+  store.updateIdea(never.id, { createdAt: twoHoursAgo });
+  const filledLate = store.appendIdea({ symbol: "LATE", action: "BUY", gradeFrom: new Date(Date.now() - 10 * 60000).toISOString() });
+  store.updateIdea(filledLate.id, { createdAt: twoHoursAgo });
+  const due = store.dueForGrading([{ key: "h1", afterMs: 3600000 }]).map((i) => i.symbol);
+  assert.ok(!due.includes("PEND"));
+  assert.ok(!due.includes("NEVR"));
+  assert.ok(!due.includes("LATE"), "filled 10 minutes ago: its hour has not passed, whatever createdAt says");
+});

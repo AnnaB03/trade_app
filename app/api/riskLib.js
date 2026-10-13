@@ -37,17 +37,20 @@ export const dailyLossLimitUsd = (accountSize) => (Number(accountSize) > 0 ? Num
    that the caller should clear. */
 export function evaluateHalt({ stored, lossToday, limitUsd, today = dateET() }) {
   if (stored?.halted && stored.kind === "manual") return { halted: true, kind: "manual", reason: stored.reason || "halted by hand", since: stored.since };
+  let expired = false;
   if (stored?.halted && stored.kind === "daily_loss") {
     if (stored.day === today) return { halted: true, kind: "daily_loss", reason: stored.reason, since: stored.since };
-    return { halted: false, expired: true };
+    // An earlier session's halt has lapsed, but today's own loss still has
+    // to be judged before this answers "not halted".
+    expired = true;
   }
   if (limitUsd > 0 && lossToday <= -limitUsd) {
     return {
-      halted: true, kind: "daily_loss", fresh: true,
+      halted: true, kind: "daily_loss", fresh: true, ...(expired ? { expired } : {}),
       reason: `Down $${Math.abs(lossToday).toFixed(0)} realized today — at the $${limitUsd.toFixed(0)} daily loss limit (${DAILY_LOSS_LIMIT_PCT}% of the account). No new entries until the next session.`,
     };
   }
-  return { halted: false };
+  return expired ? { halted: false, expired } : { halted: false };
 }
 
 export const readHalt = () => kvGet(HALT_KEY);

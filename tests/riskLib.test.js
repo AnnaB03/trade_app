@@ -80,3 +80,11 @@ test("tradingHalt: records a fresh daily halt, clears an expired one, and the ma
   risk.resumeTrading();
   assert.equal(risk.tradingHalt({ accountSize: 10000, journal: [] }).halted, false);
 });
+
+test("evaluateHalt: yesterday's lapsed halt does not hide today's own loss past the limit", () => {
+  const stored = { halted: true, kind: "daily_loss", day: "2026-01-01", reason: "yesterday", since: "x" };
+  const v = risk.evaluateHalt({ stored, lossToday: -600, limitUsd: 500, today });
+  assert.equal(v.halted, true, "today's -$600 trips it on the first call, not the second");
+  assert.equal(v.fresh, true);
+  assert.equal(v.expired, true, "and the caller still clears yesterday's record");
+});

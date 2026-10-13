@@ -609,13 +609,16 @@ action is one of BUY, SELL, CALL, PUT, WAIT (BUY/SELL pair with vehicle SHARES; 
        call is a bounded per-symbol extraction, not the place the book's edge
        lives — and it is the only billed call, ~12 times a day. Sonnet is a
        fifth of the price per token. SUGGESTIONS_MODEL puts Opus back.
-       Structured outputs: the API returns parsed_output in IdeasSchema's
-       shape or fails the request. The old regex that stripped code fences
-       and the "unparseable response, try again" path are gone with it. */
-    const message = await client.messages.parse({
+       Structured outputs: the API constrains the text to IdeasSchema's
+       shape. It is sent through create() and parsed here, after the
+       stop_reason checks, because messages.parse() parses inside the call
+       and throws on a refusal or a max_tokens cut-off before either check
+       below could run. */
+    const ideasFormat = zodOutputFormat(IdeasSchema);
+    const message = await client.messages.create({
       model: process.env.SUGGESTIONS_MODEL || "claude-sonnet-5-5",
       max_tokens: 14000, // ~25 symbols plus up to four intraday objects
-      output_config: { effort: "low", format: zodOutputFormat(IdeasSchema) },
+      output_config: { effort: "low", format: ideasFormat },
       messages: [{ role: "user", content: prompt }],
     });
 
@@ -625,7 +628,12 @@ action is one of BUY, SELL, CALL, PUT, WAIT (BUY/SELL pair with vehicle SHARES; 
     if (message.stop_reason === "max_tokens") {
       return NextResponse.json({ error: "The model's answer was cut off at max_tokens — fewer symbols per refresh, or raise max_tokens in suggestions/route.js." }, { status: 502 });
     }
-    let ideas = message.parsed_output?.ideas;
+    let ideas;
+    try {
+      ideas = ideasFormat.parse(message.content.find((b) => b.type === "text")?.text ?? "").ideas;
+    } catch {
+      ideas = null;
+    }
     if (!Array.isArray(ideas)) {
       return NextResponse.json({ error: "The model returned a response that did not match the ideas schema. Try Refresh again." }, { status: 502 });
     }
@@ -712,31 +720,38 @@ action is one of BUY, SELL, CALL, PUT, WAIT (BUY/SELL pair with vehicle SHARES; 
     const RISK_ORDER = { LOW: 0, MEDIUM: 1, HIGH: 2 };
     ideas.sort((a, b) => (RISK_ORDER[a.risk] ?? 3) - (RISK_ORDER[b.risk] ?? 3));
 
-    // Persist every idea to the ledger (best-effort — see app/api/store.js
-    // for the read-only-filesystem caveat) so it can be graded later and
-    // folded into the calibration block above on future refreshes.
+    // Persist every idea to the ledger so it can be graded later and folded
+    // into the calibration block above on future refreshes. Best-effort: the
+    // SQLite store throws on a failed write (busy, read-only disk), and a
+    // billed answer is still worth returning without its ledger row.
+    let ledgerWarned = false;
     for (const idea of ideas) {
-      const row = appendIdea({
-        symbol: idea.symbol, action: idea.action, vehicle: idea.vehicle ?? null,
-        strike: idea.strike ?? null, expiration: idea.expiration ?? null,
-        entryTrigger: idea.entryTrigger ?? null, triggerPrice: idea.triggerPrice ?? null, triggerDirection: idea.triggerDirection ?? null, triggered: idea.triggered ?? null,
-        invalidation: idea.invalidation ?? null,
-        target: idea.target ?? null, staleMinutes: idea.staleMinutes ?? null,
-        conviction: idea.conviction ?? null, catalyst: idea.catalyst ?? null,
-        risk: idea.risk ?? null, why_pro: idea.why_pro ?? null, why_plain: idea.why_plain ?? idea.why ?? null,
-        leg: idea.leg ?? null,
-        sizing: idea.sizing ?? null, affordable: idea.affordable ?? null, accountSize: account,
-        shortDated: idea.shortDated ?? null, flatByClose: idea.flatByClose ?? false,
-        horizon: idea.horizon ?? "swing", ...(idea.strategy ? { strategy: idea.strategy } : {}),
-        todayChangePct: idea.todayChangePct ?? null,
-        entryPrice: lastBySym[idea.symbol] ?? pennyPriceBySym[idea.symbol] ?? null,
-        regimeTrend: regime?.available ? regime.spy.trend : null,
-        marketState: clock.state,
-      });
+      let row;
+      try {
+        row = appendIdea({
+          symbol: idea.symbol, action: idea.action, vehicle: idea.vehicle ?? null,
+          strike: idea.strike ?? null, expiration: idea.expiration ?? null,
+          entryTrigger: idea.entryTrigger ?? null, triggerPrice: idea.triggerPrice ?? null, triggerDirection: idea.triggerDirection ?? null, triggered: idea.triggered ?? null,
+          invalidation: idea.invalidation ?? null,
+          target: idea.target ?? null, staleMinutes: idea.staleMinutes ?? null,
+          conviction: idea.conviction ?? null, catalyst: idea.catalyst ?? null,
+          risk: idea.risk ?? null, why_pro: idea.why_pro ?? null, why_plain: idea.why_plain ?? idea.why ?? null,
+          leg: idea.leg ?? null,
+          sizing: idea.sizing ?? null, affordable: idea.affordable ?? null, accountSize: account,
+          shortDated: idea.shortDated ?? null, flatByClose: idea.flatByClose ?? false,
+          horizon: idea.horizon ?? "swing", ...(idea.strategy ? { strategy: idea.strategy } : {}),
+          todayChangePct: idea.todayChangePct ?? null,
+          entryPrice: lastBySym[idea.symbol] ?? pennyPriceBySym[idea.symbol] ?? null,
+          regimeTrend: regime?.available ? regime.spy.trend : null,
+          marketState: clock.state,
+        });
+      } catch (e) {
+        if (!ledgerWarned) { ledgerWarned = true; console.warn(`[suggestions] ledger write failed, ideas returned unlogged (${e.message})`); }
+      }
       // Client-visible so a "Send to Tradier" click can link the resulting
       // journal entry straight back to this idea's full context — see
       // app/api/journalLib.js.
-      idea.id = row.id;
+      idea.id = row?.id ?? null;
       // Keeps a manually-added "extras" symbol's staleness clock reset
       // whenever it actually does something — see watchExtrasLib.js. A
       // no-op for symbols not on that list (touchNotable finds nothing).
