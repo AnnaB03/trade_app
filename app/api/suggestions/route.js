@@ -614,12 +614,20 @@ action is one of BUY, SELL, CALL, PUT, WAIT (BUY/SELL pair with vehicle SHARES; 
     // analyzed), not model choice — the remaining lever is how many symbols
     // get analyzed per refresh (watchlist length + TRENDING/AFFORDABLE/PENNY
     // caps above), not this setting.
-    /* Model: Sonnet by default since 2026-10-13. Measured at d1 across the
-       ledger, conviction carries no signal and directional accuracy is ~50%
-       whatever the bucket (see the MIN_CONVICTION note in autotrade), so this
-       call is a bounded per-symbol extraction, not the place the book's edge
-       lives — and it is the only billed call, ~12 times a day. Sonnet is a
-       fifth of the price per token. SUGGESTIONS_MODEL puts Opus back.
+    /* Model: Opus. It was moved to Sonnet on the morning of 2026-10-13 on the
+       argument that this call is a bounded per-symbol extraction and Sonnet is
+       a fifth of the price. The same afternoon, measured:
+
+         directional ideas as a share of each refresh, 11:00-14:59 ET
+           2026-10-08  13.6%   2026-10-09  30.0%   2026-10-12  16.3%   (Opus)
+           2026-10-13   5.9%, and 0 same-day ideas against 12-14 a day (Sonnet)
+         same minute, same data, 14:43 vs 14:50 ET: Sonnet 1 setup, Opus 5.
+
+       At effort "low" Sonnet answers WAIT to nearly everything, so the book
+       had nothing to trade — and every selection rule (selectionLib.js) was
+       measured on Opus's ideas, so a different model's ideas are not the
+       population those rules were fitted to. SUGGESTIONS_MODEL overrides. The
+       cost is real: about five times the price, ~13 calls a day.
        Structured outputs: the API constrains the text to IdeasSchema's
        shape. It is sent through create() and parsed here, after the
        stop_reason checks, because messages.parse() parses inside the call
@@ -627,7 +635,7 @@ action is one of BUY, SELL, CALL, PUT, WAIT (BUY/SELL pair with vehicle SHARES; 
        below could run. */
     const ideasFormat = zodOutputFormat(IdeasSchema);
     const message = await client.messages.create({
-      model: process.env.SUGGESTIONS_MODEL || "claude-sonnet-5-5",
+      model: process.env.SUGGESTIONS_MODEL || "claude-opus-5",
       max_tokens: 14000, // ~25 symbols plus up to four intraday objects
       output_config: { effort: "low", format: ideasFormat },
       messages: [{ role: "user", content: prompt }],
