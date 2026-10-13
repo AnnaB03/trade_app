@@ -26,8 +26,8 @@ test("realized P&L today sums closed rows booked today in New York, nothing else
 });
 
 test("the limit is a share of the account", () => {
-  assert.equal(risk.DAILY_LOSS_LIMIT_PCT, 3);
-  assert.equal(risk.dailyLossLimitUsd(10000), 300);
+  assert.equal(risk.DAILY_LOSS_LIMIT_PCT, 5);
+  assert.equal(risk.dailyLossLimitUsd(10000), 500);
   assert.equal(risk.dailyLossLimitUsd(undefined), 0, "no account, no limit");
 });
 
@@ -60,14 +60,18 @@ test("evaluateHalt: a manual halt never expires on its own", () => {
 test("tradingHalt: records a fresh daily halt, clears an expired one, and the manual switch round-trips", () => {
   assert.equal(risk.tradingHalt({ accountSize: 10000, journal: [] }).halted, false);
   // Trip it.
-  const tripped = risk.tradingHalt({ accountSize: 10000, journal: [closed(-200), closed(-150)] });
+  // $490 down on a $10K account is inside the $500 line; $550 is through it.
+  assert.equal(risk.tradingHalt({ accountSize: 10000, journal: [closed(-300), closed(-190)] }).halted, false);
+  const tripped = risk.tradingHalt({ accountSize: 10000, journal: [closed(-300), closed(-250)] });
   assert.equal(tripped.halted, true);
-  assert.equal(tripped.lossToday, -350);
+  assert.equal(tripped.lossToday, -550);
+  assert.equal(tripped.limitPct, 5);
+  assert.equal(tripped.since, risk.readHalt().since, "the tripping call reports the recorded time");
   assert.equal(risk.readHalt().kind, "daily_loss");
   assert.equal(risk.readHalt().day, today);
   // The next session: expired and cleared, even with yesterday's rows still there.
   const tomorrow = new Date(Date.now() + 36 * 3600000);
-  const next = risk.tradingHalt({ accountSize: 10000, journal: [closed(-200), closed(-150)], now: tomorrow });
+  const next = risk.tradingHalt({ accountSize: 10000, journal: [closed(-300), closed(-250)], now: tomorrow });
   assert.equal(next.halted, false);
   assert.equal(risk.readHalt(), null);
   // Manual.

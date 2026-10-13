@@ -128,6 +128,92 @@ function AutomationStatus({ activity }) {
   );
 }
 
+// The kill switch and the daily loss limit (app/api/riskLib.js), on the
+// account card. Both stop NEW entries only; exits keep running. A manual stop
+// lasts until resumed here. A daily-loss stop clears itself at the next
+// session and cannot be resumed early: resuming would only re-trip on the
+// next entry check, since today's loss is still past the line.
+// Announces every change on window as "cockpit:halt" so the header badge
+// (page.js) follows without waiting for its own poll.
+export const HALT_EVENT = "cockpit:halt";
+
+function TradingSwitch({ halt, onChange }) {
+  const [asking, setAsking] = useState(false);
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const send = async (body) => {
+    setBusy(true); setErr("");
+    try {
+      const r = await fetch("/api/halt", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const d = await r.json();
+      if (!r.ok || d.error) throw new Error(d.error || `HTTP ${r.status}`);
+      onChange(d);
+      setAsking(false); setReason("");
+    } catch (e) { setErr(e.message); }
+    setBusy(false);
+  };
+  const resume = () => {
+    if (!window.confirm("Resume new trades? The automation will start buying again on the next entry check.")) return;
+    send({ halted: false });
+  };
+
+  if (!halt) return null;
+  const loss = Math.max(0, -(Number(halt.lossToday) || 0));
+  const limit = Number(halt.limitUsd) || 0;
+  const used = limit > 0 ? Math.min(1, loss / limit) : 0;
+  const barColor = used >= 1 ? "var(--bear)" : used >= 0.6 ? "#A37820" : "var(--bull)";
+  const since = halt.since ? new Date(halt.since).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" }) : null;
+
+  return (
+    <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--line)" }}>
+      {halt.halted && (
+        <div className="danger" style={{ marginBottom: 10 }}>
+          <b>New trades are stopped</b>{since ? <span style={{ fontWeight: 400 }}> · since {since}</span> : null}
+          <div className="d2">
+            {halt.kind === "daily_loss"
+              ? <>Daily loss limit reached: down {usd0(loss)} realized today against the {usd0(limit)} limit ({halt.limitPct}% of the account). New trades resume automatically at the next session.</>
+              : <>Stopped by hand{halt.reason && halt.reason !== "halted by hand" ? <> — “{halt.reason}”</> : null}. Stays stopped until you resume it.</>}
+            {" "}Open positions are still managed — stops, targets and the trail keep running.
+          </div>
+          {halt.kind === "manual" && (
+            <button className="btn" style={{ marginTop: 10, background: "#F7F5EF", color: "var(--bear)" }} disabled={busy} onClick={resume}>
+              {busy ? "Resuming…" : "Resume new trades"}
+            </button>
+          )}
+        </div>
+      )}
+
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", fontSize: 12.5 }}>
+        <span className="mono" style={{ minWidth: 0 }}>
+          <span className="muted">Today's realized loss </span>
+          <b style={{ color: loss > 0 ? "var(--bear)" : "inherit" }}>{usd0(loss)}</b>
+          <span className="muted"> of {usd0(limit)} daily limit ({halt.limitPct}%)</span>
+        </span>
+        <span aria-hidden="true" style={{ flex: "1 1 120px", minWidth: 80, height: 6, background: "var(--paper)", border: "1px solid var(--line)", borderRadius: 3, overflow: "hidden" }}>
+          <span style={{ display: "block", height: "100%", width: `${(used * 100).toFixed(1)}%`, background: barColor }} />
+        </span>
+        {!halt.halted && !asking && (
+          <button className="chip" style={{ color: "var(--bear)", borderColor: "rgba(154,71,54,.5)" }} onClick={() => setAsking(true)}>Stop new trades</button>
+        )}
+      </div>
+
+      {!halt.halted && asking && (
+        <form style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}
+          onSubmit={(e) => { e.preventDefault(); send({ halted: true, reason }); }}>
+          <input className="in" style={{ flex: "1 1 220px", minWidth: 0, fontSize: 13 }} autoFocus maxLength={200}
+            placeholder="Why? (optional — e.g. FOMC today)" value={reason} onChange={(e) => setReason(e.target.value)} />
+          <button className="btn" style={{ background: "var(--bear)" }} disabled={busy} type="submit">{busy ? "Stopping…" : "Stop new trades"}</button>
+          <button className="chip" type="button" disabled={busy} onClick={() => { setAsking(false); setReason(""); }}>Cancel</button>
+          <div className="muted" style={{ flexBasis: "100%", fontSize: 12 }}>The automation stops opening positions. Anything already open is still sold on its stop, target or trail.</div>
+        </form>
+      )}
+      {err && <div className="err" style={{ marginTop: 10, marginBottom: 0 }}>{err}</div>}
+    </div>
+  );
+}
+
 // The account in one row: what the practice account has made since the
 // fresh start, what is open right now, and how much cash can still buy today.
 function AccountSummary() {
@@ -135,16 +221,23 @@ function AccountSummary() {
   const [openPnl, setOpenPnl] = useState(null);
   const [err, setErr] = useState("");
   const [at, setAt] = useState(null);
+  const [halt, setHalt] = useState(null);
+
+  const onHalt = useCallback((h) => {
+    setHalt(h);
+    try { window.dispatchEvent(new CustomEvent(HALT_EVENT, { detail: h })); } catch {}
+  }, []);
 
   const load = useCallback(async () => {
     try {
+      getJSON("/api/halt").then(onHalt).catch(() => {});
       const [a, p] = await Promise.all([getJSON("/api/account"), getJSON("/api/positions")]);
       setAcct(a);
       const list = p.positions || [];
       setOpenPnl(list.length ? list.reduce((s, x) => s + (Number(x.unrealizedPnl) || 0), 0) : 0);
       setAt(new Date()); setErr("");
     } catch (e) { setErr(e.message); }
-  }, []);
+  }, [onHalt]);
   useEffect(() => {
     load();
     const t = setInterval(load, REFRESH_MS);
@@ -171,6 +264,13 @@ function AccountSummary() {
             <div className="metric"><div className="k">Cash to buy today</div><div className="v">{usd0(acct.available)}</div></div>
             <div className="metric"><div className="k">Settles tomorrow</div><div className="v">{usd0(acct.unsettled)}</div></div>
           </div>
+        </>
+      )}
+      {/* Outside the account block on purpose: the switch has to work when the
+          broker is unreachable, which is exactly when it may be needed. */}
+      <TradingSwitch halt={halt} onChange={onHalt} />
+      {acct && (
+        <>
           <AutomationStatus activity={acct.activity} />
           <div className="mono muted" style={{ fontSize: 12, marginTop: 8, textAlign: "center" }}>
             {L.closes} closed trade{L.closes === 1 ? "" : "s"} ({L.wins} won, {L.losses} lost) · {L.open} open · fees paid {usd(acct.feesPaid)} · realized profit is after fees; open positions are valued at what they would sell for now

@@ -8,7 +8,7 @@
    - daily_loss: realized P&L today (closed rows, net of fees, non-legacy)
      is at or past DAILY_LOSS_LIMIT_PCT of the account. Set automatically by
      the entry path, keyed to the New York date, so it clears itself at the
-     next session. Default 3%: three max-loss trades in a row.
+     next session. Default 5%: five max-loss (1%) trades in one session.
    - manual: set and cleared by hand through /api/halt. Never expires.
    State lives in the store's kv table, so every route and every process
    sees the same answer, and a restart does not forget a halt. */
@@ -16,7 +16,7 @@ import { listJournal, kvGet, kvSet, kvDelete } from "./store.js";
 import { readBaseline, isLegacy } from "./ledgerLib.js";
 
 export const HALT_KEY = "trading_halt";
-export const DAILY_LOSS_LIMIT_PCT = Number(process.env.DAILY_LOSS_LIMIT_PCT) > 0 ? Number(process.env.DAILY_LOSS_LIMIT_PCT) : 3;
+export const DAILY_LOSS_LIMIT_PCT = Number(process.env.DAILY_LOSS_LIMIT_PCT) > 0 ? Number(process.env.DAILY_LOSS_LIMIT_PCT) : 5;
 
 export const dateET = (d = new Date()) => new Date(d).toLocaleDateString("en-CA", { timeZone: "America/New_York" });
 
@@ -67,6 +67,8 @@ export function tradingHalt({ accountSize, journal = listJournal(), now = new Da
   const limitUsd = dailyLossLimitUsd(accountSize);
   const verdict = evaluateHalt({ stored: readHalt(), lossToday, limitUsd, today });
   if (verdict.expired) resumeTrading();
-  if (verdict.fresh) haltTrading(verdict.reason, { kind: "daily_loss", day: today });
-  return { ...verdict, lossToday, limitUsd, today };
+  // A fresh trip is recorded, and answers with the record's own timestamp so
+  // the first caller and every later one report the same "since".
+  const recorded = verdict.fresh ? haltTrading(verdict.reason, { kind: "daily_loss", day: today }) : null;
+  return { ...verdict, ...(recorded ? { since: recorded.since } : {}), lossToday, limitUsd, limitPct: DAILY_LOSS_LIMIT_PCT, today };
 }

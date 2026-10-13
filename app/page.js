@@ -5,7 +5,7 @@ import {
   oiWalls, todayStr, daysUntil, eventsHeldThrough,
   spreadPct, spreadFlag, spreadRead, realizedVol, ivHvRead,
 } from "./lib/metrics";
-import Journal from "./components/Journal";
+import Journal, { HALT_EVENT } from "./components/Journal";
 import TrackRecord from "./components/TrackRecord";
 import NewsBoard from "./components/NewsBoard";
 import { buildOptionStopEstimate } from "./lib/orders";
@@ -1263,12 +1263,30 @@ function Ideas() {
   );
 }
 
+// Whether the automation is allowed to open positions (app/api/riskLib.js).
+// Polled once a minute, and updated at once when the Journal tab's switch
+// changes it. Only "halted" is ever shown: a normal day adds nothing here.
+function useTradingHalt() {
+  const [halt, setHalt] = useState(null);
+  useEffect(() => {
+    let on = true;
+    const load = () => getJSON("/api/halt").then((d) => { if (on) setHalt(d); }).catch(() => {});
+    load();
+    const t = setInterval(load, 60000);
+    const onEvent = (e) => { if (on && e.detail) setHalt(e.detail); };
+    window.addEventListener(HALT_EVENT, onEvent);
+    return () => { on = false; clearInterval(t); window.removeEventListener(HALT_EVENT, onEvent); };
+  }, []);
+  return halt;
+}
+
 export default function Page() {
   const [tab, setTab] = useState("watch");
   const [symbol, setSymbol] = useState("");
   const [status, setStatus] = useState(null);
   const pick = (s) => { setSymbol(s); setTab("chain"); };
   const clock = useMarketClock();
+  const halt = useTradingHalt();
 
   useEffect(() => {
     getJSON("/api/status").then(setStatus).catch(() => {});
@@ -1278,8 +1296,9 @@ export default function Page() {
     <div className="wrap">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
         <span className="eyebrow">Options Desk · Live Cockpit</span>
-        {status && (
-          <span style={{ display: "flex", gap: 6 }}>
+        {(status || halt?.halted) && (
+          <span style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
+            {status && (<>
             <span className={"badge " + (status.data === "realtime" ? "stat-rt" : "stat-delay")}
               title={status.data === "realtime" ? "Production Tradier — real-time quotes" : "Sandbox Tradier — quotes are ~15 min delayed. Set TRADIER_TOKEN (production) for real-time."}>
               {status.data === "realtime" ? "● DATA: REALTIME" : "● DATA: DELAYED (sandbox)"}
@@ -1287,6 +1306,14 @@ export default function Page() {
             <span className="badge" title={status.broker === "sandbox" ? "Orders go to the Tradier sandbox — never real money." : "Orders go to a simulated cash account filled at the real-time bid and ask — never real money."}>
               {status.broker === "sandbox" ? "ORDERS: PAPER (sandbox)" : "ORDERS: PAPER (simulated fills)"}
             </span>
+            </>)}
+            {halt?.halted && (
+              <button className="badge" onClick={() => setTab("journal")}
+                style={{ cursor: "pointer", color: "#F7F5EF", background: "var(--bear)", borderColor: "var(--bear)", fontWeight: 600 }}
+                title={(halt.kind === "daily_loss" ? "Daily loss limit reached — " : "Stopped by hand — ") + "no new trades; open positions are still managed. Open the Journal tab to see or change it."}>
+                ● NEW TRADES: STOPPED
+              </button>
+            )}
           </span>
         )}
       </div>

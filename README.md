@@ -75,12 +75,14 @@ paper broker (`app/api/journalReconcile.js`).
 ## Automation safety
 
 - **Daily loss limit** — when today's realized loss (closed trades, net of
-  fees) reaches `DAILY_LOSS_LIMIT_PCT` of the account (default 3%), the
+  fees) reaches `DAILY_LOSS_LIMIT_PCT` of the account (default 5%), the
   entry path refuses every new position until the next session. Exits keep
   running. The autopilot log shows `HALTED (daily_loss): ...`.
-- **Kill switch** — `GET /api/halt` shows the state and today's P&L against
-  the limit; `POST /api/halt {"halted": true, "reason": "..."}` stops new
-  entries by hand, `{"halted": false}` resumes. Survives a restart.
+- **Kill switch** — the Journal tab's account card has a **Stop new trades**
+  button and a meter of today's realized loss against the limit; while
+  entries are stopped, a red badge shows in the page header on every tab.
+  The same switch is `GET /api/halt` / `POST /api/halt {"halted": true,
+  "reason": "..."}` (`{"halted": false}` resumes). Survives a restart.
   Engine: `app/api/riskLib.js`.
 
 ## Storage
