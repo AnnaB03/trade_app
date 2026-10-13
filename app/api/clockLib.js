@@ -7,7 +7,7 @@
    request was slow, so a recent good answer is reused: fresh for 30 seconds,
    and trusted for up to 10 minutes when the live call fails. Past that it
    really is unknown, and says so. */
-import { tradier } from "./tradier";
+import { tradier } from "./tradier.js";
 
 let good = null; // { at, data }
 const FRESH_MS = 30000, TRUST_MS = 10 * 60000;

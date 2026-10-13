@@ -34,9 +34,9 @@
    State lives in data/sim.json. Starting cash is ACCOUNT_SIZE. */
 import fs from "fs";
 import path from "path";
-import { tradier, asArray } from "./tradier";
-import { getClock } from "./clockLib";
-import { accountSize } from "./accountLib";
+import { tradier, asArray } from "./tradier.js";
+import { getClock } from "./clockLib.js";
+import { accountSize } from "./accountLib.js";
 
 const FILE = path.join(process.cwd(), "data", "sim.json");
 export const SIM_ACCOUNT = "SIM-CASH";
@@ -97,7 +97,11 @@ const committedToSells = (state, key) =>
 
 export function cashState(state = load(), now = new Date()) {
   const today = etDay(now);
-  let settled = state.startCash, unsettled = 0, fees = 0;
+  /* Money added to the account after it was opened (state.deposits). A deposit
+     is settled cash from the moment it lands, and it is NOT profit: the
+     ledger's realized figure is built from trades and never sees it. */
+  const funded = state.startCash + (state.deposits || []).reduce((s, d) => s + (Number(d.amount) || 0), 0);
+  let settled = funded, unsettled = 0, fees = 0;
   for (const l of fills(state)) {
     const gross = Number(l.avg_fill_price) * Number(l.exec_quantity) * multOf(l);
     const fee = Number(l.commission) || 0;
@@ -109,7 +113,7 @@ export function cashState(state = load(), now = new Date()) {
   const committed = allLegs(state)
     .filter((l) => l.status === "open" && BUY.has(l.side))
     .reduce((s, l) => s + Number(l.price) * Number(l.quantity) * multOf(l) + feeOf(l), 0);
-  return { startCash: state.startCash, settled, unsettled, committedToOpenBuys: committed, available: settled - committed, totalCash: settled + unsettled, feesPaid: fees };
+  return { startCash: funded, openedWith: state.startCash, settled, unsettled, committedToOpenBuys: committed, available: settled - committed, totalCash: settled + unsettled, feesPaid: fees };
 }
 
 // Shares the app's clock, including its tolerance for a slow broker call.
