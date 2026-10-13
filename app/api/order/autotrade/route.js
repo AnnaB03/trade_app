@@ -9,6 +9,7 @@ import { journalOpen } from "../../journalLib";
 import { OPTION_HARD_PCT } from "../../sizingLib";
 import { extremeRead, fadePlan, fadeEnabled, EXTREME_PCT, FADE_SIDES } from "../../fadeLib";
 import { appendIdea } from "../../store";
+import { selectionVerdict } from "../../selectionLib";
 import { markActivity } from "../../activityLib";
 import { recordShadowEntry } from "../../shadowLib";
 import { tradingHalt } from "../../riskLib";
@@ -131,6 +132,11 @@ const INTRADAY_WATCH_ONLY = process.env.INTRADAY_LIVE !== "true";
 // Playbooks that open and close inside one session: sized by risk, refused
 // outright when one contract is too much, and flat by the close.
 const SAME_DAY = new Set(["intraday", "contrarian"]);
+const STRICT_TRIGGERS = process.env.LOOSE_TRIGGERS !== "true";
+const etNowMinutes = () => {
+  const [h, m] = new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour12: false, hour: "2-digit", minute: "2-digit" }).split(":").map(Number);
+  return (h % 24) * 60 + m;
+};
 const MAX_SPREAD_SHARE_OF_LOSS = 0.4; // of the per-trade loss limit
 const INTRADAY_RISK_PCT = 1; // % of the account a same-day trade may lose at its stop
 const LAST_FLAT_BY_CLOSE_ENTRY_MIN = 15 * 60; // ET minutes; flat-by-close contracts are not opened after this
@@ -549,7 +555,8 @@ async function deriveFades(now = Date.now()) {
   try {
     const all = listIdeas();
     const already = new Set(all.filter((i) => i.fadeOf).map((i) => i.fadeOf));
-    const bases = latestPerSymbol(all.filter((i) => !i.strategy))
+    // Multi-day and same-day ideas alike: either can be the chase worth fading.
+    const bases = latestPerSymbol(all.filter((i) => !i.strategy || i.strategy === "intraday"))
       .filter((i) => ["CALL", "PUT", "BUY", "SELL"].includes(i.action) && !already.has(i.id) && isFreshEnough(i, now));
     for (const base of bases) {
       const q = await dayQuote(base.symbol);
@@ -562,18 +569,23 @@ async function deriveFades(now = Date.now()) {
         const through = base.triggerDirection === "above" ? q.last >= Number(base.triggerPrice) : q.last <= Number(base.triggerPrice);
         if (!through) continue;
       }
-      const plan = fadePlan({ action: base.action, price: q.last, low: q.low, high: q.high });
+      // Two reasons to take the other side: the entry is at the extreme of the
+      // day's range, or the selection rules say this kind of idea loses.
+      const sv = selectionVerdict({ action: base.action, regime: base.regimeTrend, etMinutes: etNowMinutes(), catalyst: base.catalyst });
+      const plan = fadePlan({ action: base.action, price: q.last, low: q.low, high: q.high })
+        || (sv.fade ? fadePlan({ action: base.action, price: q.last, low: q.low, high: q.high, force: true }) : null);
       if (!plan) continue;
+      plan.why = sv.fade ? `a ${base.action} in a ${base.regimeTrend} tape` : `a ${base.action} at ${plan.rangePos}% of the day's range`;
       const alt = await fadeContract(base.symbol, plan.optionType, q.last);
       if (!alt) continue;
-      const why = `${base.symbol} is at ${plan.rangePos}% of today's $${q.low}-$${q.high} range and the model wants a ${base.action} there. Taking the other side instead: wrong above $${plan.invalidation}, back to $${plan.target} if the push fails.`;
+      const why = `The model wants ${plan.why} on ${base.symbol} (now $${q.last}, ${plan.rangePos}% of today's $${q.low}-$${q.high} range). Taking the other side instead: wrong ${plan.action === "PUT" ? "above" : "below"} $${plan.invalidation}, aiming for $${plan.target}.`;
       const row = appendIdea({
         symbol: base.symbol, action: plan.action, vehicle: "OPTION",
         strike: alt.strike, expiration: alt.expiration,
-        entryTrigger: `fade of a ${base.action} taken at ${plan.rangePos}% of the day's range`,
+        entryTrigger: `fade of ${plan.why}`,
         triggerPrice: null, triggerDirection: null, triggered: true,
         invalidation: plan.invalidation, target: plan.target, staleMinutes: 15,
-        conviction: 3, catalyst: "failed breakout", risk: "HIGH",
+        conviction: 3, catalyst: sv.fade ? "regime fade" : "failed breakout", risk: "HIGH", regimeTrend: base.regimeTrend ?? null,
         why_pro: `${why} Range position ${plan.rangePos}%, reward:risk ${plan.rewardRisk}:1 on the underlying, ${alt.dte}d contract at delta ${alt.leg.delta}.`,
         why_plain: why,
         leg: alt.leg, sizing: { vehicle: "OPTION", contracts: 1 }, affordable: true, accountSize: ACCOUNT_SIZE,
@@ -665,8 +677,14 @@ async function run(req) {
       if (!["CALL", "PUT", "BUY", "SELL"].includes(rawIdea.action)) { results.push({ ...tag, placed: false, reason: "WAIT — nothing to trade." }); continue; }
       if (Number(rawIdea.conviction) < minConviction) { results.push({ ...tag, placed: false, reason: `Conviction ${rawIdea.conviction} below the ${minConviction} bar.` }); continue; }
       if (verdicts) {
-        const pb = rawIdea.strategy === "intraday" ? "intraday" : "swing";
+        const pb = rawIdea.strategy === "intraday" ? "intraday" : rawIdea.strategy === "contrarian" ? "contrarian" : "swing";
         if (verdicts[pb] && !verdicts[pb].ok) { results.push({ ...tag, placed: false, reason: `Edge gate — the ${pb} playbook has ${verdicts[pb].reason}. Fix the playbook, or set EDGE_GATE=false to trade it anyway.` }); continue; }
+      }
+      /* Selection (selectionLib.js): which ideas are taken as written. The fade
+         playbook is exempt — it is the other side of exactly these refusals. */
+      if (rawIdea.strategy !== "contrarian") {
+        const sv = selectionVerdict({ action: rawIdea.action, regime: rawIdea.regimeTrend, etMinutes: etNowMinutes(), catalyst: rawIdea.catalyst });
+        if (!sv.ok) { results.push({ ...tag, placed: false, selection: sv.rule, reason: sv.reason }); continue; }
       }
       let idea = rawIdea;
       const now = Date.now();
@@ -698,7 +716,13 @@ async function run(req) {
            A 0.5% band on a same-day trade is most of its stop: NVDA's stop was
            $1.45 away and the band allowed $1.18 of slip. Buying a breakout that
            has already come back is buying the failure. */
-        const intraday = idea.strategy === "intraday";
+        /* 2026-10-13: every playbook is now held to this, not only the
+           same-day one. The full entry check runs every minute (it used to be
+           every 15), so a cross is seen as it happens and neither allowance is
+           needed; the last entry they admitted was GOOGL on 2026-10-12, bought
+           4 cents under its trigger after the push had already failed, for
+           -$101. LOOSE_TRIGGERS=true restores them. */
+        const intraday = STRICT_TRIGGERS || idea.strategy === "intraday";
         const effectiveTrigger = intraday ? Number(idea.triggerPrice) : easiestTrigger(all, idea, now);
         const above = idea.triggerDirection === "above";
         let nowTriggered = above ? live >= effectiveTrigger : live <= effectiveTrigger;

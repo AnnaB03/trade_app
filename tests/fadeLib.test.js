@@ -67,3 +67,15 @@ test("the fade's exits: same-day target on the live price, and no thesis-reverse
   assert.equal(decideReversalExit({ pos: { ...pos, strategy: "swing" }, dir: -1, ideas })?.tag, "reversed");
   assert.equal(decideReversalExit({ pos: { ...pos, strategy: "contrarian" }, dir: -1, ideas }), null);
 });
+
+test("fadePlan with force: a regime fade away from the extreme, with a wider stop", () => {
+  assert.equal(fade.fadePlan({ action: "CALL", price: 110, low: 100, high: 120 }), null);
+  const p = fade.fadePlan({ action: "CALL", price: 110, low: 100, high: 120, force: true });
+  assert.equal(p.action, "PUT");
+  assert.equal(p.invalidation, 122, "still beyond the day's high");
+  assert.equal(p.riskUsd, 12, "which is far from mid-range — sizing decides whether that is affordable");
+  assert.equal(p.target, 88.4);
+  const q = fade.fadePlan({ action: "PUT", price: 110, low: 100, high: 120, force: true });
+  assert.equal(q.action, "CALL", "forced, the short side flips too");
+  assert.equal(q.invalidation, 98);
+});

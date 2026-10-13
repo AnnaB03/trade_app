@@ -55,9 +55,14 @@ export const fadeEnabled = (side) => FADE_SIDES === "both" || (FADE_SIDES === "l
    at the exact high. */
 export const FADE_REWARD_MULT = 1.8;
 
-export function fadePlan({ action, price, low, high, beyondPct = 10, rewardMult = FADE_REWARD_MULT }) {
+/* `force` builds the plan wherever the price sits in the range — used when the
+   reason to fade is the regime (selectionLib.js) rather than the extreme. Away
+   from the extreme the stop is further off, so the risk per contract is
+   larger, and autotrade's risk sizing refuses the ones that are too far. */
+export function fadePlan({ action, price, low, high, beyondPct = 10, rewardMult = FADE_REWARD_MULT, force = false }) {
   const read = extremeRead({ action, price, low, high });
-  if (!read.atExtreme || !fadeEnabled(read.side)) return null;
+  if (read.pos == null) return null;
+  if (!force && (!read.atExtreme || !fadeEnabled(read.side))) return null;
   const span = Number(high) - Number(low);
   if (!(span > 0)) return null;
   const long = read.side === "long";

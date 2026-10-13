@@ -5,7 +5,7 @@
 # will not let a background job read.
 #
 #   exits    every tick, 9:30-15:59 (with the end-of-day rules every 5 min in the last hour)
-#   entries  at :03 :18 :33 :48 (same-day ideas: every tick until 15:00)
+#   entries  every tick, all playbooks
 #   refresh  9:21, 9:42, then :12 and :42 from 10:00 to 14:59 (the one billed call)
 #
 # Timed jobs are matched to a SLOT, not to the exact minute. launchd's interval
@@ -21,6 +21,15 @@ export TZ=America/New_York
 dow=$(date +%u); h=$((10#$(date +%H))); m=$((10#$(date +%M))); day=$(date +%F)
 [ "$dow" -le 5 ] || exit 0
 now=$((h * 60 + m))
+# Hold the Mac awake through the session. On 2026-10-09 and 2026-10-12 it
+# dozed two minutes in every fifteen all day: half the refreshes were cut off
+# mid-call and open positions went unchecked for a quarter of an hour at a
+# time. Each tick renews a short hold, so it lapses by itself after the close.
+# It cannot WAKE a sleeping Mac or keep a closed lid awake — the lid has to be
+# open at 9:00.
+if [ "$now" -ge $((9 * 60)) ] && [ "$now" -lt $((16 * 60 + 5)) ]; then
+  /usr/bin/caffeinate -is -t 150 >/dev/null 2>&1 &
+fi
 [ "$now" -ge $((9 * 60 + 20)) ] && [ "$now" -lt $((16 * 60)) ] || exit 0
 
 # due <name> <grace-minutes> <slot-minute-of-day>...  -> true once per slot
@@ -47,6 +56,8 @@ if due refresh 20 $refresh_slots; then nohup "$RUN" refresh >/dev/null 2>&1 & fi
 if due eod 3 $eod_slots; then "$RUN" eod; else "$RUN" exits; fi
 # The full entry check runs both playbooks; in between, same-day ideas get
 # their own look every tick until 15:00, after which none are opened.
-if due entries 6 $entry_slots; then "$RUN" entries
-elif [ "$h" -lt 15 ]; then "$RUN" entries-intraday; "$RUN" entries-fade; fi
+# Every tick, all three playbooks. It was every 15 minutes for the multi-day
+# ideas, and the best hour of the day paid for that: of 136 directional ideas
+# written in the 9am hour, 9 were ever filled. Quotes only, no AI cost.
+"$RUN" entries
 exit 0

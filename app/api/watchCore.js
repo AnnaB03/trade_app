@@ -23,4 +23,8 @@ export const CORE_SYMBOLS = [
   "INTC", "QCOM", "ORCL", "AMZN", "GOOGL",        // large, tight spreads, contract fits
   "PLTR", "HOOD", "SPCX", "RKLB", "SMCI", "OKLO", // high daily range, contract fits
   "SOFI", "MARA",                                 // cheap contracts, heavy volume
+  // Back on 2026-10-13. Both were dropped on 2026-10-08 for barely moving, which
+  // judged them as option names. As SHARE ideas they are among the best-graded
+  // in the ledger: NOK 63 ideas, 63% right, +1.30R; AAL 20 ideas, 75%, +1.08R.
+  "NOK", "AAL",
 ];
