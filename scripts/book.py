@@ -67,7 +67,9 @@ for r in ax.get("results") or []:
         print(f"  EXIT NOT DONE {r.get('symbol')} {r.get('tag')}: {r['error'][:110]}")
 for o in at.get("results") or []:
     if isinstance(o, dict) and o.get("placed"):
-        print("  OPENED " + json.dumps({k: v for k, v in o.items() if k != "order"}))
+        # A resting limit is an order, not a position: say which this is.
+        label = "ORDER PLACED (resting, not filled)" if o.get("working") else "OPENED"
+        print(f"  {label} " + json.dumps({k: v for k, v in o.items() if k != "order"}))
 
 live = [r for r in entries if r.get("status") == "open" and counted(r)]
 print(f"\nBOOK (since {fs or 'no baseline'}):")

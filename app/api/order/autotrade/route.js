@@ -3,7 +3,8 @@ import { vetOrder, vetEquityOrder, submitOrder } from "../common";
 import { tradier, asArray } from "../../tradier";
 import { isPaperSandbox } from "../../tradeClient";
 import { listIdeas, listJournal } from "../../store";
-import { reservedQuantities } from "../common";
+import { reservedQuantities, confirmEntryFill } from "../common";
+import { getClock } from "../../clockLib";
 import { isLegacy, readBaseline } from "../../ledgerLib";
 import { journalOpen } from "../../journalLib";
 import { OPTION_HARD_PCT } from "../../sizingLib";
@@ -685,6 +686,17 @@ async function run(req) {
        today's realized loss at the daily limit, means no new entries whatever
        the ideas say. Exits are never halted (riskLib.js). Reported as a
        normal response, not an error, so the schedule logs it as a decision. */
+    /* No entries outside the regular session. The schedule already checks the
+       clock, but a call from anywhere else did not: at 16:46 on 2026-10-13 a
+       check run from the chat "bought" an AMZN put on an after-hours quote, 46
+       minutes after the close. The order expired at once, so nothing happened
+       except a false line in the report. */
+    if (!dryRun) {
+      const clock = await getClock();
+      if (clock.state !== "open") {
+        return NextResponse.json({ dryRun, marketClosed: true, marketState: clock.state, candidateCount: 0, placed: 0, skipped: 0, results: [] });
+      }
+    }
     const halt = tradingHalt({ accountSize: ACCOUNT_SIZE });
     if (halt.halted) {
       return NextResponse.json({
@@ -1119,7 +1131,21 @@ async function run(req) {
       else if (idea.vehicle === "SHARES") r = await placeShares(idea, { dryRun });
       else r = { placed: false, reason: `Unhandled vehicle: ${idea.vehicle}` };
       if (r?.placed && !dryRun) deployedThisRun += Number(idea.__addingCost) || 0;
-      if (r?.placed && !dryRun && r.fill) notifyBought({ symbol: idea.symbol, ...r.fill, playbook: idea.strategy === "intraday" ? "intraday" : "swing" }).catch(() => {});
+      /* Say "bought" only for an order that FILLED. Entries now rest at the mid
+         (payPrice), so placed and filled are different events: the AMZN put
+         placed at 15:55 on 2026-10-13 never filled, and the phone was told it
+         had been bought. An order still working is reported as working. */
+      if (r?.placed && !dryRun && r.fill) {
+        const got = await confirmEntryFill(r.order?.id);
+        if (got?.filled) {
+          r.fill = { ...r.fill, price: got.price, quantity: got.quantity };
+          notifyBought({ symbol: idea.symbol, ...r.fill, playbook: idea.strategy || "swing" }).catch(() => {});
+        } else {
+          r.working = true;
+          r.note = `Order placed at $${r.fill.price} and resting — not filled yet. Withdrawn after 5 minutes if the market does not come to it.`;
+          delete r.fill;
+        }
+      }
       results.push({ ...tag, ...r });
     }
 
