@@ -13,7 +13,12 @@ after(() => { store._closeForTests(); fs.rmSync(tmp, { recursive: true, force: t
 const today = risk.dateET();
 let seq = 0;
 // Closed today, in the order given (each a minute later than the last).
-const closed = (pnl, extra = {}) => ({ status: "closed", pnl, exitAt: new Date(Date.now() - 60000 * (500 - seq++)).toISOString(), createdAt: "2026-10-01T14:00:00Z", ...extra });
+/* createdAt is NOW, not a fixed past date. dayStats drops rows created before
+   data/baseline.json's fresh start (isLegacy), and that file is real on a
+   working machine: with a 2026-10-07 baseline every row stamped 2026-10-01 was
+   legacy, so the halt tests saw an empty day and the tradingHalt test failed
+   on a developer's machine while passing in a fresh clone with no data/. */
+const closed = (pnl, extra = {}) => ({ status: "closed", pnl, exitAt: new Date(Date.now() - 60000 * (500 - seq++)).toISOString(), createdAt: new Date().toISOString(), ...extra });
 const noBaseline = { freshStartAt: null, freshStartMs: 0 };
 const L = risk.planLimits(10000);
 

@@ -1,0 +1,80 @@
+{
+  "exits": {
+    "at": "2026-10-13T14:53:55.678Z",
+    "ok": true,
+    "error": null,
+    "checked": 4,
+    "closed": 0
+  },
+  "entries": {
+    "at": "2026-10-13T14:50:51.813Z",
+    "ok": true,
+    "error": null,
+    "candidates": 37,
+    "placed": 0,
+    "watching": [
+      {
+        "symbol": "AVGO",
+        "action": "CALL",
+        "intraday": false,
+        "placed": false,
+        "note": "Not triggered — live $354.745 vs needs to go above $356.7 (easiest of recent refreshes; latest asked for $357)."
+      },
+      {
+        "symbol": "GOOGL",
+        "action": "BUY",
+        "intraday": false,
+        "placed": false,
+        "note": "Not triggered — live $354.77 vs needs to go above $356.5 (easiest of recent refreshes; latest asked for $356.6)."
+      },
+      {
+        "symbol": "ORCL",
+        "action": "BUY",
+        "intraday": false,
+        "placed": false,
+        "note": "Not triggered — live $139.0101 vs needs to go above $140.45."
+      },
+      {
+        "symbol": "CIFR",
+        "action": "PUT",
+        "intraday": false,
+        "placed": false,
+        "note": "Not triggered — live $11.1448 vs needs to go below $10.77."
+      },
+      {
+        "symbol": "NVDA",
+        "action": "CALL",
+        "intraday": true,
+        "placed": false,
+        "note": "Not triggered — live $225.86 vs needs to go above $226.65."
+      },
+      {
+        "symbol": "GOOGL",
+        "action": "CALL",
+        "intraday": true,
+        "placed": false,
+        "note": "Not triggered — live $354.77 vs needs to go above $355.8."
+      },
+      {
+        "symbol": "QQQ",
+        "action": "CALL",
+        "intraday": true,
+        "placed": false,
+        "note": "Not triggered — live $742.34 vs needs to go above $744.3."
+      },
+      {
+        "symbol": "ORCL",
+        "action": "CALL",
+        "intraday": true,
+        "placed": false,
+        "note": "Not triggered — live $139.025 vs needs to go above $140.45."
+      }
+    ]
+  },
+  "refresh": {
+    "at": "2026-10-13T14:46:46.366Z",
+    "ok": true,
+    "ideas": 8,
+    "setups": []
+  }
+}

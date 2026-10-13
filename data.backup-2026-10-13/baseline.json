@@ -1,0 +1,6 @@
+{
+  "freshStartAt": "2026-10-07T16:48:58Z",
+  "accountSize": 10000,
+  "broker": "sim",
+  "note": "Fresh start on the simulated cash account (2026-10-07): fills at the real-time bid/ask, a per-contract option fee, and only settled cash can buy. Everything before this was filled by the Tradier sandbox off a feed ~15 minutes behind the quotes the decisions read, so its P&L is not evidence and is not counted."
+}
