@@ -3,6 +3,8 @@ import { markActivity } from "../activityLib";
 import { CORE_SYMBOLS } from "../watchCore";
 import { listExtras } from "../watchExtrasLib";
 import { Anthropic } from "@anthropic-ai/sdk";
+import { z } from "zod";
+import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { tradier, asArray } from "../tradier";
 import { fetchStockNews } from "../fmp";
 import { extendedQuotes } from "../extended";
@@ -136,6 +138,34 @@ async function shortDatedAlternative(idea, account) {
   } catch {}
   return null;
 }
+
+/* The shape every idea must come back in. Enforced by the API (structured
+   outputs), so the response is parsed JSON of exactly this shape or an
+   error — never prose, never a code fence, never a truncated array that
+   "looks like JSON". Every key is required; "no value" is null, not a
+   missing key, which is what the structured-output grammar needs and what
+   the code below already handles. */
+const IdeaSchema = z.object({
+  symbol: z.string(),
+  emoji: z.string(),
+  action: z.enum(["BUY", "SELL", "CALL", "PUT", "WAIT"]),
+  vehicle: z.enum(["OPTION", "SHARES"]).nullable(),
+  expiration: z.string().nullable(),
+  strike: z.number().nullable(),
+  entryTrigger: z.string().nullable(),
+  triggerPrice: z.number().nullable(),
+  triggerDirection: z.enum(["above", "below"]).nullable(),
+  invalidation: z.number().nullable(),
+  target: z.number().nullable(),
+  staleMinutes: z.number().nullable(),
+  conviction: z.number().nullable(),
+  catalyst: z.string().nullable(),
+  risk: z.enum(["LOW", "MEDIUM", "HIGH"]).nullable(),
+  horizon: z.enum(["swing", "intraday"]),
+  why_pro: z.string(),
+  why_plain: z.string(),
+});
+const IdeasSchema = z.object({ ideas: z.array(IdeaSchema) });
 
 export async function GET(req) {
   const params = new URL(req.url).searchParams;
@@ -554,8 +584,8 @@ ${intradayOk ? `9. INTRADAY PLAYBOOK — a second, separate kind of idea. Everyt
    Rules for an intraday object: vehicle "OPTION", action "CALL" or "PUT" — either direction is equally welcome, and a symbol's intraday object may point the opposite way from its multi-day one. triggerPrice/triggerDirection close to the current price (it should be able to trigger within the hour). target reachable TODAY: typically 0.4%-1.5% of the underlying and inside today's normal range, not a multi-day objective. invalidation tight, just beyond the extreme being broken or faded. Reward at least 1.5x risk. staleMinutes 20-60. expiration: the nearest one listed (the app substitutes a 1-3 day contract and closes it before the bell). catalyst "intraday continuation" or "intraday fade". risk HIGH. conviction honest, usually 2-3.
    Do not restate a symbol's multi-day idea as an intraday one, and do not force these: zero intraday objects is a fine answer on a dead tape. Every other object carries "horizon":"swing".
 
-` : ""}Respond with ONLY a raw JSON array, no markdown code fences, no prose before or after it, and no other commentary — one object per symbol listed under MARKET DATA or PENNY STOCK CANDIDATES above${intradayOk ? ", followed by any intraday objects" : ""}, shaped exactly like:
-[{"symbol":"AAPL","emoji":"📈","action":"CALL","vehicle":"OPTION","expiration":"2026-09-20","strike":230,"entryTrigger":"...","triggerPrice":232.50,"triggerDirection":"above","invalidation":225.5,"target":238,"staleMinutes":90,"conviction":3,"catalyst":"technical breakout","risk":"MEDIUM","horizon":"swing","why_pro":"1-2 sentences, real terms ok","why_plain":"1-2 simple sentences"}]
+` : ""}Respond with a JSON object whose single key "ideas" holds an array — one object per symbol listed under MARKET DATA or PENNY STOCK CANDIDATES above${intradayOk ? ", followed by any intraday objects" : ""}. Every key below is required on every object; use null where a value does not apply. Shaped exactly like:
+{"ideas":[{"symbol":"AAPL","emoji":"📈","action":"CALL","vehicle":"OPTION","expiration":"2026-09-20","strike":230,"entryTrigger":"...","triggerPrice":232.50,"triggerDirection":"above","invalidation":225.5,"target":238,"staleMinutes":90,"conviction":3,"catalyst":"technical breakout","risk":"MEDIUM","horizon":"swing","why_pro":"1-2 sentences, real terms ok","why_plain":"1-2 simple sentences"}]}
 
 action is one of BUY, SELL, CALL, PUT, WAIT (BUY/SELL pair with vehicle SHARES; CALL/PUT pair with vehicle OPTION). vehicle is OPTION, SHARES, or null for WAIT. strike/expiration are null unless vehicle is OPTION. emoji is a single emoji (📈 bullish, 📉 bearish, ⚡ options, ⏸ wait).`;
 
@@ -573,25 +603,31 @@ action is one of BUY, SELL, CALL, PUT, WAIT (BUY/SELL pair with vehicle SHARES; 
     // analyzed), not model choice — the remaining lever is how many symbols
     // get analyzed per refresh (watchlist length + TRENDING/AFFORDABLE/PENNY
     // caps above), not this setting.
-    const message = await client.messages.create({
-      model: process.env.SUGGESTIONS_MODEL || "claude-opus-5",
+    /* Model: Sonnet by default since 2026-10-13. Measured at d1 across the
+       ledger, conviction carries no signal and directional accuracy is ~50%
+       whatever the bucket (see the MIN_CONVICTION note in autotrade), so this
+       call is a bounded per-symbol extraction, not the place the book's edge
+       lives — and it is the only billed call, ~12 times a day. Sonnet is a
+       fifth of the price per token. SUGGESTIONS_MODEL puts Opus back.
+       Structured outputs: the API returns parsed_output in IdeasSchema's
+       shape or fails the request. The old regex that stripped code fences
+       and the "unparseable response, try again" path are gone with it. */
+    const message = await client.messages.parse({
+      model: process.env.SUGGESTIONS_MODEL || "claude-sonnet-5-5",
       max_tokens: 14000, // ~25 symbols plus up to four intraday objects
-      output_config: { effort: "low" },
+      output_config: { effort: "low", format: zodOutputFormat(IdeasSchema) },
       messages: [{ role: "user", content: prompt }],
     });
 
     if (message.stop_reason === "refusal") {
       return NextResponse.json({ error: "The model declined to answer this request." }, { status: 502 });
     }
-
-    const raw = message.content.find(b => b.type === "text")?.text || "";
-    const jsonText = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "");
-    let ideas;
-    try {
-      ideas = JSON.parse(jsonText);
-      if (!Array.isArray(ideas)) throw new Error("not an array");
-    } catch {
-      return NextResponse.json({ error: "The model returned an unparseable response. Try Refresh again." }, { status: 502 });
+    if (message.stop_reason === "max_tokens") {
+      return NextResponse.json({ error: "The model's answer was cut off at max_tokens — fewer symbols per refresh, or raise max_tokens in suggestions/route.js." }, { status: 502 });
+    }
+    let ideas = message.parsed_output?.ideas;
+    if (!Array.isArray(ideas)) {
+      return NextResponse.json({ error: "The model returned a response that did not match the ideas schema. Try Refresh again." }, { status: 502 });
     }
 
     // Intraday objects: keep only well-formed ones, and tag them as their own

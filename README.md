@@ -72,6 +72,30 @@ Autopilot trades now close themselves out in the Journal. Fills, bracket
 stop-outs, and entry limits that expired unfilled are read back from the
 paper broker (`app/api/journalReconcile.js`).
 
+## Automation safety
+
+- **Daily loss limit** — when today's realized loss (closed trades, net of
+  fees) reaches `DAILY_LOSS_LIMIT_PCT` of the account (default 3%), the
+  entry path refuses every new position until the next session. Exits keep
+  running. The autopilot log shows `HALTED (daily_loss): ...`.
+- **Kill switch** — `GET /api/halt` shows the state and today's P&L against
+  the limit; `POST /api/halt {"halted": true, "reason": "..."}` stops new
+  entries by hand, `{"halted": false}` resumes. Survives a restart.
+  Engine: `app/api/riskLib.js`.
+
+## Storage
+
+Ideas and the journal live in SQLite at `data/cockpit.db` (Node's built-in
+`node:sqlite`, no native dependency). The JSON files this replaced are
+imported once and renamed `*.migrated`. See `app/api/store.js`.
+
+## Tests
+
+`npm test` runs the exit rules (`app/api/order/exitRules.js`) against the
+trades named in their own comments — NVDA, SPCX, AVGO, INTC and the rest —
+plus the store and the daily loss limit. Change a threshold and the tests say
+what it does to the record before the market does.
+
 ## Data
 
 - **Tradier** — quotes, chains, history, extended-hours prints.

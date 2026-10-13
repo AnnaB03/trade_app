@@ -29,6 +29,11 @@ if isinstance(ideas, list):
     print(line)
     sys.exit(0)
 
+# A halted book places nothing, which would otherwise read as a quiet run.
+if isinstance(d, dict) and d.get("halted"):
+    print(f"HALTED ({d.get('haltKind')}): {str(d.get('haltReason'))[:200]}")
+    sys.exit(0)
+
 acted = []
 for r in d.get("results") or []:
     if not isinstance(r, dict):

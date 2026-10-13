@@ -9,6 +9,7 @@ import { journalOpen } from "../../journalLib";
 import { OPTION_HARD_PCT } from "../../sizingLib";
 import { markActivity } from "../../activityLib";
 import { recordShadowEntry } from "../../shadowLib";
+import { tradingHalt } from "../../riskLib";
 import { buildOptionStopEstimate } from "../../../lib/orders";
 
 /* Paper-only autopilot: scans the most recent Ideas refresh, places the
@@ -486,6 +487,19 @@ async function run(req) {
     const all = listIdeas().filter((i) => (playbook ? i.strategy === playbook : !i.strategy));
     const batch = latestPerSymbol(all);
     if (!batch.length) return NextResponse.json({ error: "No ideas in the ledger yet — refresh the Ideas tab first." }, { status: 404 });
+    /* Portfolio-level stop, ahead of every per-trade gate: a manual halt, or
+       today's realized loss at the daily limit, means no new entries whatever
+       the ideas say. Exits are never halted (riskLib.js). Reported as a
+       normal response, not an error, so the schedule logs it as a decision. */
+    const halt = tradingHalt({ accountSize: ACCOUNT_SIZE });
+    if (halt.halted) {
+      return NextResponse.json({
+        dryRun, halted: true, haltKind: halt.kind, haltReason: halt.reason,
+        lossTodayUsd: halt.lossToday, dailyLossLimitUsd: halt.limitUsd,
+        candidateCount: batch.length, placed: 0, skipped: batch.length,
+        results: batch.map((i) => ({ symbol: i.symbol, action: i.action, vehicle: i.vehicle, risk: i.risk, ideaId: i.id, placed: false, reason: `Trading halted (${halt.kind}) — ${halt.reason}` })),
+      });
+    }
     const openJournal = listJournal().filter((r) => r.status === "open");
     const openOccs = new Set(openJournal.filter((r) => r.occ).map((r) => r.occ));
 
@@ -919,7 +933,7 @@ export function GET(req) {
         const watching = (d.results || [])
           .filter((r) => r.placed || /^Not triggered|^Crossed/.test(String(r.reason || "")))
           .map((r) => ({ symbol: r.symbol, action: r.action, intraday: r.playbook === "intraday", placed: Boolean(r.placed), note: r.placed ? "bought" : String(r.reason).slice(0, 160) }));
-        markActivity("entries", { ok: !d.error, error: d.error ?? null, candidates: d.candidateCount ?? 0, placed: d.placed ?? 0, watching });
+        markActivity("entries", { ok: !d.error, error: d.error ?? null, candidates: d.candidateCount ?? 0, placed: d.placed ?? 0, watching, halted: Boolean(d.halted), haltReason: d.haltReason ?? null });
       } catch {}
     }
     return out;

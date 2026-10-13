@@ -6,6 +6,7 @@ import { listJournal, listIdeas, updateJournalEntry } from "../../store";
 import { journalClose } from "../../journalLib";
 import { dailyBars } from "../../historyCache";
 import { markActivity } from "../../activityLib";
+import { exitConfig, directionOf, heldQuantity, intrinsicAtExpiry, updatePeak, gainFigures, decideProfitExit, decideLevelExit, decideReversalExit } from "../exitRules";
 
 /* Paper-only auto-EXIT — the other half of autotrade.js. That route only
    ever opens a position; until now, the only thing that could close one was
@@ -29,128 +30,11 @@ import { markActivity } from "../../activityLib";
    Every actual close is reported back with the reason, in plain terms, so
    the calling cron can tell the user in chat exactly why. */
 
-const DIRECTION = { CALL: 1, BUY: 1, PUT: -1, SELL: -1 };
-
-// Take a real option gain when it's there, even if the UNDERLYING never
-// reached the idea's target. Those are two different events: an option can
-// run +180% on a move plus an IV expansion while the stock is still well
-// short of target, and with only a target-based exit nothing banks it.
-// Measured cost of not having this: the NVDA $225c bought at $3.13 printed
-// $8.78 (+180%) intraday and was still open when it slid back to $7.10, so
-// $168 of a realized win evaporated waiting on a $232 stock target.
-// Winners in this book also round-trip fast (RKLB went +$118 to stopped
-// out), so banking a good gain beats holding for a better one.
-/* Middle ground between "sell at a flat number" and "hold for target".
-   A flat bar is wrong in both directions: +80% almost never triggered (the
-   best position in this book has reached +32%), while a flat +50% would have
-   dumped the NVDA $225c at ~$4.70 for +$157 when it went on to print $8.78.
-   Instead: arm a trail once a position is meaningfully up, track its peak,
-   and exit when it gives back part of that peak GAIN. Checked against the
-   two real cases:
-     NVDA $225c  $3.13 -> peak $8.78 -> trail exit ~$7.09  = +$396
-                 (flat 50% = +$157, flat 80% = +$250)
-     GLND        $2.83 -> peak $5.705 -> trail exit ~$4.84 = +$201
-                 (never triggered at all under a flat 80%)
-   In principle an armed position exits above entry, since it leaves after
-   surrendering only a share of its gain. In practice it does not always: the
-   check runs every 15 minutes and price can fall through the whole band
-   between looks. SPCX peaked +8%, was -5% at the next check and closed -$550.
-   (Historical note: this was first written for a 40% arm / 30% giveback) — so
-   treat the trail as limiting givebacks, not as a guarantee against turning
-   a winner into a loser. Shares arm lower because share ideas here target +3-11%. */
-/* OPTION lowered 40 -> 8 on 2026-10-02. The +40% bar was calibrated when a
-   position was a few hundred dollars and a contract routinely doubled. At
-   10%-of-account sizing it is simply unreachable: across the 11 closed
-   account-sized option positions (cost > $7k) with a recorded peak, the peak
-   gains were 4.1, 6.1, 7.9, 8.2, 8.7, 9.1, 9.4, 9.4, 10.3, 15.3 and 109.8
-   percent — median 9.1%, and exactly ONE of eleven ever reached +40%. The
-   trail was dead code for every position this book now opens.
-   Re-simulated at a 30% giveback, arming at +8% would have turned two real
-   losses into gains without capping the one runner: NVDA -$520 -> +$1,137 and
-   INTC -$660 -> +$670, plus AVGO +$280 -> +$616, for +$3,348 across the set.
-   The +$7,625 NVDA outlier is untouched — it peaked at 109.8% and never gave
-   back 30%, so a giveback rule lets it ride. That is the whole reason this is
-   an arm-and-trail change rather than a flat take-profit, which was checked
-   separately and would have cost $5,625 on that single trade.
-   Why 8 and not the simulation-optimal 4: the simulation assumes we sell at
-   the giveback level exactly, and a 15-minute check can miss it; a 30%
-   giveback off a +4% peak is a 1.2% band, which is noise and is precisely
-   what made the old dollar-arm a hair-trigger. +8% gives a 2.4% band and
-   keeps most of the benefit.
-   SHARES deliberately UNCHANGED at 15 even though it is unreachable too
-   (median share peak 3.0%, and +15% was reached only by the two DXST lots).
-   Getting any benefit there needs a +2% arm, which is a 0.6% band — pure
-   noise — and the whole result rests on two positions, ROG and NOK. Shares
-   are covered by the $200 end-of-day dollar bar instead, which is what
-   actually banked FEIM (+$156) and NOK (+$191). Revisit with more rows. */
-/* 8 -> 5 and giveback 30 -> 25 on 2026-10-05, from replaying exit rules along
-   the real 5-minute price path of all 23 account-sized trades (09-29..10-05),
-   checks every 15 minutes, flat by the close, -8% premium stop as a proxy for
-   invalidation. Same-day totals: arm 3-5% / give 20-25% +$9.1-9.3k; arm 6-10% /
-   give 30-35% +$6.4k (the previous setting); arm 12%+ +$3.1k; the original 40%
-   +$2.7k; holding to the close with no rule -$891. The ordering is the same
-   with the best day (10-05) removed: +$3.0k / +$0.2k / -$3.1k. Why lower works:
-   the day's peak arrives a median 35 minutes after entry and winners were
-   giving back half of it — median capture was 49% of the same-day peak.
-   Five trading days in one rising week; a direction to keep measuring, not a
-   settled optimum. Fixed limit targets and half-off scale-outs were tested on
-   the same paths and were worse than a plain trail. */
-const TRAIL_ARM_PCT = { OPTION: 5, SHARES: 15 };
-/* A dollar-based arm (peak gain >= $400) lived here briefly and was removed.
-   It was added for MRVL showing "+$515" that round-tripped, but the
-   bid-adjustment work established that peak was really +$240 / +2.8%, so the
-   motivating case was spread illusion. Meanwhile it broke the trail on large
-   positions: at 13 contracts a +4.3% peak clears $400, and 30% of a 4.3% gain
-   is a 1.2% band, so the trail became a hair-trigger and exited the NVDA
-   $230c at $7.75 on a blip instead of managing a real move. The trail is for
-   meaningful gains giving back a meaningful share; percentage is the right
-   unit for that, and position size does not change it. */
-const TRAIL_GIVEBACK_PCT = 25;
-/* ...but 30% of a very large gain is a lot of money to risk finding out.
-   The NVDA 10/07 $232.50c (25 contracts, $3.05 entry) reached +100% / +$7,625
-   and the trail tolerated a fall back to +70% before firing — a $2,288
-   giveback. Nothing else in this book has ever been close: across 44 closed
-   trades the median win is $500 and the second-best win ever is $975, so a
-   gain past ~$2,000 is a different animal from the gains the 30% band was
-   calibrated on, and this book's winners round-trip hard (INTC +$670 to
-   -$1,690). Above TRAIL_TIGHTEN_USD the band halves.
-   Note what this deliberately is NOT: a flat dollar take-profit. Checked
-   against the record, a $2,000 ceiling would have fired on exactly one trade
-   in 44 — that same NVDA — and banked $2,000 instead of $7,625. Capping the
-   giveback keeps the whole upside of a position that is still climbing and
-   only tightens what it may hand back. */
-/* Dollar thresholds here were tuned on the $99K paper account, where one
-   position is ~$9,900 and $200 is about 2% of it. They are kept as a SHARE of
-   the account so they mean the same thing at any size: at $10K a position is
-   ~$1,000 and the equivalent bar is ~$20, not $200 — which would be a 20% gain
-   and would never fire. */
-const REFERENCE_ACCOUNT = 99000;
-const ACCOUNT_SIZE = Number(process.env.ACCOUNT_SIZE) > 0 ? Number(process.env.ACCOUNT_SIZE) : REFERENCE_ACCOUNT;
-const DOLLAR_SCALE = ACCOUNT_SIZE / REFERENCE_ACCOUNT;
-const TRAIL_TIGHTEN_USD = 2000 * DOLLAR_SCALE;
-const TRAIL_GIVEBACK_PCT_LARGE = 15;
-
-// Absolute ceiling, separate from the trail: a position up this much is
-// banked outright rather than risking a gap on the way back down.
-const HARD_TAKE_PROFIT_PCT = { OPTION: 150, SHARES: 60 };
-
-/* End-of-day profit taking, applied only when autoexit is called with
-   ?eod=true (the 15:56 pre-close sweep). A gain that survives to the close is
-   not a gain until it is realised: INTC closed +$670 across two call lots and
-   reopened the next session at -$1,690, a $2,360 swing for the privilege of
-   carrying it. MRVL did +$587 to +$25 and ROG +$587 to -$657 the same week —
-   three round trips, no overnight carry that paid. The trail cannot catch
-   these because it arms at +40% and none of them got near that in percentage
-   terms; the gains were large in dollars and small in percent, which is what
-   10%-of-account sizing produces. Dollar-denominated on purpose, since "a
-   good daily profit" is a dollar question, not a ratio one. */
-const EOD_TAKE_PROFIT_USD = 200 * DOLLAR_SCALE; // $200 at the $99K reference, $20 at $10K
-/* ...but the caller can lower it. The 15:xx jobs pass eodMin=200, because the
-   single 15:56 look at $300 was demonstrably too coarse: FEIM, a $24,325 share
-   position, touched +$667 intraday and sat at +$180 late in the day, and every
-   percentage rule read a 2.74% move on a quarter of the account as noise. A
-   lower bar in the last hour banks the kind of gain that is real in dollars
-   while still being invisible as a ratio. */
+/* Every threshold lives in exitRules.js with the trades that set it, and
+   is a function of the account size. This route only decides what to
+   fetch and what to send; the rules decide what to do. */
+const ACCOUNT_SIZE = Number(process.env.ACCOUNT_SIZE) > 0 ? Number(process.env.ACCOUNT_SIZE) : undefined;
+const CFG = exitConfig(ACCOUNT_SIZE);
 
 async function underlyingQuote(symbol) {
   try {
@@ -213,43 +97,12 @@ async function expirationSettlement(pos) {
     const bars = await dailyBars(pos.symbol, 60);
     const bar = bars.find((b) => b.date === pos.expiration) || bars[bars.length - 1];
     const closePx = Number(bar?.close);
-    if (!(closePx > 0)) return null;
-    const intrinsic = pos.optionType === "call" ? Math.max(0, closePx - Number(pos.strike)) : Math.max(0, Number(pos.strike) - closePx);
+    const intrinsic = intrinsicAtExpiry(pos.optionType, pos.strike, closePx);
+    if (intrinsic == null) return null;
     return { settlePrice: intrinsic, underlyingClose: closePx };
   } catch {
     return null;
   }
-}
-
-/* How old a read may be and still count as a REVERSAL of a live thesis.
-   This used to be unbounded, and that was a real bug: the filter drops WAIT
-   ideas and the position's own idea, then took the newest of whatever was
-   left — which on a symbol with no other recent directional read is whatever
-   is oldest in the ledger. The SPY 10/23 $772c was bought at 14:05 on a 13:46
-   CALL; the 14:14 refresh returned WAIT (filtered out), so the "latest read"
-   became a PUT from 2026-09-15 and the position was closed as "thesis
-   reversed" on a SEVENTEEN-DAY-OLD read, 15 minutes after being opened.
-   It fires precisely on fresh autotrade entries — the position's own idea has
-   to be the newest directional one for the symbol — and 7 symbols were primed
-   for it, NVDA, SPY, TSLA, QQQ, AAL, AMD and VEEA, each with an old opposite
-   idea sitting in the ledger. NVDA is the one that matters most: a 2026-09-15
-   PUT was ready to instantly close any new NVDA call, and NVDA calls are what
-   this book actually makes money on.
-   Two bounds now, and the first is the airtight one: a reversal must POSTDATE
-   the thesis it contradicts. An older read is not a change of mind, it is just
-   an older read. */
-const REVERSAL_MAX_AGE_MIN = 120;
-
-function latestIdeaForSymbol(ideas, symbol, excludeIdeaId, sinceMs) {
-  const floor = Math.max(Date.now() - REVERSAL_MAX_AGE_MIN * 60000, Number(sinceMs) || 0);
-  const rows = ideas.filter((i) =>
-    i.symbol === symbol &&
-    i.id !== excludeIdeaId &&
-    ["CALL", "PUT", "BUY", "SELL"].includes(i.action) &&
-    new Date(i.createdAt).getTime() > floor
-  );
-  if (!rows.length) return null;
-  return rows.reduce((a, b) => (new Date(a.createdAt) > new Date(b.createdAt) ? a : b));
 }
 
 // Has this position's own resting stop already filled on Tradier? Reads the
@@ -288,19 +141,7 @@ async function cancelResting(orderId) {
   try { await tradeFetch(`/accounts/${await accountId()}/orders/${orderId}`, { method: "DELETE" }); } catch {}
 }
 
-/* The quantity actually HELD, which is what a sell order and any P&L must be
-   based on. entryQuantity is what was ORDERED; journalReconcile writes
-   entryFilledQuantity from the broker's exec_quantity. They are equal on a
-   clean fill and no row in the ledger has ever differed, but on a partial fill
-   the ordered number is both too large to sell (the broker rejects a sell for
-   more than the position) and wrong for the gain, which would be overstated by
-   the unfilled remainder. Share orders here now run to thousands of shares, so
-   a partial is a question of when, not whether. */
-const MAX_LOSS_PCT = 1; // % of the account one trade may lose before it is sold
-const MAX_LOSS_USD = (ACCOUNT_SIZE * MAX_LOSS_PCT) / 100;
-const SHORT_DATED_TARGET_PCT = 7; // sell a closeByEod contract outright at this gain
 const ENTRY_REST_MAX_MIN = 5; // how long an unfilled entry may rest before it is withdrawn
-const heldQuantity = (pos) => Number(pos.entryFilledQuantity ?? pos.entryQuantity) || 0;
 
 async function closeOption(pos, exitPrice, { duration = "day" } = {}) {
   await cancelResting(pos.entryOrderId); // the resting stop leg — about to be replaced by this close
@@ -342,14 +183,13 @@ async function run(req) {
   const params = new URL(req.url).searchParams;
   const dryRun = params.get("dryRun") === "true";
   const eod = params.get("eod") === "true";
-  // The eodMin query param is IGNORED. Callers used to pass eodMin=200, a flat
+  // An eodMin query param is IGNORED. Callers used to pass eodMin=200, a flat
   // dollar figure that only means anything at one account size; the bar now
-  // always comes from the account (see DOLLAR_SCALE), so a stale caller cannot
-  // quietly set a bar that is 20% of a $1,000 position.
-  const eodMin = EOD_TAKE_PROFIT_USD;
+  // always comes from the account (exitConfig in exitRules.js), so a stale
+  // caller cannot quietly set a bar that is 20% of a $1,000 position.
   try {
     const open = listJournal().filter((r) => r.status === "open");
-    if (!open.length) return NextResponse.json({ checked: 0, closed: 0, accountSize: ACCOUNT_SIZE, eodBarUsd: Number(EOD_TAKE_PROFIT_USD.toFixed(2)), results: [] });
+    if (!open.length) return NextResponse.json({ checked: 0, closed: 0, accountSize: CFG.account, eodBarUsd: Number(CFG.eodTakeProfitUsd.toFixed(2)), results: [] });
     /* AI ideas only, matching the entry path. autotrade already filters
        `!i.strategy` so "a sweep scan landing last must never become this
        route's latest idea for a symbol" — the reversal rule needs the same
@@ -399,9 +239,7 @@ async function run(req) {
         }
         continue;
       }
-      const dir = pos.vehicle === "OPTION"
-        ? (pos.optionType === "call" ? 1 : -1)
-        : (pos.side === "sell_short" ? -1 : 1);
+      const dir = directionOf(pos);
 
       // 0. A close was already submitted for this row on an earlier run and
       // is not yet confirmed filled. Never re-submit (that stacks duplicate
@@ -496,79 +334,18 @@ async function run(req) {
       // options and on the share price for shares.
       const sharesBid = range?.bid ?? underlyingPx;
       const markNow = pos.vehicle === "OPTION" ? livePremium : (dir > 0 ? sharesBid : underlyingPx);
-      /* An OPTION position here is always LONG premium, so it gains when its
-         own premium rises, whether it is a call or a put. This used to require
-         `dir > 0`, and dir is -1 for a put (it describes the UNDERLYING's
-         direction), so gainPct came back null for every put: the trail needs a
-         gain and never armed, and the 150% outright ceiling never fired. No put
-         had been held long enough to notice — the book was long-only for weeks,
-         and found only when the first put experiment was about to be placed.
-         Short SHARES (dir < 0, sell_short) still return null here: their gain is
-         the mirror image and their peak would be a LOW, which this block does
-         not track, so they stay unmanaged by the trail rather than being
-         mismanaged by it. */
-      const gainPct = markNow > 0 && entryPremium > 0 && (pos.vehicle === "OPTION" || dir > 0)
-        ? ((markNow - entryPremium) / entryPremium) * 100
-        : null;
-
-      // Track the best mark this position has ever shown, so the trail has
-      // a peak to measure the giveback against. Persisted on the row because
-      // each cron run is a fresh process with no memory of the last one.
-      // Seed from the instrument's own intraday high as well as the live
-      // mark, so a spike that happened between two 15-minute runs still
-      // counts. Without this the trail only ever knows the peaks it watched
-      // live and would have been blind to the NVDA contract printing $8.78.
-      /* The peak has to be measured in the same currency as the exit, and for
-         options it was not. markNow is the BID (what we can actually sell at)
-         while the seeded high came from oq.high, a LAST-TRADE price. On a wide
-         contract that gap is the whole spread: MRVL 265c showed a $17.98 high
-         against a $17.00/$17.55 market, so a "peak" was recorded at a price no
-         seller could have got, and every giveback measured against it was
-         overstated by ~3% of premium — enough to trip the trail early. Subtract
-         the current spread to approximate what the bid was up there. Shares need
-         no adjustment; their spreads are pennies. */
-      /* The day's high only counts as THIS position's peak if the position was
-         held when it printed. For a position entered today it usually was not:
-         SPCX 10/30 $167.50c was bought at $7.75 at 12:03 on a day the contract
-         had already traded $8.775, and AVGO at $14.60 against an earlier
-         $15.335. Seeded with those, the trail read "peaked +13%, gave it all
-         back" and sold both three minutes after entry for -$60 each. With the
-         arm at 40% this could not happen; at 5% any re-entry below the day's
-         high trips it. So: entered before today -> the day high is fair;
-         entered today -> only the high since entry, and nothing if unreadable. */
+      // Peak and gain figures — see exitRules.js for what each one means and
+      // the trades (SPCX, AVGO, MRVL, the first put) that shaped them.
       const enteredAt = pos.entryFilledAt || pos.entryAt || pos.createdAt;
       const enteredToday = enteredAt && new Date(enteredAt).toDateString() === new Date().toDateString();
       const dayHigh = pos.vehicle === "OPTION" ? Number(oq?.high) : Number(range?.high);
-      /* For a position entered today the peak is built ONLY from marks this
-         route has itself observed (pos.peakMark, raised below each pass). It
-         used to be seeded from production 5-minute bars since entry, and that
-         mixed two clocks: the peak came from the real-time feed while markNow
-         comes from the sandbox feed, which lags it by ~15 minutes. On any rising
-         contract the trail then saw a giveback that was only the lag. Measured
-         on AVGO 10/30 $375c, 2026-10-06: production bars gave a peak of $15.825
-         (+24%) while the sandbox mark was $13.175, so it read "gave back to +3%"
-         and sold at the stale $13.00 bid while the contract traded $15.70.
-         Observed marks share the mark's clock, so the lag cannot fake a giveback.
-         Positions entered before today keep the day high, which is the sandbox's
-         own quote.high and so on the same clock. */
-      const rawHigh = enteredToday ? null : dayHigh;
       const spread = pos.vehicle === "OPTION" && oq?.ask > 0 && oq?.bid >= 0 ? oq.ask - oq.bid : 0;
-      // The whole spread, matching the bid the current mark uses.
-      const todayHigh = rawHigh > 0 ? Math.max(0, rawHigh - spread) : null;
-      let peakMark = Math.max(Number(pos.peakMark) || 0, Number(todayHigh) || 0);
-      if (markNow > 0 && markNow > peakMark) peakMark = markNow;
+      const peakMark = updatePeak({ previousPeak: pos.peakMark, markNow, dayHigh, spread, enteredToday });
       if (!dryRun && peakMark > (Number(pos.peakMark) || 0)) {
         try { updateJournalEntry(pos.id, { peakMark }); } catch {}
       }
-      const peakGainPct = peakMark > 0 && entryPremium > 0
-        ? ((peakMark - entryPremium) / entryPremium) * 100
-        : null;
-      const armBar = TRAIL_ARM_PCT[pos.vehicle] ?? TRAIL_ARM_PCT.OPTION;
-      // Dollar gain at the peak, which is what actually matters once positions
-      // are sized to the account rather than to one contract.
-      const mult = pos.vehicle === "OPTION" ? 100 : 1;
       const qty = heldQuantity(pos);
-      const hardBar = HARD_TAKE_PROFIT_PCT[pos.vehicle] ?? HARD_TAKE_PROFIT_PCT.OPTION;
+      const { gainPct, gainUsd, peakGainPct, peakGainUsd } = gainFigures({ vehicle: pos.vehicle, dir, markNow, entryPremium, peakMark, qty });
 
       /* 1a. Explicit breakeven exit, set per position (exitAtBreakeven) when
          the plan becomes "get out of this without a loss" rather than "wait
@@ -635,116 +412,18 @@ async function run(req) {
         continue;
       }
 
-      // 1a-eod. Last look of the day: bank a real dollar gain rather than
-      // carry it overnight. Deliberately ahead of the trail and the target,
-      // because at 15:56 the question is no longer "is there more in this?"
-      const gainUsd = markNow > 0 && entryPremium > 0 ? (markNow - entryPremium) * qty * mult : null;
-      /* A position flagged closeByEod is a short-dated contract that decays ~25%
-         of its price a day. The end-of-day dollar bar below only ever banks
-         GAINS, so a loser would be carried overnight and lose that again. These
-         close in the last 15 minutes whatever the P&L. Gated on the clock so the
-         15:03 and 15:18 late-session passes leave it alone. */
-      /* The most one trade may lose: 1% of the account, about $100. The user
-         stated this as the rule for every trade. On 2026-10-08 it had only been
-         built into the SIZE of same-day trades, so a multi-day INTC put bought
-         as four contracts sat at -$436 with nothing to sell it: its own
-         invalidation was still $2 away and would have cost about $650. This is
-         a hard stop on the position's dollars, measured at the bid, whatever
-         the idea's own levels say. Checked once a minute, so a fast move can
-         overshoot it. */
-      if (!exit && gainUsd != null && gainUsd <= -MAX_LOSS_USD) {
-        exit = { tag: "max_loss", detail: `Down $${Math.abs(gainUsd).toFixed(0)} at the bid — at the $${MAX_LOSS_USD.toFixed(0)} most one trade may lose (${MAX_LOSS_PCT}% of the account)` };
-      }
-      if (!exit && eod && pos.closeByEod) {
-        const hm = new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour12: false, hour: "2-digit", minute: "2-digit" }).split(":").map(Number);
-        if (hm[0] * 60 + hm[1] >= 15 * 60 + 45) {
-          exit = { tag: "eod_flat", detail: `Flat by the close: short-dated contract, up/down ${gainUsd != null ? "$" + gainUsd.toFixed(0) : "?"}, not carrying overnight decay` };
-        }
-      }
-      /* Fixed target for the same short-dated contracts. Everywhere else a
-         trailing exit beat a fixed one in the replay, but these lose about a
-         quarter of their price a day and move fast: MU 10/9 $1082.50c traded
-         from $19.25 to $21.10 and back inside ten minutes on 2026-10-07 and was
-         never sold. A gain here is taken when it is on the table. */
-      if (!exit && pos.closeByEod && gainPct != null && gainPct >= SHORT_DATED_TARGET_PCT) {
-        exit = { tag: "quick_target", detail: `Up ${gainPct.toFixed(1)}% ($${entryPremium} to $${markNow} at the bid) — at the ${SHORT_DATED_TARGET_PCT}% target for a short-dated contract, taking it` };
-      }
-      if (!exit && eod && gainUsd != null && gainUsd >= eodMin) {
-        exit = {
-          tag: "eod_take_profit",
-          detail: `Up $${gainUsd.toFixed(0)} into the close (${gainPct != null ? gainPct.toFixed(1) + "%" : "?"}) — past the $${eodMin} late-session bar, banking it rather than carrying overnight gap risk`,
-        };
-      }
+      // 1b. Max loss, end-of-day banking, the short-dated quick target, the
+      // outright ceiling and the trail, in that order (exitRules.js). The
+      // ceiling relabels an earlier exit on purpose, so it may replace one.
+      const profitExit = decideProfitExit(CFG, {
+        vehicle: pos.vehicle, closeByEod: pos.closeByEod, eod,
+        gainPct, gainUsd, peakGainPct, peakGainUsd, peakMark, entryPremium, markNow,
+      });
+      if (profitExit && (!exit || profitExit.tag === "take_profit")) exit = profitExit;
 
-      // 1b. Outright ceiling — big enough that it goes in the book now.
-      if (gainPct != null && gainPct >= hardBar) {
-        exit = {
-          tag: "take_profit",
-          detail: `Up ${gainPct.toFixed(0)}% ($${entryPremium} to $${markNow}) — past the ${hardBar}% ceiling, banking it outright`,
-        };
-      }
-
-      // 1c. Trailing take-profit: armed once the position has been up at
-      // least armBar at some point, then exits on a giveback of that peak
-      // gain. Compares against the PEAK, not the entry, so a winner that
-      // rolls over is banked near its high instead of round-tripping.
-      /* Arms on percentage OR dollars. Percentage alone was calibrated when a
-         position was ~$800, where +6% is $48 of noise worth ignoring. The same
-         +6% on an $8,475 position is $515, and MRVL rode exactly that from
-         +$515 back to +$25 without ever approaching the +40% bar. This stays a
-         GIVEBACK rule rather than a profit target: it only fires once a gain
-         has largely been surrendered, so a position still climbing never trips
-         it — the +127% NVDA winner would have been untouched. */
-      if (!exit && peakGainPct != null && peakGainPct >= armBar && gainPct != null) {
-        // Peak gain in dollars, from the same peak mark the percentage uses.
-        const peakGainUsd = peakMark > 0 && entryPremium > 0 ? (peakMark - entryPremium) * qty * mult : null;
-        const givebackPct = peakGainUsd != null && peakGainUsd >= TRAIL_TIGHTEN_USD
-          ? TRAIL_GIVEBACK_PCT_LARGE
-          : TRAIL_GIVEBACK_PCT;
-        const keepAtLeast = peakGainPct * (1 - givebackPct / 100);
-        if (gainPct <= keepAtLeast) {
-          exit = {
-            tag: "trail_stop",
-            detail: `Peaked at +${peakGainPct.toFixed(0)}% ($${peakMark}${peakGainUsd != null ? `, +$${peakGainUsd.toFixed(0)}` : ""}) and gave back to +${gainPct.toFixed(0)}% ($${markNow}) — trailing exit at ${givebackPct}% giveback${givebackPct === TRAIL_GIVEBACK_PCT_LARGE ? ` (tightened: peak gain cleared $${TRAIL_TIGHTEN_USD})` : ""}, banking +${gainPct.toFixed(0)}%`,
-          };
-        }
-      }
-
-      // 2. Target hit — anywhere in today's range, not just the current tick.
-      /* An intraday position is judged on the LIVE price only. Its target sits
-         inside today's range by design — a fade aims back at the middle — so
-         the day's extreme has usually already been through it before entry,
-         and would read as "target hit" the minute the position opened. */
-      const targetRef = pos.strategy === "intraday" ? underlyingPx : favorableExtreme;
-      if (!exit && pos.target != null && targetRef != null) {
-        const hit = dir > 0 ? targetRef >= pos.target : targetRef <= pos.target;
-        if (hit) exit = { tag: "target", detail: pos.strategy === "intraday" ? `Reached its $${pos.target} same-day target (now $${underlyingPx})` : `Hit its $${pos.target} target intraday (day's ${dir > 0 ? "high" : "low"} $${favorableExtreme}, now $${underlyingPx})` };
-      }
-      // 3. Invalidation breached with no stop to have caught it. Deliberately
-      // asymmetric with the target check above: this one stays on the LIVE
-      // price, not the day's extreme. A one-tick wick through the level that
-      // has already recovered (seen live: a $228.465 low against a $228.50
-      // invalidation, price back at $230.87 within the hour) would otherwise
-      // force a realized loss on a position that is currently working and
-      // still has weeks to expiry. Catching a missed win is free; manufacturing
-      // a loss out of a recovered wick is not.
-      if (!exit && pos.invalidation != null && underlyingPx != null) {
-        const hit = dir > 0 ? underlyingPx <= pos.invalidation : underlyingPx >= pos.invalidation;
-        if (hit) exit = { tag: "invalidation", detail: `Breached its $${pos.invalidation} invalidation with no stop resting to catch it (underlying now $${underlyingPx})` };
-      }
-      // 4. Thesis reversed. Not for intraday positions: the multi-day read on a
-      // symbol may point the other way from a same-day fade by design.
-      if (!exit && pos.strategy !== "intraday") {
-        // Anchor to when this position's OWN thesis was written, so only a
-        // genuinely later read can overturn it.
-        const ownIdea = pos.ideaId ? allIdeas.find((i) => i.id === pos.ideaId) : null;
-        const sinceMs = new Date(ownIdea?.createdAt || pos.createdAt || 0).getTime();
-        const latest = latestIdeaForSymbol(allIdeas, pos.symbol, pos.ideaId, sinceMs);
-        const latestDir = latest ? DIRECTION[latest.action] : undefined;
-        if (latest && latestDir && latestDir !== dir) {
-          exit = { tag: "reversed", detail: `Latest read flipped to ${latest.action} — ${latest.why_plain || latest.why_pro || "no reason given"}` };
-        }
-      }
+      // 2-3. The plan's own target and invalidation. 4. Thesis reversed.
+      if (!exit) exit = decideLevelExit({ dir, target: pos.target, invalidation: pos.invalidation, strategy: pos.strategy, underlyingPx, favorableExtreme });
+      if (!exit) exit = decideReversalExit({ pos, dir, ideas: allIdeas });
 
       if (!exit) { results.push({ symbol: pos.symbol, closed: false }); continue; }
 
@@ -860,7 +539,7 @@ async function run(req) {
       });
     }
 
-    return NextResponse.json({ checked: open.length, closed: results.filter((r) => r.closed).length, accountSize: ACCOUNT_SIZE, eodBarUsd: Number(EOD_TAKE_PROFIT_USD.toFixed(2)), results });
+    return NextResponse.json({ checked: open.length, closed: results.filter((r) => r.closed).length, accountSize: CFG.account, eodBarUsd: Number(CFG.eodTakeProfitUsd.toFixed(2)), results });
   } catch (e) {
     return NextResponse.json({ error: String(e.message || e) }, { status: 502 });
   }
