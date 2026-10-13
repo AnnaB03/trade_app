@@ -1131,7 +1131,14 @@ function Ideas() {
   const [err, setErr] = useState("");
   const [showPro, setShowPro] = useState(false);
   const [account, setAccount] = useState(1000);
-  useEffect(() => { setAccount(readAccount()); }, []);
+  /* The account size is the SERVER's (ACCOUNT_SIZE), not a number typed here.
+     This box used to be editable and remembered in the browser, and the server
+     treats anything above its own figure as that figure — so it could read
+     100000 while every idea beside it was sized for 25000. */
+  useEffect(() => {
+    setAccount(readAccount());
+    getJSON("/api/status").then((d) => { if (d?.accountSize > 0) { setAccount(d.accountSize); try { localStorage.setItem("cockpit_account", String(d.accountSize)); } catch {} } }).catch(() => {});
+  }, []);
   const clock = useMarketClock();
   const closed = marketClosed(clock);
   // React Strict Mode (dev only) intentionally fires a fresh mount's effects
@@ -1222,8 +1229,8 @@ function Ideas() {
         <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
           <label className="mono muted" style={{ fontSize: 11, display: "flex", gap: 4, alignItems: "center" }} title="Ideas are sized for this account: which cheaper names get scanned, whether a contract fits (hard cap 10%), and how many shares (1% risk to the stop). Takes effect on the next refresh.">
             Account $
-            <input className="in" style={{ width: 74, padding: "2px 5px", fontSize: 12 }} inputMode="numeric" value={account}
-              onChange={(e) => { const v = Number(e.target.value.replace(/[^0-9]/g, "")) || 0; setAccount(v); try { localStorage.setItem("cockpit_account", String(v)); } catch {} }} />
+            <input className="in" style={{ width: 74, padding: "2px 5px", fontSize: 12, opacity: 0.8 }} value={Number(account).toLocaleString("en-US")} readOnly
+              title="Set by ACCOUNT_SIZE on the server. Every idea and every rule is sized from this one figure." />
           </label>
           <AlertsToggle />
           <button className="chip" onClick={() => setShowPro((v) => !v)}>{showPro ? "Plain view" : "Pro view"}</button>
