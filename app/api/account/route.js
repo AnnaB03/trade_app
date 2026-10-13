@@ -24,6 +24,7 @@ export async function GET() {
       available: b.cash?.cash_available ?? null,
       unsettled: b.cash?.unsettled_funds ?? null,
       feesPaid: b.sim?.feesPaid ?? null, startCash: b.sim?.startCash ?? null,
+      equity: b.sim?.equity ?? null, dayTrades: b.sim?.dayTrades ?? null, pdt: b.sim?.pdt ?? null,
       activity: readActivity(),
       ledger: {
         since: baseline.freshStartAt ?? null,

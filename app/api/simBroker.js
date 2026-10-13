@@ -95,7 +95,84 @@ function positionMap(state) {
 const committedToSells = (state, key) =>
   allLegs(state).filter((l) => l.status === "open" && SELL.has(l.side) && keyOf(l) === key).reduce((s, l) => s + Number(l.quantity), 0);
 
-export function cashState(state = load(), now = new Date()) {
+/* ---------- Account type ----------
+   SIM_ACCOUNT_TYPE=margin (set 2026-10-13, the user: "I want it to be a margin
+   account so we don't have to wait for the money to reuse"). What changes, and
+   what a real margin account brings with it:
+
+   - Sale proceeds can buy again at once. No next-day settlement lock.
+   - The PATTERN DAY TRADER rule now applies, and it is the price of that
+     freedom: with equity under $25,000, a margin account gets three day trades
+     in any five business days. A day trade is a position opened and closed in
+     the same session. Here the fourth is stopped at the ENTRY — a new position
+     is refused once three are used, because one opened now could not be closed
+     today — and an exit is never refused, so nothing is ever trapped.
+   - Not modelled, on purpose: borrowing. Buying power is the cash, no 2x or 4x,
+     and long options cannot be bought on margin anyway. Shorting stays off.
+
+   Equity here is cash plus open positions at their bid, read live; a broker
+   uses the previous close. */
+export const ACCOUNT_TYPE = String(process.env.SIM_ACCOUNT_TYPE || "").toLowerCase() === "margin" ? "margin" : "cash";
+export const PDT_EQUITY_USD = 25000;
+export const PDT_MAX_DAY_TRADES = 3;
+
+// The five most recent weekdays, today included, as ET dates.
+function lastBusinessDays(now, n = 5) {
+  const out = [];
+  const d = new Date(now);
+  while (out.length < n) {
+    const wd = d.toLocaleDateString("en-US", { timeZone: "America/New_York", weekday: "short" });
+    if (wd !== "Sat" && wd !== "Sun") out.push(etDay(d));
+    d.setTime(d.getTime() - 86400000);
+  }
+  return out;
+}
+
+/* Day trades in the rolling window: for each instrument and day, each sale of
+   something bought earlier that same day. */
+export function dayTradeCount(state = load(), now = new Date()) {
+  const window = new Set(lastBusinessDays(now));
+  const bought = new Map();
+  let count = 0;
+  for (const l of fills(state)) {
+    const day = etDay(l.transaction_date);
+    if (!window.has(day)) continue;
+    const k = `${day}|${keyOf(l)}`;
+    if (BUY.has(l.side)) bought.set(k, (bought.get(k) || 0) + 1);
+    else if ((bought.get(k) || 0) > 0) { bought.set(k, bought.get(k) - 1); count++; }
+  }
+  return count;
+}
+
+export function pdtVerdict({ accountType = ACCOUNT_TYPE, equity, dayTrades }) {
+  if (accountType !== "margin") return { ok: true, restricted: false };
+  if (!(equity < PDT_EQUITY_USD)) return { ok: true, restricted: false };
+  const left = Math.max(0, PDT_MAX_DAY_TRADES - dayTrades);
+  return left > 0
+    ? { ok: true, restricted: true, dayTradesLeft: left }
+    : { ok: false, restricted: true, dayTradesLeft: 0, reason: `pattern day trader rule — equity $${equity.toFixed(0)} is under $${PDT_EQUITY_USD} and ${dayTrades} day trades are used in the last five business days (limit ${PDT_MAX_DAY_TRADES}). A position opened now could not be closed today.` };
+}
+
+async function equityNow(state, now = new Date()) {
+  const cash = cashState(state, now).totalCash;
+  const pos = [...positionMap(state).values()];
+  if (!pos.length) return cash;
+  let value = 0;
+  try {
+    const d = await tradier(`/markets/quotes?symbols=${encodeURIComponent(pos.map((p) => p.symbol).join(","))}`, { timeoutMs: 8000 });
+    const by = new Map(asArray(d?.quotes?.quote).map((q) => [q.symbol, q]));
+    for (const p of pos) {
+      const q = by.get(p.symbol);
+      const px = Number(q?.bid) > 0 ? Number(q.bid) : Number(q?.last) || 0;
+      value += px > 0 ? px * p.quantity * (/\d{6}[CP]\d{8}$/.test(p.symbol) ? 100 : 1) : p.cost_basis;
+    }
+  } catch {
+    value = pos.reduce((s, p) => s + p.cost_basis, 0); // no quote: carry at cost rather than at zero
+  }
+  return cash + value;
+}
+
+export function cashState(state = load(), now = new Date(), accountType = ACCOUNT_TYPE) {
   const today = etDay(now);
   /* Money added to the account after it was opened (state.deposits). A deposit
      is settled cash from the moment it lands, and it is NOT profit: the
@@ -107,7 +184,7 @@ export function cashState(state = load(), now = new Date()) {
     const fee = Number(l.commission) || 0;
     fees += fee;
     if (BUY.has(l.side)) settled -= gross + fee;
-    else if (etDay(l.transaction_date) < today) settled += gross - fee;
+    else if (accountType === "margin" || etDay(l.transaction_date) < today) settled += gross - fee;
     else unsettled += gross - fee;
   }
   const committed = allLegs(state)
@@ -233,13 +310,17 @@ async function submit(state, form) {
   const first = specs[0];
   if (!(Number(first.quantity) > 0) || !Number.isInteger(Number(first.quantity))) reject("quantity must be a whole number.");
   if (first.type !== "limit" || !(Number(first.price) > 0)) reject("limit orders with a positive price only.");
-  if (!BUY.has(first.side) && !SELL.has(first.side)) reject(`"${first.side}" is not available in a cash account — no short selling and no option writing.`);
+  if (!BUY.has(first.side) && !SELL.has(first.side)) reject(`"${first.side}" is not available on this account — no short selling and no option writing.`);
 
   const mult = first.option_symbol ? 100 : 1;
   const key = first.option_symbol || first.symbol;
   if (BUY.has(first.side)) {
     const need = Number(first.price) * Number(first.quantity) * mult + (first.option_symbol ? OPTION_FEE * Number(first.quantity) : 0);
     const cash = cashState(state, now);
+    if (ACCOUNT_TYPE === "margin") {
+      const pdt = pdtVerdict({ equity: await equityNow(state, now), dayTrades: dayTradeCount(state, now) });
+      if (!pdt.ok) reject(pdt.reason);
+    }
     if (need > cash.available + 1e-6) {
       reject(`not enough settled cash — this needs $${need.toFixed(2)} and $${cash.available.toFixed(2)} is available${cash.unsettled > 0 ? ` ($${cash.unsettled.toFixed(2)} from today's sales settles tomorrow)` : ""}.`);
     }
@@ -299,5 +380,7 @@ async function handle(pathname, { method = "GET", form } = {}) {
     return { positions: list.length ? { position: list } : "null" };
   }
   const c = cashState(state);
-  return { balances: { account_number: SIM_ACCOUNT, account_type: "cash", total_cash: c.totalCash, cash: { cash_available: c.available, unsettled_funds: c.unsettled }, sim: c } };
+  const equity = await equityNow(state);
+  const dayTrades = dayTradeCount(state);
+  return { balances: { account_number: SIM_ACCOUNT, account_type: ACCOUNT_TYPE, total_cash: c.totalCash, total_equity: equity, cash: { cash_available: c.available, unsettled_funds: c.unsettled }, sim: { ...c, equity, dayTrades, pdt: pdtVerdict({ equity, dayTrades }) } } };
 }

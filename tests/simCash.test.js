@@ -29,3 +29,34 @@ test("today's sale proceeds stay locked; a deposit does not unlock them", () => 
   assert.equal(tomorrow.unsettled, 0);
   assert.ok(Math.abs(tomorrow.available - (25000 + 100 - 0.70)) < 1e-6);
 });
+
+test("margin: sale proceeds can buy again at once", async () => {
+  const now = new Date("2026-10-13T18:00:00Z");
+  const legs = [fill("buy_to_open", 5, 1, "2026-10-13T14:00:00Z"), fill("sell_to_close", 6, 1, "2026-10-13T15:00:00Z")];
+  const cash = cashState(state(legs), now, "cash"), margin = cashState(state(legs), now, "margin");
+  assert.equal(cash.unsettled, 600 - 0.35);
+  assert.equal(margin.unsettled, 0);
+  assert.ok(Math.abs(margin.available - (10000 + 100 - 0.70)) < 1e-6);
+});
+
+test("day trades: opened and closed the same session, counted over five business days", async () => {
+  const { dayTradeCount } = await import("../app/api/simBroker.js");
+  const now = new Date("2026-10-13T18:00:00Z"); // a Tuesday
+  const legs = [
+    fill("buy_to_open", 5, 1, "2026-10-13T14:00:00Z"), fill("sell_to_close", 6, 1, "2026-10-13T15:00:00Z"), // 1
+    fill("buy_to_open", 5, 1, "2026-10-12T14:00:00Z"), fill("sell_to_close", 6, 1, "2026-10-13T14:30:00Z"), // held overnight: not one
+    fill("buy_to_open", 5, 1, "2026-10-07T14:00:00Z"), fill("sell_to_close", 6, 1, "2026-10-07T15:00:00Z"), // 2 (Wed, inside the window)
+    fill("buy_to_open", 5, 1, "2026-10-06T14:00:00Z"), fill("sell_to_close", 6, 1, "2026-10-06T15:00:00Z"), // outside it
+  ];
+  assert.equal(dayTradeCount(state(legs), now), 2);
+});
+
+test("pattern day trader rule: three day trades under $25,000, then no new positions", async () => {
+  const { pdtVerdict } = await import("../app/api/simBroker.js");
+  assert.deepEqual(pdtVerdict({ accountType: "cash", equity: 5000, dayTrades: 9 }), { ok: true, restricted: false }, "a cash account has no such rule");
+  assert.deepEqual(pdtVerdict({ accountType: "margin", equity: 25000, dayTrades: 40 }), { ok: true, restricted: false }, "at or above the line, unlimited");
+  assert.deepEqual(pdtVerdict({ accountType: "margin", equity: 24999, dayTrades: 2 }), { ok: true, restricted: true, dayTradesLeft: 1 });
+  const v = pdtVerdict({ accountType: "margin", equity: 24124, dayTrades: 3 });
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /pattern day trader/);
+});
