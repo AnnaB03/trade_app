@@ -94,6 +94,12 @@ export const TRAIL_GIVEBACK_PCT_LARGE = 15;
 // banked outright rather than risking a gap on the way back down.
 export const HARD_TAKE_PROFIT_PCT = { OPTION: 150, SHARES: 60 };
 export const MAX_LOSS_PCT = 1; // % of the account one trade may lose before it is sold
+/* Playbooks that open and close inside one session: the same-day target, the
+   live-price target reference, and no thesis-reversed rule. "contrarian" (the
+   fade, app/api/fadeLib.js) is one of them, and it is BUILT against the
+   multi-day read on its symbol, so the reversal rule would close it the moment
+   it opened. */
+export const SAME_DAY_STRATEGIES = new Set(["intraday", "contrarian"]);
 export const SHORT_DATED_TARGET_PCT = 7; // sell a closeByEod contract outright at this gain
 export const EOD_FLAT_FROM_ET_MIN = 15 * 60 + 45; // closeByEod positions leave from 15:45 ET
 /* Dollar thresholds were tuned on the $99K paper account, where one position
@@ -264,13 +270,13 @@ export function decideProfitExit(cfg, {
    invalidation, price back at $230.87 within the hour) would otherwise force
    a realized loss on a position that is currently working. */
 export function decideLevelExit({ dir, target, invalidation, strategy, underlyingPx, favorableExtreme }) {
-  const targetRef = strategy === "intraday" ? underlyingPx : favorableExtreme;
+  const targetRef = SAME_DAY_STRATEGIES.has(strategy) ? underlyingPx : favorableExtreme;
   if (target != null && targetRef != null) {
     const hit = dir > 0 ? targetRef >= target : targetRef <= target;
     if (hit) {
       return {
         tag: "target",
-        detail: strategy === "intraday"
+        detail: SAME_DAY_STRATEGIES.has(strategy)
           ? `Reached its $${target} same-day target (now $${underlyingPx})`
           : `Hit its $${target} target intraday (day's ${dir > 0 ? "high" : "low"} $${favorableExtreme}, now $${underlyingPx})`,
       };
@@ -313,7 +319,7 @@ export function latestIdeaForSymbol(ideas, symbol, excludeIdeaId, sinceMs, now =
    positions — the multi-day read may point the other way from a same-day
    fade by design. */
 export function decideReversalExit({ pos, dir, ideas, now = Date.now() }) {
-  if (pos.strategy === "intraday") return null;
+  if (SAME_DAY_STRATEGIES.has(pos.strategy)) return null;
   const ownIdea = pos.ideaId ? ideas.find((i) => i.id === pos.ideaId) : null;
   const sinceMs = new Date(ownIdea?.createdAt || pos.createdAt || 0).getTime();
   const latest = latestIdeaForSymbol(ideas, pos.symbol, pos.ideaId, sinceMs, now);

@@ -7,6 +7,8 @@ import { reservedQuantities } from "../common";
 import { isLegacy, readBaseline } from "../../ledgerLib";
 import { journalOpen } from "../../journalLib";
 import { OPTION_HARD_PCT } from "../../sizingLib";
+import { extremeRead, fadePlan, fadeEnabled, EXTREME_PCT, FADE_SIDES } from "../../fadeLib";
+import { appendIdea } from "../../store";
 import { markActivity } from "../../activityLib";
 import { recordShadowEntry } from "../../shadowLib";
 import { tradingHalt } from "../../riskLib";
@@ -126,6 +128,9 @@ const DIRECTION_SIGN = { CALL: 1, BUY: 1, PUT: -1, SELL: -1 };
    has shown what it would have done. Set INTRADAY_LIVE=true in .env.local (and
    restart the server) to let it trade the account again. */
 const INTRADAY_WATCH_ONLY = process.env.INTRADAY_LIVE !== "true";
+// Playbooks that open and close inside one session: sized by risk, refused
+// outright when one contract is too much, and flat by the close.
+const SAME_DAY = new Set(["intraday", "contrarian"]);
 const MAX_SPREAD_SHARE_OF_LOSS = 0.4; // of the per-trade loss limit
 const INTRADAY_RISK_PCT = 1; // % of the account a same-day trade may lose at its stop
 const LAST_FLAT_BY_CLOSE_ENTRY_MIN = 15 * 60; // ET minutes; flat-by-close contracts are not opened after this
@@ -293,6 +298,19 @@ async function liveAsk(symbol) {
   }
 }
 
+// Last, plus the day's high and low: the fade needs to know where in the
+// day's range an entry would be taken (fadeLib.js).
+async function dayQuote(symbol) {
+  try {
+    const d = await tradier(`/markets/quotes?symbols=${encodeURIComponent(symbol)}`);
+    const q = asArray(d?.quotes?.quote)?.[0];
+    const last = q?.last != null ? Number(q.last) : null;
+    return { last, high: Number(q?.high) > 0 ? Number(q.high) : null, low: Number(q?.low) > 0 ? Number(q.low) : null };
+  } catch {
+    return { last: null, high: null, low: null };
+  }
+}
+
 async function liveQuote(symbol) {
   try {
     const d = await tradier(`/markets/quotes?symbols=${encodeURIComponent(symbol)}`);
@@ -328,7 +346,19 @@ const ATTACH_STOPS = !isPaperSandbox() || process.env.PAPER_ATTACH_STOPS === "tr
    which the sandbox would fill from its lagging feed. On a real-time market a
    buy that must fill now pays the ask, so the order is priced there and every
    size and exposure gate counts that cost, not a mid nobody sells at. */
-const payPrice = (leg) => (Number(leg?.ask) > 0 ? Number(leg.ask) : leg?.mid);
+/* The limit price for a buy: the MID, not the ask.
+   Entries were priced at the ask so they filled on arrival, and every position
+   was therefore born down the whole spread — ORCL -$40, AVGO -$20, NVDA -$20
+   on 2026-10-13 alone, against a $100 loss limit. A limit at the mid rests
+   until the market comes to it, which costs some fills and keeps the rest;
+   autoexit withdraws an entry that has not filled in 5 minutes. Set
+   ENTRY_AT_ASK=true to go back to paying the ask. */
+const payPrice = (leg) => {
+  const bid = Number(leg?.bid), ask = Number(leg?.ask);
+  if (process.env.ENTRY_AT_ASK === "true") return ask > 0 ? ask : leg?.mid;
+  if (bid > 0 && ask > 0) return Math.round(((bid + ask) / 2) * 100) / 100;
+  return ask > 0 ? ask : leg?.mid;
+};
 
 // Attempt one specific contract. Returns { ok: true, orderResult, vet } or
 // { ok: false, error } — never throws, so the caller can try alternates.
@@ -476,6 +506,88 @@ async function placeShares(idea, { dryRun }) {
   return { placed: true, order: orderResult, stopAttached: vet.computed.stop_attached, stopPrice: vet.computed.stop_price, fill: { instrument: idea.symbol, quantity: vet.computed.quantity, price: vet.computed.price } };
 }
 
+/* ---------- The fade playbook ----------
+   Derived from the ordinary ideas, with no extra model call: when a breakout
+   idea triggers at the extreme of the day's range, this writes the OPPOSITE
+   trade into the idea ledger as its own idea (strategy "contrarian"), and the
+   normal entry loop then takes it through every existing gate — risk sizing,
+   the spread check, the per-symbol ceiling, the $100 loss limit. The levels
+   come from fadeLib.js: invalidation just beyond the extreme being chased,
+   target a share of the way back into the range. Short-dated and flat by the
+   close, because a failed breakout resolves in minutes or not at all. */
+const FADE_DTE_MIN = 1, FADE_DTE_MAX = 4, FADE_TARGET_DELTA = 0.6;
+
+async function fadeContract(symbol, type, price) {
+  try {
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+    const dte = (e) => Math.round((Date.parse(e + "T00:00:00Z") - Date.parse(today + "T00:00:00Z")) / 86400000);
+    const ex = await tradier(`/markets/options/expirations?symbol=${encodeURIComponent(symbol)}&includeAllRoots=true`, { timeoutMs: 8000 });
+    // Later first: the same move costs less decay a few days out.
+    const exps = asArray(ex?.expirations?.date).filter((e) => dte(e) >= FADE_DTE_MIN && dte(e) <= FADE_DTE_MAX).sort().reverse();
+    for (const exp of exps) {
+      const cd = await tradier(`/markets/options/chains?symbol=${encodeURIComponent(symbol)}&expiration=${encodeURIComponent(exp)}&greeks=true`, { timeoutMs: 9000 });
+      const fits = asArray(cd?.options?.option)
+        .filter((o) => o.option_type === type)
+        .map((o) => {
+          const bid = Number(o.bid), ask = Number(o.ask), mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : 0;
+          return { o, bid, ask, mid, delta: Math.abs(Number(o.greeks?.delta) || 0) };
+        })
+        .filter((c) => c.mid > 0 && c.delta >= 0.35 && c.delta <= 0.75 && ((c.ask - c.bid) / c.mid) * 100 <= 10 && c.mid * 100 <= ACCOUNT_SIZE * OPTION_HARD_PCT)
+        .sort((a, b) => Math.abs(a.delta - FADE_TARGET_DELTA) - Math.abs(b.delta - FADE_TARGET_DELTA));
+      if (fits.length) {
+        const c = fits[0];
+        return { expiration: exp, dte: dte(exp), strike: Number(c.o.strike),
+          leg: { occ: c.o.symbol, strike: Number(c.o.strike), bid: c.bid, ask: c.ask, mid: c.mid, delta: c.o.greeks?.delta != null ? Number(c.o.greeks.delta) : null } };
+      }
+    }
+  } catch {}
+  return null;
+}
+
+async function deriveFades(now = Date.now()) {
+  const made = [];
+  try {
+    const all = listIdeas();
+    const already = new Set(all.filter((i) => i.fadeOf).map((i) => i.fadeOf));
+    const bases = latestPerSymbol(all.filter((i) => !i.strategy))
+      .filter((i) => ["CALL", "PUT", "BUY", "SELL"].includes(i.action) && !already.has(i.id) && isFreshEnough(i, now));
+    for (const base of bases) {
+      const q = await dayQuote(base.symbol);
+      if (!(q.last > 0)) continue;
+      /* Only once the breakout it was waiting for is actually happening: the
+         fade is of a chase, not of a level nobody has reached.
+         FADE_REQUIRE_TRIGGER=false lifts it, which is how this path gets
+         exercised outside a live breakout. */
+      if (process.env.FADE_REQUIRE_TRIGGER !== "false" && base.triggerPrice != null && base.triggerDirection) {
+        const through = base.triggerDirection === "above" ? q.last >= Number(base.triggerPrice) : q.last <= Number(base.triggerPrice);
+        if (!through) continue;
+      }
+      const plan = fadePlan({ action: base.action, price: q.last, low: q.low, high: q.high });
+      if (!plan) continue;
+      const alt = await fadeContract(base.symbol, plan.optionType, q.last);
+      if (!alt) continue;
+      const why = `${base.symbol} is at ${plan.rangePos}% of today's $${q.low}-$${q.high} range and the model wants a ${base.action} there. Taking the other side instead: wrong above $${plan.invalidation}, back to $${plan.target} if the push fails.`;
+      const row = appendIdea({
+        symbol: base.symbol, action: plan.action, vehicle: "OPTION",
+        strike: alt.strike, expiration: alt.expiration,
+        entryTrigger: `fade of a ${base.action} taken at ${plan.rangePos}% of the day's range`,
+        triggerPrice: null, triggerDirection: null, triggered: true,
+        invalidation: plan.invalidation, target: plan.target, staleMinutes: 15,
+        conviction: 3, catalyst: "failed breakout", risk: "HIGH",
+        why_pro: `${why} Range position ${plan.rangePos}%, reward:risk ${plan.rewardRisk}:1 on the underlying, ${alt.dte}d contract at delta ${alt.leg.delta}.`,
+        why_plain: why,
+        leg: alt.leg, sizing: { vehicle: "OPTION", contracts: 1 }, affordable: true, accountSize: ACCOUNT_SIZE,
+        flatByClose: true, horizon: "intraday", strategy: "contrarian",
+        fadeOf: base.id, entryPrice: q.last, marketState: "open",
+      });
+      made.push(row.id);
+    }
+  } catch (e) {
+    console.error("deriveFades failed:", e);
+  }
+  return made;
+}
+
 async function run(req) {
   const params = new URL(req.url).searchParams;
   const dryRun = params.get("dryRun") === "true";
@@ -488,10 +600,19 @@ async function run(req) {
     // this route's "latest idea" for a symbol.
     // Two playbooks share this route and never read each other's ideas: the
     // multi-day AI ideas (no strategy tag) and the intraday ones.
-    const playbook = params.get("playbook") === "intraday" ? "intraday" : null;
+    const asked = params.get("playbook");
+    const playbook = asked === "intraday" || asked === "contrarian" ? asked : null;
+    const derived = playbook === "contrarian" ? await deriveFades() : [];
     const all = listIdeas().filter((i) => (playbook ? i.strategy === playbook : !i.strategy));
     const batch = latestPerSymbol(all);
-    if (!batch.length) return NextResponse.json({ error: "No ideas in the ledger yet — refresh the Ideas tab first." }, { status: 404 });
+    /* An empty playbook is not an error: the fade only has ideas while a
+       breakout is actually being chased, so most minutes it has none, and a
+       404 here made its pass vanish from the merged answer. */
+    if (!batch.length) {
+      return playbook
+        ? NextResponse.json({ playbook, derived, candidateCount: 0, placed: 0, skipped: 0, results: [] })
+        : NextResponse.json({ error: "No ideas in the ledger yet — refresh the Ideas tab first." }, { status: 404 });
+    }
     /* Portfolio-level stop, ahead of every per-trade gate: a manual halt, or
        today's realized loss at the daily limit, means no new entries whatever
        the ideas say. Exits are never halted (riskLib.js). Reported as a
@@ -534,7 +655,8 @@ async function run(req) {
     const conditionalSyms = [...new Set(
       batch.filter((i) => ["CALL", "PUT", "BUY", "SELL"].includes(i.action) && i.triggerPrice != null && i.triggerDirection).map((i) => i.symbol)
     )];
-    const liveBySym = Object.fromEntries(await Promise.all(conditionalSyms.map(async (s) => [s, await liveQuote(s)])));
+    const quoteBySym = Object.fromEntries(await Promise.all(conditionalSyms.map(async (s) => [s, await dayQuote(s)])));
+    const liveBySym = Object.fromEntries(Object.entries(quoteBySym).map(([s, q]) => [s, q.last]));
 
     const results = [];
     let deployedThisRun = 0; // cost placed earlier in this same pass, which journal rows don't show yet
@@ -617,6 +739,20 @@ async function run(req) {
         if (skipThisIdea) continue;
         if (!nowTriggered) { results.push({ ...tag, placed: false, reason: `Not triggered — live $${live} vs needs to go ${idea.triggerDirection} $${effectiveTrigger}${effectiveTrigger !== idea.triggerPrice ? ` (easiest of recent refreshes; latest asked for $${idea.triggerPrice})` : ""}.` }); continue; }
         if (crossedAt != null) tag.triggeredIntraday = `crossed $${effectiveTrigger} intraday (${idea.triggerDirection === "above" ? "high" : "low"} $${crossedAt} since the idea was written) though it is $${live} now`;
+        /* Stand down at the extreme. A breakout bought at the top of the day's
+           range (or a breakdown at the bottom) has to keep running with no
+           pause to pay, and the record says it does not: calls taken at 59-99%
+           of the range are 3 winners in 8, while the fade playbook now takes
+           the other side there (fadeLib.js). Honest cost: this also blocks the
+           trending-day breakouts that worked on 2026-10-09. */
+        if (idea.strategy !== "contrarian") {
+          const q = quoteBySym[idea.symbol] || {};
+          const read = extremeRead({ action: idea.action, price: live, low: q.low, high: q.high });
+          if (read.atExtreme && fadeEnabled(read.side)) {
+            results.push({ ...tag, placed: false, reason: `At ${read.pos.toFixed(0)}% of the day's range ($${q.low}-$${q.high}) — the breakout is being chased, so this stands down and the fade playbook takes the other side.` });
+            continue;
+          }
+        }
         // Trade off the live price, not the stale one from generation time —
         // that's what actually crossed the trigger just now.
         idea = { ...idea, entryPrice: live };
@@ -784,7 +920,7 @@ async function run(req) {
          before that level is reached. Only same-day trades are refused outright
          when one contract is too much. */
       if (idea.vehicle === "OPTION") {
-        const intradayIdea = idea.strategy === "intraday";
+        const intradayIdea = SAME_DAY.has(idea.strategy);
         const delta = Math.abs(Number(idea.leg?.delta)) || 0.6;
         const stopDist = Math.abs(Number(idea.entryPrice) - Number(idea.invalidation));
         const spread = Math.max(0, (Number(idea.leg?.ask) || 0) - (Number(idea.leg?.bid) || 0));
@@ -932,27 +1068,29 @@ let queue = Promise.resolve();
 export function GET(req) {
   const next = queue.then(async () => {
     const res = await run(req);
-    // Second pass: the intraday playbook, through the same gates.
+    // The other playbooks, each through the same gates as the first.
     const u = new URL(req.url);
     let out = res;
     if (u.searchParams.get("playbook") == null) {
-      u.searchParams.set("playbook", "intraday");
-      try {
-        const res2 = await run(new Request(u));
-        const d2 = res2.ok ? await res2.json() : null;
-        if (d2) {
-          const d1 = res.ok ? await res.clone().json() : { results: [], placed: 0, candidateCount: 0 };
-          const tagged = (d2.results || []).map((r) => ({ ...r, playbook: "intraday" }));
+      for (const pb of ["intraday", "contrarian"]) {
+        const pu = new URL(u);
+        pu.searchParams.set("playbook", pb);
+        try {
+          const res2 = await run(new Request(pu));
+          const d2 = res2.ok ? await res2.json() : null;
+          if (!d2) continue;
+          const d1 = out.ok ? await out.clone().json() : { results: [], placed: 0, candidateCount: 0 };
+          const tagged = (d2.results || []).map((r) => ({ ...r, playbook: pb }));
           out = NextResponse.json({
             ...d2, ...d1,
             candidateCount: (d1.candidateCount || 0) + (d2.candidateCount || 0),
             placed: (d1.placed || 0) + (d2.placed || 0),
             skipped: (d1.skipped || 0) + (d2.skipped || 0),
-            intradayCandidates: d2.candidateCount || 0,
+            [`${pb}Candidates`]: d2.candidateCount || 0,
             results: [...(d1.results || []), ...tagged],
           });
-        }
-      } catch (e) { console.error("autotrade intraday pass failed:", e); }
+        } catch (e) { console.error(`autotrade ${pb} pass failed:`, e); }
+      }
     }
     // Stamped by the full two-playbook run only, so the every-minute intraday
     // pass does not overwrite the list of what is being watched.
@@ -963,7 +1101,7 @@ export function GET(req) {
         // the automation is watching and how far away each one is.
         const watching = (d.results || [])
           .filter((r) => r.placed || /^Not triggered|^Crossed/.test(String(r.reason || "")))
-          .map((r) => ({ symbol: r.symbol, action: r.action, intraday: r.playbook === "intraday", placed: Boolean(r.placed), note: r.placed ? "bought" : String(r.reason).slice(0, 160) }));
+          .map((r) => ({ symbol: r.symbol, action: r.action, playbook: r.playbook || "swing", intraday: r.playbook === "intraday", placed: Boolean(r.placed), note: r.placed ? "bought" : String(r.reason).slice(0, 160) }));
         markActivity("entries", { ok: !d.error, error: d.error ?? null, candidates: d.candidateCount ?? 0, placed: d.placed ?? 0, watching, halted: Boolean(d.halted), haltReason: d.haltReason ?? null });
       } catch {}
     }

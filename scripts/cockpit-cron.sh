@@ -104,6 +104,11 @@ case "${1:-exits}" in
     run autoexit-eod "$BASE/api/order/autoexit?eod=true" ;;
   entries)
     run autotrade "$BASE/api/order/autotrade" ;;
+  entries-fade)
+    # The fade playbook: it derives its own ideas from the ordinary ones (no
+    # model call) and has to look every minute, because a failed breakout
+    # resolves in minutes. See fadeLib.js.
+    run autotrade-fade "$BASE/api/order/autotrade?playbook=contrarian" ;;
   entries-intraday)
     # Same-day ideas only, every minute. Their triggers sit close to the price
     # and their targets are small, so by the next 15-minute entry check the move

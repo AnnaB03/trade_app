@@ -48,5 +48,5 @@ if due eod 3 $eod_slots; then "$RUN" eod; else "$RUN" exits; fi
 # The full entry check runs both playbooks; in between, same-day ideas get
 # their own look every tick until 15:00, after which none are opened.
 if due entries 6 $entry_slots; then "$RUN" entries
-elif [ "$h" -lt 15 ]; then "$RUN" entries-intraday; fi
+elif [ "$h" -lt 15 ]; then "$RUN" entries-intraday; "$RUN" entries-fade; fi
 exit 0
