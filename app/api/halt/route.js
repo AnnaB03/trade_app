@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
 import { tradingHalt, haltTrading, resumeTrading } from "../riskLib";
+import { accountSize } from "../accountLib";
 
 /* The kill switch. GET shows the current halt (manual or daily-loss) and
    today's realized P&L against the limit. POST {"halted": true, "reason":
    "..."} stops new entries until POST {"halted": false}. Exits are never
    halted — see riskLib.js. */
-const account = () => (Number(process.env.ACCOUNT_SIZE) > 0 ? Number(process.env.ACCOUNT_SIZE) : 1000);
+const account = accountSize;
 
 export async function GET() {
   try {

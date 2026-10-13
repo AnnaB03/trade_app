@@ -72,12 +72,41 @@ Autopilot trades now close themselves out in the Journal. Fills, bracket
 stop-outs, and entry limits that expired unfilled are read back from the
 paper broker (`app/api/journalReconcile.js`).
 
+## The daily plan
+
+Written the way a trader sets rules before the open, in R — one R is the
+most one trade may lose, 1% of the account ($100 on $10K). Every rule stops
+new entries only; open positions are still managed, and the automatic
+rules clear at the next session. Engine: `app/api/riskLib.js`; the
+Journal tab's account card shows the plan and where today stands.
+
+- **Loss limit** — down 5% realized today: done for the day.
+- **Losing streak** — three closed losers in a row: the read is off, stop
+  before the fourth.
+- **Profit lock** — up 2% realized today (twice the 1% goal): take the
+  day. This book's record is winners that round-trip; a good day given
+  back is how a profitable week becomes a flat one.
+- **Day giveback** — once the day's realized peak has reached the 1% goal,
+  giving back half of it stops new entries. A trail on the day.
+- **Edge gate** — a playbook (swing / intraday) whose last 20 closed trades
+  lost money opens no new ones until it is fixed. `app/api/edgeLib.js`;
+  the Edge card on the Journal tab shows expectancy in R, profit factor,
+  win rate and drawdown by playbook, entry hour, exit reason, symbol and
+  catalyst.
+- **Tape gate** — a same-day continuation is refused once the name has
+  already used 120% of its normal daily range (`app/lib/tape.js`). The
+  same read — SPY against VWAP, the opening range, range used — is in the
+  Ideas prompt while the session is open.
+
 ## Automation safety
 
-- **Daily loss limit** — when today's realized loss (closed trades, net of
-  fees) reaches `DAILY_LOSS_LIMIT_PCT` of the account (default 5%), the
-  entry path refuses every new position until the next session. Exits keep
-  running. The autopilot log shows `HALTED (daily_loss): ...`.
+- **Daily rules** — see The daily plan above. The autopilot log shows
+  `HALTED (<rule>): ...` once when one trips and `RESUMED` when it lifts.
+- **Push notifications** — set `NTFY_TOPIC` and every fill, every exit with
+  its P&L, every halt, and an autopilot that has gone dark reach your phone
+  through [ntfy](https://ntfy.sh). `app/api/notifyLib.js`.
+- **One account size** — `ACCOUNT_SIZE` (default $10,000) is read in one
+  place, `app/api/accountLib.js`; every cap, bar and limit is a share of it.
 - **Kill switch** — the Journal tab's account card has a **Stop new trades**
   button and a meter of today's realized loss against the limit; while
   entries are stopped, a red badge shows in the page header on every tab.

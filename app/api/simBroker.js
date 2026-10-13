@@ -36,12 +36,13 @@ import fs from "fs";
 import path from "path";
 import { tradier, asArray } from "./tradier";
 import { getClock } from "./clockLib";
+import { accountSize } from "./accountLib";
 
 const FILE = path.join(process.cwd(), "data", "sim.json");
 export const SIM_ACCOUNT = "SIM-CASH";
 const feeEnv = process.env.SIM_OPTION_FEE_PER_CONTRACT;
 export const OPTION_FEE = feeEnv != null && feeEnv !== "" && Number(feeEnv) >= 0 ? Number(feeEnv) : 0.35;
-const START_CASH = Number(process.env.ACCOUNT_SIZE) > 0 ? Number(process.env.ACCOUNT_SIZE) : 10000;
+const START_CASH = accountSize();
 
 const BUY = new Set(["buy", "buy_to_open"]);
 const SELL = new Set(["sell", "sell_to_close"]);

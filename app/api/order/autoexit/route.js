@@ -6,6 +6,8 @@ import { listJournal, listIdeas, updateJournalEntry } from "../../store";
 import { journalClose } from "../../journalLib";
 import { dailyBars } from "../../historyCache";
 import { markActivity } from "../../activityLib";
+import { accountSize } from "../../accountLib";
+import { notifySold } from "../../notifyLib";
 import { exitConfig, directionOf, heldQuantity, intrinsicAtExpiry, updatePeak, gainFigures, decideProfitExit, decideLevelExit, decideReversalExit } from "../exitRules";
 
 /* Paper-only auto-EXIT — the other half of autotrade.js. That route only
@@ -33,8 +35,7 @@ import { exitConfig, directionOf, heldQuantity, intrinsicAtExpiry, updatePeak, g
 /* Every threshold lives in exitRules.js with the trades that set it, and
    is a function of the account size. This route only decides what to
    fetch and what to send; the rules decide what to do. */
-const ACCOUNT_SIZE = Number(process.env.ACCOUNT_SIZE) > 0 ? Number(process.env.ACCOUNT_SIZE) : undefined;
-const CFG = exitConfig(ACCOUNT_SIZE);
+const CFG = exitConfig(accountSize());
 
 async function underlyingQuote(symbol) {
   try {
@@ -204,6 +205,7 @@ async function run(req) {
     const results = [];
 
     for (let pos of open) {
+      let booked = null; // the journal row as closed, when this pass closed it
       /* Establish the real entry price before anything is measured against it.
          journalReconcile stamps entryFillPrice, but it is throttled to once a
          minute and a position can open and close before it ever runs — INTC
@@ -249,7 +251,7 @@ async function run(req) {
         if (outcome?.filled) {
           if (dryRun) { results.push({ symbol: pos.symbol, wouldClose: true, tag: pos.pendingExitTag || "closed", detail: `Pending close filled at $${outcome.price}` }); continue; }
           try {
-            journalClose(pos, {
+            booked = journalClose(pos, {
               exitOrderId: pos.pendingExitOrderId, exitOrderStatus: "filled",
               exitQuantity: outcome.quantity || pos.entryQuantity, exitFillPrice: outcome.price,
               exitReason: pos.pendingExitReason || "Auto-exit close filled",
@@ -257,7 +259,7 @@ async function run(req) {
               underlyingPriceAtClose: await underlyingQuote(pos.symbol),
             });
           } catch (e) { console.error("autoexit pending-close write failed:", e); }
-          results.push({ symbol: pos.symbol, closed: true, tag: pos.pendingExitTag || "closed", detail: `Close filled at $${outcome.price}`, exitPrice: outcome.price });
+          results.push({ symbol: pos.symbol, closed: true, tag: pos.pendingExitTag || "closed", detail: `Close filled at $${outcome.price}`, exitPrice: outcome.price, pnl: booked?.pnl ?? null, instrument: pos.occ ?? pos.symbol, quantity: heldQuantity(pos) });
           continue;
         }
         if (outcome && !outcome.dead) {
@@ -275,14 +277,14 @@ async function run(req) {
         if (dryRun) { results.push({ symbol: pos.symbol, wouldClose: true, tag: "stop_hit", detail: "Resting stop already filled on Tradier" }); continue; }
         const underlyingPx = await underlyingQuote(pos.symbol);
         try {
-          journalClose(pos, {
+          booked = journalClose(pos, {
             exitOrderId: pos.entryOrderId, exitOrderStatus: "filled",
             exitQuantity: pos.entryQuantity, exitFillPrice: brokerStop.price,
             exitReason: "Stop-loss filled on Tradier", exitReasonTag: "stop_hit",
             underlyingPriceAtClose: underlyingPx,
           });
         } catch (e) { console.error("autoexit journal write failed:", e); }
-        results.push({ symbol: pos.symbol, closed: true, tag: "stop_hit", detail: `Stop filled at $${brokerStop.price}`, exitPrice: brokerStop.price });
+        results.push({ symbol: pos.symbol, closed: true, tag: "stop_hit", detail: `Stop filled at $${brokerStop.price}`, exitPrice: brokerStop.price, pnl: booked?.pnl ?? null, instrument: pos.occ ?? pos.symbol, quantity: heldQuantity(pos) });
         continue;
       }
 
@@ -294,13 +296,13 @@ async function run(req) {
         if (settle) {
           if (dryRun) { results.push({ symbol: pos.symbol, wouldClose: true, tag: "expired", detail: `Expired ${settle.settlePrice > 0 ? "in the money" : "worthless"} — underlying closed $${settle.underlyingClose} on ${pos.expiration}` }); continue; }
           try {
-            journalClose(pos, {
+            booked = journalClose(pos, {
               exitOrderId: null, exitOrderStatus: null, exitQuantity: pos.entryQuantity, exitFillPrice: settle.settlePrice,
               exitReason: `Expired ${settle.settlePrice > 0 ? `in the money (intrinsic $${settle.settlePrice.toFixed(2)})` : "worthless"} — underlying closed $${settle.underlyingClose} on ${pos.expiration}`,
               exitReasonTag: "expired", underlyingPriceAtClose: settle.underlyingClose,
             });
           } catch (e) { console.error("autoexit expiration reconcile failed:", e); }
-          results.push({ symbol: pos.symbol, closed: true, tag: "expired", detail: `Settled at $${settle.settlePrice.toFixed(2)} intrinsic`, exitPrice: settle.settlePrice });
+          results.push({ symbol: pos.symbol, closed: true, tag: "expired", detail: `Settled at $${settle.settlePrice.toFixed(2)} intrinsic`, exitPrice: settle.settlePrice, pnl: booked?.pnl ?? null, instrument: pos.occ ?? pos.symbol, quantity: heldQuantity(pos) });
           continue;
         }
         // No historical close found either — fall through to the orphaned
@@ -399,7 +401,7 @@ async function run(req) {
           // No position behind the row — the entry never filled. Reconcile it
           // shut with no invented price rather than retrying a rest forever.
           try {
-            journalClose(pos, {
+            booked = journalClose(pos, {
               exitOrderId: null, exitOrderStatus: null, exitQuantity: pos.entryQuantity, exitFillPrice: null,
               exitReason: "Flagged for a breakeven exit, but the broker holds no such position — the entry never filled. Reconciled closed with no P&L.",
               exitReasonTag: "orphaned", underlyingPriceAtClose: underlyingPx,
@@ -491,7 +493,7 @@ async function run(req) {
         }
         if (/does not match an open position|No open .* position found/i.test(closeResult.error || "")) {
           try {
-            journalClose(pos, {
+            booked = journalClose(pos, {
               exitOrderId: null, exitOrderStatus: null, exitQuantity: pos.entryQuantity, exitFillPrice: null,
               exitReason: "No matching real position found on Tradier — orphaned journal row (pre-dates the duplicate-stacking fix), reconciled closed with no P&L computed.",
               exitReasonTag: "orphaned", underlyingPriceAtClose: underlyingPx,
@@ -512,14 +514,14 @@ async function run(req) {
 
       if (outcome?.filled) {
         try {
-          journalClose(pos, {
+          booked = journalClose(pos, {
             exitOrderId, exitOrderStatus: "filled",
             exitQuantity: outcome.quantity || pos.entryQuantity, exitFillPrice: outcome.price,
             exitReason: exit.detail, exitReasonTag: exit.tag,
             underlyingPriceAtClose: underlyingPx,
           });
         } catch (e) { console.error("autoexit journal write failed:", e); }
-        results.push({ symbol: pos.symbol, closed: true, ...exit, exitPrice: outcome.price, order: closeResult.orderResult });
+        results.push({ symbol: pos.symbol, closed: true, ...exit, exitPrice: outcome.price, order: closeResult.orderResult, pnl: booked?.pnl ?? null, instrument: pos.occ ?? pos.symbol, quantity: outcome.quantity || heldQuantity(pos) });
         continue;
       }
 
@@ -557,6 +559,7 @@ export function GET(req) {
       try {
         const d = await res.clone().json();
         markActivity("exits", { ok: !d.error, error: d.error ?? null, checked: d.checked ?? 0, closed: d.closed ?? 0 });
+        for (const r of d.results || []) if (r.closed && r.pnl != null) notifySold({ symbol: r.symbol, instrument: r.instrument, quantity: r.quantity, price: r.exitPrice, pnl: r.pnl, tag: r.tag }).catch(() => {});
       } catch {}
     }
     return res;

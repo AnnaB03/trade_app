@@ -22,6 +22,20 @@ if [ -z "${ACCOUNT_SIZE:-}" ] && [ -f "$HERE/../.env.local" ]; then
   ACCOUNT_SIZE=$(grep -E '^ACCOUNT_SIZE=' "$HERE/../.env.local" | head -1 | cut -d= -f2- | tr -d '"'"'"' ')
 fi
 ACCOUNT_SIZE="${ACCOUNT_SIZE:-10000}"
+# Push notifications (app/api/notifyLib.js): the app sends fills, exits and
+# halts itself; this script only says when the app CANNOT — server down,
+# clock unreadable, health failing — which is the one case the app can't
+# report. At most once per 30 minutes, so a dead afternoon is one message.
+if [ -z "${NTFY_TOPIC:-}" ] && [ -f "$HERE/../.env.local" ]; then
+  NTFY_TOPIC=$(grep -E '^NTFY_TOPIC=' "$HERE/../.env.local" | head -1 | cut -d= -f2- | tr -d '"'"'"' ')
+fi
+NTFY_URL="${NTFY_URL:-https://ntfy.sh}"
+alert() { # alert <text>
+  [ -n "${NTFY_TOPIC:-}" ] || return 0
+  local mark="${COCKPIT_ALERT_MARK:-/tmp/cockpit-alert-sent}"
+  if [ -f "$mark" ] && [ $(( $(date +%s) - $(stat -f %m "$mark" 2>/dev/null || stat -c %Y "$mark") )) -lt 1800 ]; then return 0; fi
+  curl -s --max-time 8 -H "Title: Cockpit autopilot is dark" -H "Priority: high" -H "Tags: warning" -d "$1" "$NTFY_URL/$NTFY_TOPIC" >/dev/null 2>&1 && touch "$mark"
+}
 LOG="${COCKPIT_LOG:-$HOME/Library/Logs/cockpit-autopilot.log}"
 mkdir -p "$(dirname "$LOG")"
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
@@ -50,6 +64,7 @@ case "$state" in
     # Not a market state we recognise: this is the "quiet because broken" case.
     # Say so every time rather than exiting like a closed market would.
     log "CLOCK UNREADABLE state=$state — not trading; is the dev server up?"
+    alert "Clock unreadable (state=$state). Not trading; open positions are NOT being watched. Is the dev server up?"
     exit 1 ;;
 esac
 
@@ -64,6 +79,7 @@ if [ "$hc" != "200" ]; then
 fi
 if [ "$hc" != "200" ]; then
   log "UNHEALTHY http=$hc $(head -c 400 /tmp/cockpit-health.json 2>/dev/null)"
+  alert "Health check failed (http=$hc). Exits are not running until it passes. $(head -c 200 /tmp/cockpit-health.json 2>/dev/null)"
   exit 1
 fi
 

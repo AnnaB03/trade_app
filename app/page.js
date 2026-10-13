@@ -1310,7 +1310,7 @@ export default function Page() {
             {halt?.halted && (
               <button className="badge" onClick={() => setTab("journal")}
                 style={{ cursor: "pointer", color: "#F7F5EF", background: "var(--bear)", borderColor: "var(--bear)", fontWeight: 600 }}
-                title={(halt.kind === "daily_loss" ? "Daily loss limit reached — " : "Stopped by hand — ") + "no new trades; open positions are still managed. Open the Journal tab to see or change it."}>
+                title={(halt.kind === "manual" ? "Stopped by hand" : `Stopped by a daily rule (${String(halt.kind).replace(/_/g, " ")})`) + " — no new trades; open positions are still managed. Open the Journal tab to see or change it."}>
                 ● NEW TRADES: STOPPED
               </button>
             )}

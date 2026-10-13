@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { markActivity } from "../activityLib";
 import { CORE_SYMBOLS } from "../watchCore";
+import { accountSize } from "../accountLib";
+import { fetchTapes, tapeText } from "../tapeLib";
 import { listExtras } from "../watchExtrasLib";
 import { Anthropic } from "@anthropic-ai/sdk";
 import { z } from "zod";
@@ -171,7 +173,7 @@ export async function GET(req) {
   const params = new URL(req.url).searchParams;
   const symbols = params.get("symbols");
   if (!symbols) return NextResponse.json({ error: "symbols required" }, { status: 400 });
-  // Account size: query param (the UI's setting) -> ACCOUNT_SIZE env -> $1,000.
+  // Account size: query param (the UI's setting), capped by the shared account size (accountLib.js).
   // Everything downstream — which names get scanned, which vehicle fits, how
   // many shares/contracts — is sized off this. See sizingLib.js.
   /* The configured ACCOUNT_SIZE is a CEILING on what a caller may ask for. The
@@ -183,8 +185,8 @@ export async function GET(req) {
      154.7% of the real account). The exposure gate caught that one; an idea
      sized smaller would not have been. A caller may still ask for LESS. */
   const askedAccount = Number(params.get("account")) > 0 ? Number(params.get("account")) : 0;
-  const envAccount = Number(process.env.ACCOUNT_SIZE) > 0 ? Number(process.env.ACCOUNT_SIZE) : 0;
-  const account = envAccount > 0 ? (askedAccount > 0 ? Math.min(askedAccount, envAccount) : envAccount) : (askedAccount || 1000);
+  const envAccount = accountSize();
+  const account = askedAccount > 0 ? Math.min(askedAccount, envAccount) : envAccount;
   const limits = accountLimits(account);
   if (!process.env.ANTHROPIC_API_KEY) {
     return NextResponse.json(
@@ -350,6 +352,12 @@ export async function GET(req) {
     // not per symbol; every idea is judged against the same tape.
     const regime = await marketRegime();
     const regimeTxt = regimeText(regime);
+    // The intraday tape (tapeLib.js): SPY and every analysed symbol against
+    // VWAP, the opening range and the share of a normal day's range already
+    // used. Only while the session is open; fetched in parallel, 4s each,
+    // cached a minute, and a miss is one line saying so.
+    const tapes = clock.state === "open" ? await fetchTapes(syms, { lastBySym }) : null;
+    const tapeTxt = tapes ? tapeText(tapes.SPY, Object.fromEntries(syms.map((s) => [s, tapes[s]]))) : "";
 
     // Track record so far, fed back into the prompt so the model can see
     // where its own past calls have actually worked. Needs no extra fetch —
@@ -528,7 +536,10 @@ ${affordableSyms.length ? `SMALL-ACCOUNT CANDIDATES: ${affordableSyms.join(", ")
 
 MARKET REGIME (judge every idea against this — do not fight the tape without a specific reason called out in why_pro):
 ${regimeTxt}
-
+${tapeTxt ? `
+INTRADAY TAPE (5-minute bars, this session — the context for any same-day idea. A continuation is judged against how much of a normal day's range is already used: past ~120% it is buying the end of the move, not the middle. A fade is judged against VWAP and the opening range: stretched far from VWAP and stalling is a fade; sitting at VWAP is nothing. SPY's side of its own VWAP is the tape's side):
+${tapeTxt}
+` : ""}
 YOUR OWN TRACK RECORD (use this to calibrate confidence — if a catalyst type or symbol has been a loser for you, say so and size conviction down; if data is thin, say so honestly):
 ${calibTxt}
 

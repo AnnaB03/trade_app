@@ -136,6 +136,12 @@ function AutomationStatus({ activity }) {
 // Announces every change on window as "cockpit:halt" so the header badge
 // (page.js) follows without waiting for its own poll.
 export const HALT_EVENT = "cockpit:halt";
+const HALT_TITLES = {
+  daily_loss: "Daily loss limit reached",
+  loss_streak: "Losing streak",
+  profit_lock: "Daily goal banked",
+  day_giveback: "Giving back the day",
+};
 
 function TradingSwitch({ halt, onChange }) {
   const [asking, setAsking] = useState(false);
@@ -172,9 +178,9 @@ function TradingSwitch({ halt, onChange }) {
         <div className="danger" style={{ marginBottom: 10 }}>
           <b>New trades are stopped</b>{since ? <span style={{ fontWeight: 400 }}> · since {since}</span> : null}
           <div className="d2">
-            {halt.kind === "daily_loss"
-              ? <>Daily loss limit reached: down {usd0(loss)} realized today against the {usd0(limit)} limit ({halt.limitPct}% of the account). New trades resume automatically at the next session.</>
-              : <>Stopped by hand{halt.reason && halt.reason !== "halted by hand" ? <> — “{halt.reason}”</> : null}. Stays stopped until you resume it.</>}
+            {halt.kind === "manual"
+              ? <>Stopped by hand{halt.reason && halt.reason !== "halted by hand" ? <> — “{halt.reason}”</> : null}. Stays stopped until you resume it.</>
+              : <>{HALT_TITLES[halt.kind] || "Stopped by a daily rule"}: {halt.reason}</>}
             {" "}Open positions are still managed — stops, targets and the trail keep running.
           </div>
           {halt.kind === "manual" && (
@@ -199,6 +205,15 @@ function TradingSwitch({ halt, onChange }) {
         )}
       </div>
 
+      {halt.day && halt.limits && (
+        <div className="mono muted" style={{ fontSize: 11.5, marginTop: 6, lineHeight: 1.6 }}>
+          Day plan · goal {usd0(halt.limits.goalUsd)} · take the day at {usd0(halt.limits.profitLockUsd)} · {halt.limits.maxStreak} losses in a row stops · give back {halt.limits.givebackPct}% of the day's peak stops
+          {" · "}today: {halt.day.closes} closed ({halt.day.wins} won, {halt.day.losses} lost)
+          {halt.day.peak > 0 ? <>, peaked at <b>{usd0(halt.day.peak)}</b></> : null}
+          {halt.day.streak > 0 ? <>, <b style={{ color: "var(--bear)" }}>{halt.day.streak} loss{halt.day.streak === 1 ? "" : "es"} in a row</b></> : null}
+        </div>
+      )}
+
       {!halt.halted && asking && (
         <form style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}
           onSubmit={(e) => { e.preventDefault(); send({ halted: true, reason }); }}>
@@ -210,6 +225,81 @@ function TradingSwitch({ halt, onChange }) {
         </form>
       )}
       {err && <div className="err" style={{ marginTop: 10, marginBottom: 0 }}>{err}</div>}
+    </div>
+  );
+}
+
+// What the realized record says about each way of trading — see
+// app/api/edgeLib.js. The number that matters is expectancy in R: the
+// average trade, in units of the most one trade may lose. Groups under the
+// minimum sample show their count and no verdict.
+function EdgePanel() {
+  const [edge, setEdge] = useState(null);
+  const [err, setErr] = useState("");
+  const [open, setOpen] = useState(false);
+  const load = useCallback(async () => {
+    try { setEdge(await getJSON("/api/edge")); setErr(""); } catch (e) { setErr(e.message); }
+  }, []);
+  useEffect(() => { load(); const t = setInterval(load, REFRESH_MS * 4); return () => clearInterval(t); }, [load]);
+
+  const o = edge?.overall;
+  const r = (v) => (v == null ? "—" : (v >= 0 ? "+" : "") + v.toFixed(2) + "R");
+  const pf = (v) => (v == null ? "—" : v === Infinity || v === null ? "∞" : v.toFixed(2));
+  const tone = (v) => ({ color: v == null || v === 0 ? "inherit" : v > 0 ? "var(--bull)" : "var(--bear)" });
+  const Table = ({ title, rows, keyLabel }) => rows?.length ? (
+    <div style={{ marginTop: 12 }}>
+      <span className="label">{title}</span>
+      <table>
+        <thead><tr><th style={{ textAlign: "left" }}>{keyLabel}</th><th>n</th><th>win</th><th>avg win</th><th>avg loss</th><th>PF</th><th>expectancy</th><th>net</th></tr></thead>
+        <tbody>
+          {rows.map((g) => (
+            <tr key={g.key} style={{ opacity: g.enough ? 1 : 0.55 }}>
+              <td style={{ textAlign: "left" }}>{g.key}{!g.enough ? <span className="muted"> (too few)</span> : null}</td>
+              <td>{g.n}</td><td>{pctFmt(g.winRate)}</td><td>{usd0(g.avgWin)}</td><td>{usd0(g.avgLoss)}</td><td>{pf(g.profitFactor)}</td>
+              <td style={tone(g.expectancyR)}>{r(g.expectancyR)}</td><td style={tone(g.netUsd)}>{usd0(g.netUsd)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  ) : null;
+
+  return (
+    <div className="card">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
+        <span className="label" style={{ margin: 0 }}>Edge · what the closed trades actually paid{edge?.since ? ` · since ${new Date(edge.since).toLocaleDateString()}` : ""}</span>
+        <button className="chip" onClick={() => setOpen((v) => !v)}>{open ? "Less" : "By playbook, hour, exit…"}</button>
+      </div>
+      {err && <div className="err">{err}</div>}
+      {o && o.n === 0 && <div className="muted" style={{ fontSize: 13 }}>No closed trades yet since the fresh start.</div>}
+      {o && o.n > 0 && (
+        <>
+          <div className="metrics" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))" }}>
+            <div className="metric"><div className="k">Closed trades</div><div className="v">{o.n}</div></div>
+            <div className="metric"><div className="k">Expectancy</div><div className="v" style={tone(o.expectancyR)}>{r(o.expectancyR)}</div></div>
+            <div className="metric"><div className="k">Profit factor</div><div className="v" style={tone(o.profitFactor == null ? null : o.profitFactor - 1)}>{pf(o.profitFactor)}</div></div>
+            <div className="metric"><div className="k">Win rate</div><div className="v">{pctFmt(o.winRate)}</div></div>
+            <div className="metric"><div className="k">Avg win / loss</div><div className="v" style={{ fontSize: 16 }}>{usd0(o.avgWin)} / {usd0(o.avgLoss)}</div></div>
+            <div className="metric"><div className="k">Max drawdown</div><div className="v" style={{ color: "var(--bear)" }}>{usd0(-o.maxDrawdownUsd)}</div></div>
+          </div>
+          <div className="mono muted" style={{ fontSize: 11.5, marginTop: 8 }}>
+            1R = {usd0(edge.rUsd)}, the most one trade may lose. Last {edge.lastN}: {r(edge.recent?.expectancyR)} per trade, PF {pf(edge.recent?.profitFactor)}.
+            {" "}Edge gate {edge.edgeGate ? "on" : "off"}:
+            {" "}{Object.entries(edge.verdicts || {}).filter(([k]) => k !== "manual").map(([k, v]) => (
+              <span key={k} style={{ marginLeft: 8, color: v.ok ? "inherit" : "var(--bear)" }}><b>{k}</b> {v.ok ? "trading" : "STOPPED"} ({v.reason})</span>
+            ))}
+          </div>
+          {open && (
+            <>
+              <Table title="By playbook" keyLabel="playbook" rows={edge.byPlaybook} />
+              <Table title="By entry hour (ET)" keyLabel="hour" rows={edge.byHour} />
+              <Table title="By exit reason" keyLabel="exit" rows={edge.byExitTag} />
+              <Table title="By symbol" keyLabel="symbol" rows={edge.bySymbol?.slice(0, 12)} />
+              <Table title="By catalyst" keyLabel="catalyst" rows={edge.byCatalyst?.slice(0, 12)} />
+            </>
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -487,6 +577,7 @@ export default function Journal() {
   return (
     <>
       <AccountSummary />
+      <EdgePanel />
       <PositionsPanel />
       <AutoJournalPanel />
 

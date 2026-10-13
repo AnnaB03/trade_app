@@ -10,6 +10,10 @@ import { OPTION_HARD_PCT } from "../../sizingLib";
 import { markActivity } from "../../activityLib";
 import { recordShadowEntry } from "../../shadowLib";
 import { tradingHalt } from "../../riskLib";
+import { accountSize } from "../../accountLib";
+import { closedTrades, playbookVerdicts } from "../../edgeLib";
+import { fetchTape, ATR_USED_MAX_PCT } from "../../tapeLib";
+import { notifyBought } from "../../notifyLib";
 import { buildOptionStopEstimate } from "../../../lib/orders";
 
 /* Paper-only autopilot: scans the most recent Ideas refresh, places the
@@ -116,7 +120,7 @@ const MAX_SYMBOL_EXPOSURE_PCT = 20;
    sandbox artifact (a real broker cancels the stop and sells), and counting
    ~$2,400 of stuck cost basis would silently shrink a $10K test to $7.6K. */
 const MAX_TOTAL_EXPOSURE_PCT = Number(process.env.MAX_TOTAL_EXPOSURE_PCT) > 0 ? Number(process.env.MAX_TOTAL_EXPOSURE_PCT) : 100;
-const ACCOUNT_SIZE = Number(process.env.ACCOUNT_SIZE) > 0 ? Number(process.env.ACCOUNT_SIZE) : 1000;
+const ACCOUNT_SIZE = accountSize();
 const DIRECTION_SIGN = { CALL: 1, BUY: 1, PUT: -1, SELL: -1 };
 /* The same-day playbook records its trades and does not place them, until it
    has shown what it would have done. Set INTRADAY_LIVE=true in .env.local (and
@@ -428,6 +432,7 @@ async function placeOption(idea, { dryRun, openOccs }) {
   }
   return {
     placed: true, order: orderResult, stopAttached: vet.computed.stop_attached, stopPrice: vet.computed.stop_price,
+    fill: { instrument: usedOcc, quantity: contractQty, price: Number(vet.computed.price) },
     ...(substituted ? { substitutedStrike: usedStrike, originalStrike: leg.strike, note: `Sandbox wouldn't accept the exact $${leg.strike} strike — filled the nearest orderable one instead.` } : {}),
   };
 }
@@ -468,7 +473,7 @@ async function placeShares(idea, { dryRun }) {
   } catch (e) {
     console.error("Autotrade journal write failed (order was still placed):", e);
   }
-  return { placed: true, order: orderResult, stopAttached: vet.computed.stop_attached, stopPrice: vet.computed.stop_price };
+  return { placed: true, order: orderResult, stopAttached: vet.computed.stop_attached, stopPrice: vet.computed.stop_price, fill: { instrument: idea.symbol, quantity: vet.computed.quantity, price: vet.computed.price } };
 }
 
 async function run(req) {
@@ -500,6 +505,14 @@ async function run(req) {
         results: batch.map((i) => ({ symbol: i.symbol, action: i.action, vehicle: i.vehicle, risk: i.risk, ideaId: i.id, placed: false, reason: `Trading halted (${halt.kind}) — ${halt.reason}` })),
       });
     }
+    /* Edge gate (edgeLib.js): a playbook whose last 20 closed trades lost
+       money does not open new ones. Judged on the recent record, so a
+       playbook that stops working stops trading, and only once it has 20
+       closed trades to be judged on. EDGE_GATE=false turns it off. */
+    const edgeBaseline = readBaseline();
+    const verdicts = process.env.EDGE_GATE !== "false"
+      ? playbookVerdicts(closedTrades(listJournal().filter((r) => !isLegacy(r, edgeBaseline))), { rUsd: ACCOUNT_SIZE * 0.01 })
+      : null;
     const openJournal = listJournal().filter((r) => r.status === "open");
     const openOccs = new Set(openJournal.filter((r) => r.occ).map((r) => r.occ));
 
@@ -529,6 +542,10 @@ async function run(req) {
       const tag = { symbol: rawIdea.symbol, action: rawIdea.action, vehicle: rawIdea.vehicle, risk: rawIdea.risk, ideaId: rawIdea.id };
       if (!["CALL", "PUT", "BUY", "SELL"].includes(rawIdea.action)) { results.push({ ...tag, placed: false, reason: "WAIT — nothing to trade." }); continue; }
       if (Number(rawIdea.conviction) < minConviction) { results.push({ ...tag, placed: false, reason: `Conviction ${rawIdea.conviction} below the ${minConviction} bar.` }); continue; }
+      if (verdicts) {
+        const pb = rawIdea.strategy === "intraday" ? "intraday" : "swing";
+        if (verdicts[pb] && !verdicts[pb].ok) { results.push({ ...tag, placed: false, reason: `Edge gate — the ${pb} playbook has ${verdicts[pb].reason}. Fix the playbook, or set EDGE_GATE=false to trade it anyway.` }); continue; }
+      }
       let idea = rawIdea;
       const now = Date.now();
       const hasTrigger = idea.triggerPrice != null && idea.triggerDirection;
@@ -727,6 +744,19 @@ async function run(req) {
         }
       }
 
+      /* Tape gate for same-day continuation ideas (tapeLib.js): a name that
+         has already used ATR_USED_MAX_PCT of a normal day's range is not
+         continuing, it is finishing. Fades are the model's call, made with
+         the same read in its prompt; only the continuation side is refused
+         here, on live bars, at the moment of entry. */
+      if (idea.strategy === "intraday" && /continuation/i.test(String(idea.catalyst || ""))) {
+        const t = await fetchTape(idea.symbol, { last: idea.entryPrice });
+        if (t?.rangeUsedPct != null && t.rangeUsedPct >= ATR_USED_MAX_PCT) {
+          results.push({ ...tag, placed: false, reason: `Tape gate — ${idea.symbol} has already used ${t.rangeUsedPct.toFixed(0)}% of its normal daily range ($${t.dayLow}-$${t.dayHigh} against a $${t.atr14.toFixed(2)} ATR); a continuation here buys the end of the move.` });
+          continue;
+        }
+      }
+
       /* A contract that must be flat by the close needs time to work. MU 10/9
          $1090c was bought at 15:33 on 2026-10-07 with a forced sale due at 15:45:
          twelve minutes in which it could only pay the spread and two fees. */
@@ -873,6 +903,7 @@ async function run(req) {
       else if (idea.vehicle === "SHARES") r = await placeShares(idea, { dryRun });
       else r = { placed: false, reason: `Unhandled vehicle: ${idea.vehicle}` };
       if (r?.placed && !dryRun) deployedThisRun += Number(idea.__addingCost) || 0;
+      if (r?.placed && !dryRun && r.fill) notifyBought({ symbol: idea.symbol, ...r.fill, playbook: idea.strategy === "intraday" ? "intraday" : "swing" }).catch(() => {});
       results.push({ ...tag, ...r });
     }
 
