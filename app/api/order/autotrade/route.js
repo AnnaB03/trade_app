@@ -9,6 +9,7 @@ import { isLegacy, readBaseline } from "../../ledgerLib";
 import { journalOpen } from "../../journalLib";
 import { OPTION_HARD_PCT } from "../../sizingLib";
 import { HARD_LOSS_PCT } from "../exitRules";
+import { optionStopPct, profileFor } from "../../swingLib";
 import { extremeRead, fadePlan, fadeEnabled, EXTREME_PCT, FADE_SIDES } from "../../fadeLib";
 import { appendIdea } from "../../store";
 import { selectionVerdict } from "../../selectionLib";
@@ -478,6 +479,7 @@ async function placeOption(idea, { dryRun, openOccs }) {
       occ: usedOcc, strike: usedStrike, optionType: idea.action === "CALL" ? "call" : "put",
       expiration: idea.expiration, side: "buy", quantity: contractQty, limitPrice: Number(vet.computed.price), order: orderResult,
       closeByEod: Boolean(idea.flatByClose),
+      stopPct: idea.stopPct ?? null,
     });
   } catch (e) {
     console.error("Autotrade journal write failed (order was still placed):", e);
@@ -1035,8 +1037,14 @@ async function run(req) {
            the option stop was built for is unchanged; only the size is. */
         const premium = Number(payPrice(idea.leg)) || 0;
         const ideaStopRisk = (delta * stopDist + spread) * 100;
-        const optionStopRisk = premium > 0 && HARD_LOSS_PCT.OPTION ? (premium * (HARD_LOSS_PCT.OPTION / 100) + spread) * 100 : Infinity;
+        /* The option stop for THIS contract, from its stock's own history
+           (swingLib.js): wide for a name that swings, tight for one that does
+           not. No profile yet -> the flat HARD_LOSS_PCT. */
+        const optType = idea.action === "PUT" ? "put" : "call";
+        const stopPct = optionStopPct({ optionType: optType, profile: profileFor(idea.symbol), price: idea.entryPrice, delta, premium }) ?? HARD_LOSS_PCT.OPTION;
+        const optionStopRisk = premium > 0 && stopPct ? (premium * (stopPct / 100) + spread) * 100 : Infinity;
         const riskPer = Math.min(ideaStopRisk, optionStopRisk);
+        idea.stopPct = stopPct;
         const budget = (ACCOUNT_SIZE * INTRADAY_RISK_PCT) / 100;
         if (!(riskPer > 0)) { results.push({ ...tag, placed: false, reason: "Cannot size this trade: no usable stop distance." }); continue; }
         let n = Math.floor(budget / riskPer);
@@ -1073,7 +1081,7 @@ async function run(req) {
           continue;
         }
         idea.sizing = { ...(idea.sizing || {}), contracts: n, riskAtStop: Number((riskPer * n).toFixed(0)) };
-        tag.sizedByRisk = `${n} contract${n === 1 ? "" : "s"}, about $${(riskPer * n).toFixed(0)} at risk to the stop`;
+        tag.sizedByRisk = `${n} contract${n === 1 ? "" : "s"}, about $${(riskPer * n).toFixed(0)} at risk to the stop (option stop ${stopPct}%)`;
       }
 
       /* Re-check the position cap at the price actually being paid. Sizing

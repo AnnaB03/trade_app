@@ -51,6 +51,8 @@ for mm in 0 5 10 15 20 25 30 35 40 45 50 55; do eod_slots="$eod_slots $((15 * 60
 # check is not waiting behind it. A refresh up to 20 minutes late still beats
 # none: the next one is half an hour away.
 if due refresh 20 $refresh_slots; then nohup "$RUN" refresh >/dev/null 2>&1 & fi
+# The stop profiles, once a day before the open (9:20-9:29).
+if due swing 9 $((9 * 60 + 20)); then nohup "$RUN" swing >/dev/null 2>&1 & fi
 
 [ "$now" -ge $((9 * 60 + 30)) ] || exit 0
 if due eod 3 $eod_slots; then "$RUN" eod; else "$RUN" exits; fi

@@ -56,7 +56,8 @@ case "$state" in
   premarket)
     # The 9:21 refresh runs BEFORE the open on purpose, so the first entry
     # check has ideas. It used to be skipped here along with everything else.
-    [ "${1:-}" = "refresh" ] || exit 0 ;;
+    # The stop profiles (swing) are built pre-open too, from past sessions.
+    case "${1:-}" in refresh|swing) ;; *) exit 0 ;; esac ;;
   closed|postmarket)
     [ "${1:-}" = "refresh" ] && log "skip refresh — market $state"
     exit 0 ;;
@@ -104,6 +105,10 @@ case "${1:-exits}" in
     run autoexit-eod "$BASE/api/order/autoexit?eod=true" ;;
   entries)
     run autotrade "$BASE/api/order/autotrade" ;;
+  swing)
+    # Once a day before the open: each stock's adverse-move profile from 15
+    # sessions of 1-minute bars, which sets every option stop (swingLib.js).
+    run swing "$BASE/api/swing?refresh=true" ;;
   entries-fade)
     # The fade playbook: it derives its own ideas from the ordinary ones (no
     # model call) and has to look every minute, because a failed breakout

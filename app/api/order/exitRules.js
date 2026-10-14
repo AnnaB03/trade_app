@@ -217,6 +217,7 @@ export function gainFigures({ vehicle, dir, markNow, entryPremium, peakMark, qty
 export function decideProfitExit(cfg, {
   vehicle, closeByEod = false, eod = false, nowEtMinutes = etMinutes(),
   gainPct, gainUsd, peakGainPct, peakGainUsd, peakMark, entryPremium, markNow,
+  stopPct = null,
 }) {
   const armBar = TRAIL_ARM_PCT[vehicle] ?? TRAIL_ARM_PCT.OPTION;
   const hardBar = HARD_TAKE_PROFIT_PCT[vehicle] ?? HARD_TAKE_PROFIT_PCT.OPTION;
@@ -232,9 +233,10 @@ export function decideProfitExit(cfg, {
   if (gainUsd != null && gainUsd <= -cfg.maxLossUsd) {
     exit = { tag: "max_loss", detail: `Down $${Math.abs(gainUsd).toFixed(0)} at the bid — at the $${cfg.maxLossUsd.toFixed(0)} most one trade may lose (${MAX_LOSS_PCT}% of the account)` };
   }
-  const lossBar = HARD_LOSS_PCT[vehicle] ?? null;
+  // The position's own stop (set at entry from its stock's history), else the flat one.
+  const lossBar = vehicle === "OPTION" && Number(stopPct) > 0 ? Number(stopPct) : (HARD_LOSS_PCT[vehicle] ?? null);
   if (!exit && lossBar != null && gainPct != null && gainPct <= -lossBar) {
-    exit = { tag: "premium_stop", detail: `Down ${Math.abs(gainPct).toFixed(1)}% at the bid ($${entryPremium} to $${markNow}${gainUsd != null ? `, $${Math.abs(gainUsd).toFixed(0)}` : ""}) — past the ${lossBar}% stop on the option itself, cutting it at the size of a typical win` };
+    exit = { tag: "premium_stop", detail: `Down ${Math.abs(gainPct).toFixed(1)}% at the bid ($${entryPremium} to $${markNow}${gainUsd != null ? `, $${Math.abs(gainUsd).toFixed(0)}` : ""}) — past this contract's ${lossBar}% stop` };
   }
   /* A closeByEod position is a short-dated contract that decays ~25% of its
      price a day. The end-of-day dollar bar only ever banks GAINS, so a loser

@@ -420,6 +420,7 @@ async function run(req) {
       const profitExit = decideProfitExit(CFG, {
         vehicle: pos.vehicle, closeByEod: pos.closeByEod, eod,
         gainPct, gainUsd, peakGainPct, peakGainUsd, peakMark, entryPremium, markNow,
+        stopPct: pos.stopPct ?? null,
       });
       if (profitExit && (!exit || profitExit.tag === "take_profit")) exit = profitExit;
 
