@@ -134,7 +134,13 @@ const INTRADAY_WATCH_ONLY = process.env.INTRADAY_LIVE !== "true";
 // outright when one contract is too much, and flat by the close.
 const SAME_DAY = new Set(["intraday", "contrarian", "fade_scan"]);
 // Playbooks that record what they would have bought and place nothing (shadowLib.js).
-const watchOnly = (strategy) => strategy === "fade_scan" || (strategy === "intraday" && INTRADAY_WATCH_ONLY);
+/* The fade (contrarian) is watch-only unless FADE_LIVE=true. It traded live for
+   one day, 2026-10-13/14, and went 0 for 2 (-$324): NVDA stopped out in ten
+   minutes, GOOGL in eighteen seconds — the second because its order rested at
+   the mid for three minutes, missed the move it was right about (the put
+   traded 2.56 -> 2.93), and filled only as the stock turned back up. */
+const FADE_LIVE = process.env.FADE_LIVE === "true";
+const watchOnly = (strategy) => strategy === "fade_scan" || (strategy === "contrarian" && !FADE_LIVE) || (strategy === "intraday" && INTRADAY_WATCH_ONLY);
 const STRICT_TRIGGERS = process.env.LOOSE_TRIGGERS !== "true";
 const etNowMinutes = () => {
   const [h, m] = new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour12: false, hour: "2-digit", minute: "2-digit" }).split(":").map(Number);
@@ -580,8 +586,9 @@ async function deriveFades(now = Date.now()) {
       // Two reasons to take the other side: the entry is at the extreme of the
       // day's range, or the selection rules say this kind of idea loses.
       const sv = selectionVerdict({ action: base.action, regime: base.regimeTrend, etMinutes: etNowMinutes(), catalyst: base.catalyst });
-      const plan = fadePlan({ action: base.action, price: q.last, low: q.low, high: q.high })
-        || (sv.fade ? fadePlan({ action: base.action, price: q.last, low: q.low, high: q.high, force: true }) : null);
+      const em = etNowMinutes();
+      const plan = fadePlan({ action: base.action, price: q.last, low: q.low, high: q.high, etMinutes: em })
+        || (sv.fade ? fadePlan({ action: base.action, price: q.last, low: q.low, high: q.high, force: true, etMinutes: em }) : null);
       if (!plan) continue;
       plan.why = sv.fade ? `a ${base.action} in a ${base.regimeTrend} tape` : `a ${base.action} at ${plan.rangePos}% of the day's range`;
       const alt = await fadeContract(base.symbol, plan.optionType, q.last);
@@ -636,7 +643,7 @@ async function deriveScanFades(now = Date.now()) {
       const q = await dayQuote(base.symbol);
       if (!(q.last > 0) || !(q.high > q.low)) continue;
       if (((q.high - q.low) / q.last) * 100 < SCAN_MIN_RANGE_PCT) continue; // a dead range has no "top"
-      const plan = fadePlan({ action: "CALL", price: q.last, low: q.low, high: q.high, force: true });
+      const plan = fadePlan({ action: "CALL", price: q.last, low: q.low, high: q.high, force: true, etMinutes: etNowMinutes() });
       if (!plan || plan.rangePos < SCAN_RANGE_POS) continue;
       const alt = await fadeContract(base.symbol, "put", q.last);
       if (!alt) continue;

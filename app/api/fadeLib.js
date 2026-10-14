@@ -59,14 +59,24 @@ export const FADE_REWARD_MULT = 1.8;
    reason to fade is the regime (selectionLib.js) rather than the extreme. Away
    from the extreme the stop is further off, so the risk per contract is
    larger, and autotrade's risk sizing refuses the ones that are too far. */
-export function fadePlan({ action, price, low, high, beyondPct = 10, rewardMult = FADE_REWARD_MULT, force = false }) {
+/* The stop must sit outside one minute's noise. GOOGL on 2026-10-14 at 09:45:
+   the day's range was $3.48 after 15 minutes, so the buffer was $0.35 and the
+   whole stop $0.42 — on a stock whose 09:45 bar alone spanned $1.20. It was
+   hit 18 seconds after the fill. The buffer is now at least MIN_STOP_PCT of
+   the price, whatever the range says, and fades are not built in the first
+   half hour, when the range is still forming. */
+export const MIN_STOP_PCT = Number(process.env.FADE_MIN_STOP_PCT) > 0 ? Number(process.env.FADE_MIN_STOP_PCT) : 0.5;
+export const FADE_FROM_ET_MIN = 10 * 60;
+
+export function fadePlan({ action, price, low, high, beyondPct = 10, rewardMult = FADE_REWARD_MULT, force = false, etMinutes = null }) {
   const read = extremeRead({ action, price, low, high });
   if (read.pos == null) return null;
   if (!force && (!read.atExtreme || !fadeEnabled(read.side))) return null;
+  if (etMinutes != null && etMinutes < FADE_FROM_ET_MIN) return null;
   const span = Number(high) - Number(low);
   if (!(span > 0)) return null;
   const long = read.side === "long";
-  const buffer = span * (beyondPct / 100);
+  const buffer = Math.max(span * (beyondPct / 100), Number(price) * (MIN_STOP_PCT / 100));
   const invalidation = long ? Math.max(Number(high), Number(price)) + buffer : Math.min(Number(low), Number(price)) - buffer;
   const risk = Math.abs(invalidation - Number(price));
   if (!(risk > 0)) return null;

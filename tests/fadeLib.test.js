@@ -79,3 +79,19 @@ test("fadePlan with force: a regime fade away from the extreme, with a wider sto
   assert.equal(q.action, "CALL", "forced, the short side flips too");
   assert.equal(q.invalidation, 98);
 });
+
+
+test("the stop is never inside one minute's noise: a floor of 0.5% of the price", () => {
+  // GOOGL 2026-10-14 09:45: range 354.72-358.20 after 15 minutes, price 358.135.
+  const p = fade.fadePlan({ action: "CALL", price: 358.135, low: 354.72, high: 358.20, force: true });
+  assert.ok(p.invalidation >= 358.20 + 358.135 * 0.005 - 0.01, "at least 0.5% beyond the high (to the cent), not 10% of a 15-minute range");
+  assert.ok(p.riskUsd >= 1.79, `risk ${p.riskUsd} was 0.42 with the old buffer`);
+  assert.equal(fade.MIN_STOP_PCT, 0.5);
+});
+
+test("no fades in the first half hour, when the day's range is still forming", () => {
+  const args = { action: "CALL", price: 120, low: 100, high: 120 };
+  assert.equal(fade.fadePlan({ ...args, etMinutes: 9 * 60 + 45 }), null);
+  assert.ok(fade.fadePlan({ ...args, etMinutes: 10 * 60 }), "allowed from 10:00 ET");
+  assert.ok(fade.fadePlan(args), "no clock given, no time rule — the callers pass one");
+});
