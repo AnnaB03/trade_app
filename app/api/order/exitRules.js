@@ -224,13 +224,28 @@ export function gainFigures({ vehicle, dir, markNow, entryPremium, peakMark, qty
    before it — a position up 150%+ is banked as take_profit whatever else was
    true. Returns { tag, detail } or null.
    Inputs are figures, not a position, so a test can state them directly. */
+/* ---------- Profit exits for options: +50% or the idea's target (2026-10-14) ----------
+   The owner: "I think we need to remove all rules on selling for the profit,
+   unless the stock is +50%". Replayed on the 31 trades with option bars (20%
+   stop, same $ risk): today's rules -$621; only +50% -$1,435, because 7 of
+   31 ever got there and the rest gave their gains back to the stop; +50% or
+   the idea's own target -$676 overall and the best of the three on 10-14
+   (-$158 against -$442). The owner chose the last. So for an OPTION the
+   trailing stop, the quick +7% on same-day contracts and the end-of-day
+   profit sale are off. It is sold for profit at +PROFIT_TAKE_PCT, or by the
+   idea's target (decideLevelExit), or by hand. The loss side is unchanged.
+   PROFIT_EXITS=legacy restores the old profit rules. Shares are unchanged. */
+export const PROFIT_TAKE_PCT = 50;
+export const profitExitMode = (env = process.env) => (env.PROFIT_EXITS === "legacy" ? "legacy" : "target50");
+
 export function decideProfitExit(cfg, {
   vehicle, closeByEod = false, eod = false, nowEtMinutes = etMinutes(),
   gainPct, gainUsd, peakGainPct, peakGainUsd, peakMark, entryPremium, markNow,
-  stopPct = null,
+  stopPct = null, profitMode = profitExitMode(),
 }) {
+  const target50 = profitMode === "target50" && vehicle === "OPTION";
   const armBar = TRAIL_ARM_PCT[vehicle] ?? TRAIL_ARM_PCT.OPTION;
-  const hardBar = HARD_TAKE_PROFIT_PCT[vehicle] ?? HARD_TAKE_PROFIT_PCT.OPTION;
+  const hardBar = target50 ? PROFIT_TAKE_PCT : (HARD_TAKE_PROFIT_PCT[vehicle] ?? HARD_TAKE_PROFIT_PCT.OPTION);
   let exit = null;
 
   /* The most one trade may lose: 1% of the account. The user stated this as
@@ -260,22 +275,22 @@ export function decideProfitExit(cfg, {
      quarter of their price a day and move fast: MU 10/9 $1082.50c traded
      from $19.25 to $21.10 and back inside ten minutes on 2026-10-07 and was
      never sold. A gain here is taken when it is on the table. */
-  if (!exit && closeByEod && gainPct != null && gainPct >= SHORT_DATED_TARGET_PCT) {
+  if (!exit && !target50 && closeByEod && gainPct != null && gainPct >= SHORT_DATED_TARGET_PCT) {
     exit = { tag: "quick_target", detail: `Up ${gainPct.toFixed(1)}% ($${entryPremium} to $${markNow} at the bid) — at the ${SHORT_DATED_TARGET_PCT}% target for a short-dated contract, taking it` };
   }
-  if (!exit && eod && gainUsd != null && gainUsd >= cfg.eodTakeProfitUsd) {
+  if (!exit && !target50 && eod && gainUsd != null && gainUsd >= cfg.eodTakeProfitUsd) {
     exit = { tag: "eod_take_profit", detail: `Up $${gainUsd.toFixed(0)} into the close (${gainPct != null ? gainPct.toFixed(1) + "%" : "?"}) — past the $${cfg.eodTakeProfitUsd.toFixed(0)} late-session bar, banking it rather than carrying overnight gap risk` };
   }
   // Outright ceiling — big enough that it goes in the book now.
   if (gainPct != null && gainPct >= hardBar) {
-    exit = { tag: "take_profit", detail: `Up ${gainPct.toFixed(0)}% ($${entryPremium} to $${markNow}) — past the ${hardBar}% ceiling, banking it outright` };
+    exit = { tag: "take_profit", detail: `Up ${gainPct.toFixed(0)}% ($${entryPremium} to $${markNow}) — past the ${hardBar}% ${target50 ? "profit take" : "ceiling"}, banking it outright` };
   }
   /* Trailing take-profit: armed once the position has been up at least
      armBar at some point, then exits on a giveback of that peak gain.
      Compares against the PEAK, not the entry, so a winner that rolls over is
      banked near its high instead of round-tripping. A GIVEBACK rule rather
      than a profit target: a position still climbing never trips it. */
-  if (!exit && peakGainPct != null && peakGainPct >= armBar && gainPct != null) {
+  if (!exit && !target50 && peakGainPct != null && peakGainPct >= armBar && gainPct != null) {
     const givebackPct = peakGainUsd != null && peakGainUsd >= cfg.trailTightenUsd ? TRAIL_GIVEBACK_PCT_LARGE : TRAIL_GIVEBACK_PCT;
     const keepAtLeast = peakGainPct * (1 - givebackPct / 100);
     if (gainPct <= keepAtLeast) {

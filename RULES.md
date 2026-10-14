@@ -56,7 +56,7 @@ With learning mode off, the table below applies as written.
 | Watch-only (record, never trade) | the fade, the fade scan | `entryRules.isWatchOnly` | 2026-10-14 |
 | Same-day ideas | trade live (`INTRADAY_LIVE=false` to record only) | `entryRules.isWatchOnly` | 2026-10-14 |
 | Fades | not before 10:00; stop at least 0.5% of the price away | `fadeLib` | 2026-10-14 |
-| Take profits | trail arms at +5% (options), sells on a 25% giveback; 1–3 day contracts at +7%, flat from 15:45 | `exitRules` | 2026-10-07 |
+| Take profits (options) | **at +50%, or when the stock reaches the idea's target; nothing else sells for profit.** Same-day contracts still flat from 15:45. Replayed: −$676 against −$621 for the old rules and −$1,435 for +50% alone; the owner's choice. `PROFIT_EXITS=legacy` restores the trail (+5%, 25% giveback), the quick +7% and the end-of-day bar | `exitRules.PROFIT_TAKE_PCT` | 2026-10-14 |
 | Account | margin: proceeds reusable at once; 3 day trades per 5 days under $25K equity | `simBroker` | 2026-10-13 |
 | Broker rules | limit orders only, no shorting, no option writing, $0.35 a contract each way | `simBroker` | 2026-10-07 |
 | Idea model | Opus | `suggestions/route.js` | 2026-10-13 |

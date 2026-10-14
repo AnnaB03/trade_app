@@ -1,4 +1,8 @@
 import { test } from "node:test";
+// These cases pin the LEGACY profit rules (trail, quick +7%, end-of-day bar),
+// which run with PROFIT_EXITS=legacy. Since 2026-10-14 the default for options
+// is +50% or the idea's target: tests/rules.contract.test.js pins that.
+process.env.PROFIT_EXITS = "legacy";
 import assert from "node:assert/strict";
 import {
   exitConfig, updatePeak, gainFigures, decideProfitExit, decideLevelExit, decideReversalExit,

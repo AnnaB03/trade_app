@@ -230,7 +230,31 @@ test("RULE: fades never in the first half hour, and their stop is at least 0.5% 
 
 /* ---------- 6. Exits ---------- */
 
-test("RULE: take profits — trail arms at +5% (options) and sells on a 25% giveback; 1-3 day contracts sold at +7% and flat from 15:45", () => {
+/* 2026-10-14, the owner: "remove all rules on selling for the profit, unless
+   the stock is +50%"; of the three replayed versions they chose "+50% or the
+   idea's target". The replay is in exitRules.PROFIT_TAKE_PCT. */
+test("RULE: an option is sold for profit only at +50% or at the idea's target; same-day contracts still go flat from 15:45 — 2026-10-14", () => {
+  assert.equal(exits.PROFIT_TAKE_PCT, 50);
+  assert.equal(exits.profitExitMode({}), "target50");
+  assert.equal(exits.profitExitMode({ PROFIT_EXITS: "legacy" }), "legacy");
+  const cfg = exits.exitConfig(ACCOUNT);
+  const opt = { vehicle: "OPTION", entryPremium: 5, profitMode: "target50" };
+  // Peaked at +40%, back to +20%: the old trail would have sold it. Held.
+  assert.equal(exits.decideProfitExit(cfg, { ...opt, markNow: 6, gainPct: 20, gainUsd: 100, peakGainPct: 40, peakGainUsd: 200, peakMark: 7 }), null);
+  // A same-day contract up 10%: the old quick +7% would have sold it. Held.
+  assert.equal(exits.decideProfitExit(cfg, { ...opt, closeByEod: true, markNow: 5.5, gainPct: 10, gainUsd: 50, peakGainPct: 10, peakGainUsd: 50, peakMark: 5.5 }), null);
+  // Up $300 into the close on a multi-day contract: the old end-of-day bar would have sold it. Held.
+  assert.equal(exits.decideProfitExit(cfg, { ...opt, eod: true, nowEtMinutes: 15 * 60 + 50, markNow: 6.5, gainPct: 30, gainUsd: 300, peakGainPct: 30, peakGainUsd: 300, peakMark: 6.5 }), null);
+  // +50%: sold.
+  assert.equal(exits.decideProfitExit(cfg, { ...opt, markNow: 7.5, gainPct: 50, gainUsd: 250, peakGainPct: 50, peakGainUsd: 250, peakMark: 7.5 }).tag, "take_profit");
+  // The loss side is unchanged, and a same-day contract is still flat by the close.
+  assert.equal(exits.decideProfitExit(cfg, { ...opt, markNow: 3.95, gainPct: -21, gainUsd: -105, peakGainPct: 0, peakGainUsd: 0, peakMark: 5 }).tag, "premium_stop");
+  assert.equal(exits.decideProfitExit(cfg, { ...opt, closeByEod: true, eod: true, nowEtMinutes: 15 * 60 + 45, markNow: 5.5, gainPct: 10, gainUsd: 50, peakGainPct: 10, peakGainUsd: 50, peakMark: 5.5 }).tag, "eod_flat");
+  // The idea's target still sells.
+  assert.equal(exits.decideLevelExit({ dir: -1, target: 700, invalidation: 720, strategy: "intraday", underlyingPx: 699.5, favorableExtreme: 699 }).tag, "target");
+});
+
+test("RULE (legacy, PROFIT_EXITS=legacy): trail arms at +5% (options) and sells on a 25% giveback; 1-3 day contracts sold at +7% and flat from 15:45", () => {
   assert.deepEqual(exits.TRAIL_ARM_PCT, { OPTION: 5, SHARES: 15 });
   assert.equal(exits.TRAIL_GIVEBACK_PCT, 25);
   assert.equal(exits.SHORT_DATED_TARGET_PCT, 7);
