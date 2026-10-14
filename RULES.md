@@ -9,6 +9,34 @@ When one does, update the test in the same commit with the date and the reason.
 install with `cp scripts/pre-push.hook .git/hooks/pre-push`) refuses to push
 when any test fails.
 
+## Learning mode (2026-10-14)
+
+The owner, 2026-10-14: *"remove all the blockers that will block you from learning ... I
+need you to always buy->sell->learn ... always try and always learn from every single
+contract or trade."* On unless `LEARNING_MODE=false` (`entryRules.learningMode`).
+
+- **Soft rules record instead of refusing.** Each one is written on the trade as
+  `learningOverrides`, and `/api/edge` splits results by it (`byLearning`,
+  `byOverriddenRule`). The soft rules are: conviction, the edge throttle, selection,
+  staleness, the extreme stand-down, reward:risk, a consumed idea, the 4-a-day cap, the
+  cooldown, the tape gate, the 15:00 same-day cut-off, a same-day contract over budget
+  (taken at 1), the spread caps, watch-only (the fade and the fade scan now trade), and
+  PDT on paper.
+- **The safety core still refuses:**
+  - paper only;
+  - the regular session only;
+  - the 5% daily loss halt;
+  - the 1% max-loss exit and the option stop;
+  - the 15% / 20% / total caps;
+  - the idea's own trigger must fire;
+  - price already through the invalidation, or already at the target;
+  - an exact duplicate of an open position;
+  - no usable stop;
+  - same-day contracts after **15:30**;
+  - at most **8** entries per stock per day.
+
+With learning mode off, the table below applies as written.
+
 | Rule | Value | Where | Since |
 |---|---|---|---|
 | Most one trade may lose | 1% of the account ($250 at $25K) | `exitRules.MAX_LOSS_PCT`, `entryRules.RISK_PER_TRADE_PCT` | 2026-10-08 |

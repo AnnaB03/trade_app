@@ -148,13 +148,54 @@ test("RULE: no bullish ideas in an uptrend, no bearish ones in a transitioning t
 
 /* ---------- 5. What trades live, and what only records ---------- */
 
-test("RULE: the fade and the fade scan only RECORD; same-day ideas TRADE — 2026-10-14, 'lets have those live and learn'", () => {
-  assert.equal(entry.isWatchOnly("contrarian", {}), true, "FADE_LIVE=true to trade it");
-  assert.equal(entry.isWatchOnly("fade_scan", {}), true);
-  assert.equal(entry.isWatchOnly("intraday", {}), false, "live since 2026-10-14; watch-only 2026-10-08 to 10-14");
-  assert.equal(entry.isWatchOnly("intraday", { INTRADAY_LIVE: "false" }), true, "INTRADAY_LIVE=false to record only");
-  assert.equal(entry.isWatchOnly(undefined, {}), false, "multi-day ideas trade");
-  assert.equal(entry.isWatchOnly("contrarian", { FADE_LIVE: "true" }), false);
+test("RULE: outside learning mode the fade and the fade scan only RECORD; same-day ideas TRADE — 2026-10-14, 'lets have those live and learn'", () => {
+  const off = { LEARNING_MODE: "false" };
+  assert.equal(entry.isWatchOnly("contrarian", off), true, "FADE_LIVE=true to trade it");
+  assert.equal(entry.isWatchOnly("fade_scan", off), true);
+  assert.equal(entry.isWatchOnly("intraday", off), false, "live since 2026-10-14; watch-only 2026-10-08 to 10-14");
+  assert.equal(entry.isWatchOnly("intraday", { ...off, INTRADAY_LIVE: "false" }), true, "INTRADAY_LIVE=false to record only");
+  assert.equal(entry.isWatchOnly(undefined, off), false, "multi-day ideas trade");
+  assert.equal(entry.isWatchOnly("contrarian", { ...off, FADE_LIVE: "true" }), false);
+});
+
+/* Learning mode, 2026-10-14. The owner: "remove all the blockers that will
+   block you from learning ... always buy->sell->learn ... always try and
+   always learn from every single contract or trade." */
+test("RULE: learning mode is ON by default and every playbook trades — 2026-10-14, 'always buy->sell->learn'", () => {
+  assert.equal(entry.learningMode({}), true);
+  assert.equal(entry.learningMode({ LEARNING_MODE: "false" }), false);
+  for (const pb of ["contrarian", "fade_scan", "intraday", undefined]) assert.equal(entry.isWatchOnly(pb, {}), false, `${pb} trades in learning mode`);
+  assert.deepEqual([...entry.SOFT_RULES].sort(), ["conviction", "consumed", "cooldown", "daily_cap", "edge_throttle", "extreme", "late_entry", "over_budget", "pdt", "reward_risk", "selection", "spread", "stale", "tape", "watch_only"].sort(),
+    "the rules that record instead of refusing; adding one means changing this test on purpose");
+});
+
+test("RULE: learning mode keeps the safety core — same-day entries end at 15:30, 8 entries per symbol per day at most", () => {
+  assert.equal(entry.LEARNING_LAST_ENTRY_MIN, 15 * 60 + 30);
+  assert.equal(entry.LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY, 8);
+  assert.equal(entry.lateEntryRefused({ flatByClose: true, etMinutes: 15 * 60 + 10, learning: true }), false, "15:00-15:30 is an override, not a refusal");
+  assert.equal(entry.lateEntryRefused({ flatByClose: true, etMinutes: 15 * 60 + 30, learning: true }), true);
+  // The losses are still capped: the 1% max-loss exit and the position cap are unchanged.
+  assert.equal(entry.RISK_PER_TRADE_PCT, 1);
+  assert.equal(sizing.OPTION_HARD_PCT, 0.15);
+});
+
+test("RULE: a setup is void when price is through its invalidation or already at its target — hard, in learning mode too", () => {
+  assert.match(entry.setupVoid({ dir: -1, entry: 700, target: 705, invalidation: 710 }), /target/, "the SPY put loop of 2026-10-14");
+  assert.match(entry.setupVoid({ dir: 1, entry: 99, target: 110, invalidation: 100 }), /invalidation/);
+  assert.equal(entry.setupVoid({ dir: 1, entry: 105, target: 110, invalidation: 100 }), null);
+  assert.equal(entry.setupVoid({ dir: -1, entry: 105, target: 100, invalidation: 110 }), null);
+});
+
+test("RULE: in learning mode a same-day contract over budget, or with a wide spread, is taken at size and the override recorded", () => {
+  const wide = { bid: 4.0, ask: 5.0, delta: 0.5 };
+  const refused = entry.sizeOptionEntry({ accountSize: ACCOUNT, leg: wide, entryPrice: 100, invalidation: 90, action: "CALL", strategy: "intraday" });
+  assert.equal(refused.ok, false, "outside learning mode it is still refused");
+  const taken = entry.sizeOptionEntry({ accountSize: ACCOUNT, leg: wide, entryPrice: 100, invalidation: 90, action: "CALL", strategy: "intraday", learning: true });
+  assert.equal(taken.ok, true);
+  assert.ok(taken.contracts >= 1);
+  assert.ok(taken.overrides.some((o) => o.rule === "spread"));
+  const noStop = entry.sizeOptionEntry({ accountSize: ACCOUNT, leg: { bid: 0, ask: 0 }, entryPrice: 100, invalidation: 100, action: "CALL", learning: true });
+  assert.equal(noStop.ok, false, "no usable stop is a hard refusal even in learning mode");
 });
 
 test("RULE: fades never in the first half hour, and their stop is at least 0.5% of the price away", () => {

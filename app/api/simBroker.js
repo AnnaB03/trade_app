@@ -320,7 +320,12 @@ async function submit(state, form) {
     const cash = cashState(state, now);
     if (ACCOUNT_TYPE === "margin") {
       const pdt = pdtVerdict({ equity: await equityNow(state, now), dayTrades: dayTradeCount(state, now) });
-      if (!pdt.ok) reject(pdt.reason);
+      /* Learning mode (entryRules.js): the PDT rule is a broker rule for an
+         account under $25K, and on paper it only stops trades from being
+         learned from. It is recorded on the order instead of refusing it.
+         A real account under $25K is held to it by the real broker. */
+      if (!pdt.ok && process.env.LEARNING_MODE === "false") reject(pdt.reason); // entryRules.learningMode, not imported (it pulls in the store)
+      if (!pdt.ok) form.__pdtOverride = pdt.reason;
     }
     if (need > cash.available + 1e-6) {
       reject(`not enough settled cash — this needs $${need.toFixed(2)} and $${cash.available.toFixed(2)} is available${cash.unsettled > 0 ? ` ($${cash.unsettled.toFixed(2)} from today's sales settles tomorrow)` : ""}.`);
@@ -332,7 +337,7 @@ async function submit(state, form) {
   }
   if (form.preview === "true") return { order: { status: "ok", preview: true, class: cls, symbol: first.symbol, quantity: Number(first.quantity), cost: Number(first.price) * Number(first.quantity) * mult } };
 
-  const order = { id: state.nextId++, class: cls, create_date: now.toISOString(), legs: specs.map((s) => newLeg(state, s, now)) };
+  const order = { id: state.nextId++, class: cls, create_date: now.toISOString(), legs: specs.map((s) => newLeg(state, s, now)), ...(form.__pdtOverride ? { pdtOverride: form.__pdtOverride } : {}) };
   if (cls === "oto") order.legs[1].status = "pending"; // live only once the entry fills
   order.status = orderStatus(order);
   state.orders.push(order);

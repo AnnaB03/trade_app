@@ -23,6 +23,47 @@ export const MAX_SPREAD_PCT_OF_PREMIUM = 6;
 export const MAX_SPREAD_SHARE_OF_LOSS = 0.4;
 export const SAME_DAY = new Set(["intraday", "contrarian", "fade_scan"]);
 
+/* ---------- Learning mode (2026-10-14) ----------
+   The owner, 2026-10-14: "remove all the blockers that will block you from
+   learning ... I need you to always buy->sell->learn ... always try and
+   always learn from every single contract or trade."
+   The day before, 41 candidates produced 0 trades: every idea that triggered
+   was refused by one rule or another, and a refused trade teaches nothing.
+   So in learning mode (on unless LEARNING_MODE=false) the SOFT rules below
+   no longer refuse. Each one that would have refused is written on the trade
+   as learningOverrides, and the edge report splits results by it, so every
+   rule is now judged by what it would have saved or cost on real fills.
+   The HARD rules still refuse, because they protect the account or the
+   meaning of the trade rather than express an opinion about it:
+     paper only; regular session only; the daily loss halt; the 1% max-loss
+     exit and the option stop; the 15% position, 20% per-symbol and total
+     capital caps; an idea's own trigger must have fired; price already
+     through the invalidation or at the target (setupVoid); an exact repeat of an open
+     position; no usable stop to size from; a same-day contract opened after
+     15:30 (it is sold at 15:45); and at most 8 entries per symbol per day,
+     a runaway guard so a broken loop cannot buy the same name every minute. */
+export const learningMode = (env = process.env) => env.LEARNING_MODE !== "false";
+
+/* A setup is VOID, in or out of learning mode, when the live price is already
+   through its invalidation or already at its target: there is no trade left.
+   The target half was added 2026-10-14 within minutes of learning mode going
+   live. A SPY put whose target was behind the price was bought, sold by the
+   target exit a minute later for -$13, and bought again (-$15), a loop that
+   only the reward:risk refusal had been hiding. Returns a reason, or null.
+   dir: +1 for CALL/BUY, -1 for PUT/SELL. */
+export function setupVoid({ dir, entry, target, invalidation }) {
+  const e = Number(entry), t = Number(target), v = Number(invalidation);
+  if (e > 0 && v > 0 && (dir > 0 ? e <= v : e >= v)) return `Live price $${e} is already ${dir > 0 ? "at or below" : "at or above"} the $${v} invalidation — the setup is void, not cheap.`;
+  if (e > 0 && t > 0 && (dir > 0 ? e >= t : e <= t)) return `Live price $${e} is already ${dir > 0 ? "at or above" : "at or below"} the $${t} target — the move this trade was for has happened; it would be sold at once.`;
+  return null;
+}
+export const SOFT_RULES = Object.freeze([
+  "conviction", "edge_throttle", "selection", "stale", "extreme", "reward_risk", "consumed",
+  "daily_cap", "cooldown", "tape", "late_entry", "over_budget", "spread", "watch_only", "pdt",
+]);
+export const LEARNING_LAST_ENTRY_MIN = 15 * 60 + 30;   // ET; hard, same-day contracts
+export const LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY = 8;  // hard runaway guard
+
 /* The limit price for a buy: the ASK. Decided 2026-10-14 after a day at the
    mid: the one order that filled (GOOGL fade, -$238) filled only as the trade
    turned, and the puts that were right never filled. ENTRY_AT_MID=true goes
@@ -40,7 +81,10 @@ export function payPrice(leg, { atMid = process.env.ENTRY_AT_MID === "true" } = 
    out. Contracts = the 1% budget / that risk, never more than the 15%
    position cap, at least one — except a same-day trade is refused when one
    contract would risk more than 1.5x the budget. Then the spread checks. */
-export function sizeOptionEntry({ accountSize, leg, entryPrice, invalidation, action, strategy, profile = null, atMid, riskMult = 1 }) {
+export function sizeOptionEntry({ accountSize, leg, entryPrice, invalidation, action, strategy, profile = null, atMid, riskMult = 1, learning = false }) {
+  // learning: the over-budget and spread refusals become overrides on a trade
+  // that is taken anyway (one contract when one is over budget).
+  const overrides = [];
   // riskMult: the edge throttle (edgeLib) — 1, 0.5 or 0.25 of the 1% budget.
   const budget = (accountSize * RISK_PER_TRADE_PCT * Math.max(0, Math.min(1, Number(riskMult) || 1))) / 100;
   const delta = Math.abs(Number(leg?.delta)) || 0.6;
@@ -57,7 +101,8 @@ export function sizeOptionEntry({ accountSize, leg, entryPrice, invalidation, ac
   let contracts = Math.floor(budget / riskPer);
   if (contracts < 1) {
     if (SAME_DAY.has(strategy) && riskPer > budget * 1.5) {
-      return { ok: false, stopPct, riskPer, reason: `One contract would lose about $${riskPer.toFixed(0)} at the stop — over the $${(budget * 1.5).toFixed(0)} most a same-day trade may risk (${RISK_PER_TRADE_PCT}% of the account, with half again of leeway).` };
+      if (learning) overrides.push({ rule: "over_budget", reason: `One contract risks about $${riskPer.toFixed(0)} at the stop, over the $${(budget * 1.5).toFixed(0)} same-day limit; taken at one contract, the max-loss exit still caps it.` });
+      else return { ok: false, stopPct, riskPer, reason: `One contract would lose about $${riskPer.toFixed(0)} at the stop — over the $${(budget * 1.5).toFixed(0)} most a same-day trade may risk (${RISK_PER_TRADE_PCT}% of the account, with half again of leeway).` };
     }
     contracts = 1;
   }
@@ -65,18 +110,21 @@ export function sizeOptionEntry({ accountSize, leg, entryPrice, invalidation, ac
   if (perContract > 0) contracts = Math.max(1, Math.min(contracts, Math.floor((accountSize * OPTION_HARD_PCT) / perContract) || 1));
 
   if (premium > 0 && (spread / premium) * 100 > MAX_SPREAD_PCT_OF_PREMIUM) {
-    return { ok: false, stopPct, riskPer, contracts, reason: `Spread is ${((spread / premium) * 100).toFixed(1)}% of the premium ($${leg?.bid}/$${leg?.ask}) — over ${MAX_SPREAD_PCT_OF_PREMIUM}%, so the position would open most of the way to its ${stopPct}% stop.` };
+    if (learning) overrides.push({ rule: "spread", reason: `Spread is ${((spread / premium) * 100).toFixed(1)}% of the premium ($${leg?.bid}/$${leg?.ask}), over ${MAX_SPREAD_PCT_OF_PREMIUM}%.` });
+    else return { ok: false, stopPct, riskPer, contracts, reason: `Spread is ${((spread / premium) * 100).toFixed(1)}% of the premium ($${leg?.bid}/$${leg?.ask}) — over ${MAX_SPREAD_PCT_OF_PREMIUM}%, so the position would open most of the way to its ${stopPct}% stop.` };
   }
   const spreadCost = spread * 100 * contracts;
   if (spreadCost > budget * MAX_SPREAD_SHARE_OF_LOSS) {
-    return { ok: false, stopPct, riskPer, contracts, reason: `Spread too wide: buying at $${leg?.ask} against a $${leg?.bid} bid costs $${spreadCost.toFixed(0)} on arrival — over ${(MAX_SPREAD_SHARE_OF_LOSS * 100).toFixed(0)}% of the $${budget.toFixed(0)} a trade may lose.` };
+    if (learning) overrides.push({ rule: "spread", reason: `Spread costs $${spreadCost.toFixed(0)} on arrival, over ${(MAX_SPREAD_SHARE_OF_LOSS * 100).toFixed(0)}% of the $${budget.toFixed(0)} a trade may lose.` });
+    else return { ok: false, stopPct, riskPer, contracts, reason: `Spread too wide: buying at $${leg?.ask} against a $${leg?.bid} bid costs $${spreadCost.toFixed(0)} on arrival — over ${(MAX_SPREAD_SHARE_OF_LOSS * 100).toFixed(0)}% of the $${budget.toFixed(0)} a trade may lose.` };
   }
-  return { ok: true, contracts, riskPer, stopPct, riskAtStop: Math.round(riskPer * contracts), budget };
+  return { ok: true, contracts, riskPer, stopPct, riskAtStop: Math.round(riskPer * contracts), budget, overrides };
 }
 
 // Same-day contracts are not opened after 15:00 ET.
-export function lateEntryRefused({ flatByClose, etMinutes }) {
-  return Boolean(flatByClose) && Number(etMinutes) >= LAST_FLAT_BY_CLOSE_ENTRY_MIN;
+// In learning mode the hard line is 15:30; 15:00-15:30 is a recorded override.
+export function lateEntryRefused({ flatByClose, etMinutes, learning = false }) {
+  return Boolean(flatByClose) && Number(etMinutes) >= (learning ? LEARNING_LAST_ENTRY_MIN : LAST_FLAT_BY_CLOSE_ENTRY_MIN);
 }
 
 /* Which playbooks record what they would buy and place nothing.
@@ -87,7 +135,10 @@ export function lateEntryRefused({ flatByClose, etMinutes }) {
    after the wrong-side-entry losses, and recorded 5 for 5 (about +$319,
    estimated from traded prices) once that bug was fixed. INTRADAY_LIVE=false
    puts it back to recording only. */
+/* In learning mode nothing is watch-only: every playbook trades, so the fade
+   and the scan are judged on real fills rather than estimates. */
 export function isWatchOnly(strategy, env = process.env) {
+  if (learningMode(env)) return false;
   if (strategy === "fade_scan") return true;
   if (strategy === "contrarian") return env.FADE_LIVE !== "true";
   if (strategy === "intraday") return env.INTRADAY_LIVE === "false";

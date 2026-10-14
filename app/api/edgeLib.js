@@ -75,6 +75,10 @@ export function edgeReport(rows, { rUsd, minN = 10, lastN = 20 } = {}) {
     byHour: groups(trades, (t) => (t.entryAt ? `${String(hourET(t.entryAt)).padStart(2, "0")}:00 ET` : null), opt).sort((a, b) => a.key.localeCompare(b.key)),
     bySymbol: groups(trades, (t) => t.symbol || null, opt),
     byCatalyst: groups(trades, (t) => t.catalyst || null, opt),
+    // Learning mode: trades taken over a soft rule against trades that passed
+    // every rule, and per rule overridden (a trade can count under several).
+    byLearning: groups(trades, (t) => (t.learningOverrides?.length ? "rule overridden" : "all rules passed"), opt),
+    byOverriddenRule: groups(trades.flatMap((t) => (t.learningOverrides || []).map((o) => ({ ...t, __rule: o.rule }))), (t) => t.__rule, opt),
     verdicts: playbookVerdicts(trades, { rUsd, lastN: Math.max(lastN, minN), minN: Math.max(lastN, minN) }),
   };
 }

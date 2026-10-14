@@ -13,6 +13,7 @@ import {
   payPrice, sizeOptionEntry, SAME_DAY, MIN_CONVICTION, MIN_REWARD_RISK, MAX_SYMBOL_EXPOSURE_PCT,
   MAX_SPREAD_SHARE_OF_LOSS, MAX_SPREAD_PCT_OF_PREMIUM, LAST_FLAT_BY_CLOSE_ENTRY_MIN, REENTRY_COOLDOWN_MIN,
   MAX_ENTRIES_PER_SYMBOL_DAY, RISK_PER_TRADE_PCT as INTRADAY_RISK_PCT, isWatchOnly, entriesAllowed,
+  learningMode, lateEntryRefused, LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY, setupVoid,
 } from "../entryRules";
 import { optionStopPct, profileFor } from "../../swingLib";
 import { extremeRead, fadePlan, fadeEnabled, EXTREME_PCT, FADE_SIDES } from "../../fadeLib";
@@ -144,7 +145,8 @@ const DIRECTION_SIGN = { CALL: 1, BUY: 1, PUT: -1, SELL: -1 };
    the mid for three minutes, missed the move it was right about (the put
    traded 2.56 -> 2.93), and filled only as the stock turned back up. */
 const FADE_LIVE = process.env.FADE_LIVE === "true";
-const watchOnly = (strategy) => isWatchOnly(strategy); // entryRules.js
+const watchOnly = (strategy) => isWatchOnly(strategy); // entryRules.js; nothing is watch-only in learning mode
+const LEARN = learningMode(); // entryRules.js
 const STRICT_TRIGGERS = process.env.LOOSE_TRIGGERS !== "true";
 const etNowMinutes = () => {
   const [h, m] = new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour12: false, hour: "2-digit", minute: "2-digit" }).split(":").map(Number);
@@ -477,6 +479,7 @@ async function placeOption(idea, { dryRun, openOccs }) {
       expiration: idea.expiration, side: "buy", quantity: contractQty, limitPrice: Number(vet.computed.price), order: orderResult,
       closeByEod: Boolean(idea.flatByClose),
       stopPct: idea.stopPct ?? null,
+      learningOverrides: idea.learningOverrides ?? null,
     });
   } catch (e) {
     console.error("Autotrade journal write failed (order was still placed):", e);
@@ -521,6 +524,7 @@ async function placeShares(idea, { dryRun }) {
     journalOpen({
       ideaId: idea.id, thesis: null, vehicle: "SHARES", symbol: idea.symbol,
       side: vet.computed.side, quantity: vet.computed.quantity, limitPrice: vet.computed.price, order: orderResult,
+      learningOverrides: idea.learningOverrides ?? null,
     });
   } catch (e) {
     console.error("Autotrade journal write failed (order was still placed):", e);
@@ -649,7 +653,7 @@ async function deriveScanFades(now = Date.now()) {
       if (!plan || plan.rangePos < SCAN_RANGE_POS) continue;
       const alt = await fadeContract(base.symbol, "put", q.last);
       if (!alt) continue;
-      const why = `${base.symbol} is at ${plan.rangePos}% of today's $${q.low}-$${q.high} range in an uptrend, with no idea behind it. Watch-only: would a put work here? Wrong above $${plan.invalidation}, aiming for $${plan.target}.`;
+      const why = `${base.symbol} is at ${plan.rangePos}% of today's $${q.low}-$${q.high} range in an uptrend, with no idea behind it. Does a put work here? Wrong above $${plan.invalidation}, aiming for $${plan.target}.`;
       const row = appendIdea({
         symbol: base.symbol, action: "PUT", vehicle: "OPTION", strike: alt.strike, expiration: alt.expiration,
         entryTrigger: `scan: ${plan.rangePos}% of the day's range in an uptrend`, triggerPrice: null, triggerDirection: null, triggered: true,
@@ -751,21 +755,32 @@ async function run(req) {
     let deployedThisRun = 0; // cost placed earlier in this same pass, which journal rows don't show yet
     for (const rawIdea of batch) {
       const tag = { symbol: rawIdea.symbol, action: rawIdea.action, vehicle: rawIdea.vehicle, risk: rawIdea.risk, ideaId: rawIdea.id };
+      /* Learning mode (entryRules.learningMode): a SOFT rule that would refuse
+         is recorded here and the trade goes ahead; soft() returns true when it
+         did. Outside learning mode soft() returns false and the rule refuses
+         exactly as before. */
+      const overrides = [];
+      tag.learningOverrides = overrides;
+      const soft = (rule, reason) => { if (!LEARN) return false; overrides.push({ rule, reason }); return true; };
       if (!["CALL", "PUT", "BUY", "SELL"].includes(rawIdea.action)) { results.push({ ...tag, placed: false, reason: "WAIT — nothing to trade." }); continue; }
-      if (Number(rawIdea.conviction) < minConviction) { results.push({ ...tag, placed: false, reason: `Conviction ${rawIdea.conviction} below the ${minConviction} bar.` }); continue; }
+      if (Number(rawIdea.conviction) < minConviction) {
+        const why = `Conviction ${rawIdea.conviction} below the ${minConviction} bar.`;
+        if (!soft("conviction", why)) { results.push({ ...tag, placed: false, reason: why }); continue; }
+      }
       if (verdicts) {
         const pb = rawIdea.strategy === "intraday" ? "intraday" : rawIdea.strategy === "contrarian" ? "contrarian" : "swing";
         // The edge THROTTLE (edgeLib.edgeRiskMultiplier): a losing recent record
         // cuts the size, never to zero. It used to refuse the trade outright.
         const th = edgeRiskMultiplier(verdicts[pb]);
-        rawIdea.__riskMult = th.mult;
+        // Learning mode trades full size and records what the throttle wanted.
+        rawIdea.__riskMult = th.mult < 1 && soft("edge_throttle", th.label) ? 1 : th.mult;
         if (th.mult < 1) tag.edgeThrottle = th.label;
       }
       /* Selection (selectionLib.js): which ideas are taken as written. The fade
          playbook is exempt — it is the other side of exactly these refusals. */
       if (rawIdea.strategy !== "contrarian" && rawIdea.strategy !== "fade_scan") {
         const sv = selectionVerdict({ action: rawIdea.action, regime: rawIdea.regimeTrend, etMinutes: etNowMinutes(), catalyst: rawIdea.catalyst });
-        if (!sv.ok) { results.push({ ...tag, placed: false, selection: sv.rule, reason: sv.reason }); continue; }
+        if (!sv.ok && !soft("selection", `${sv.rule}: ${sv.reason}`)) { results.push({ ...tag, placed: false, selection: sv.rule, reason: sv.reason }); continue; }
       }
       let idea = rawIdea;
       const now = Date.now();
@@ -777,8 +792,8 @@ async function run(req) {
         // not a confirmation of anything still true about the thesis.
         if (!isFreshEnough(idea, now)) {
           const ageMin = (now - new Date(idea.createdAt).getTime()) / 60000;
-          results.push({ ...tag, placed: false, reason: `Setup is ${ageMin.toFixed(0)} min old, past its own staleness window — not acting on a trigger this late.` });
-          continue;
+          const why = `Setup is ${ageMin.toFixed(0)} min old, past its own staleness window — not acting on a trigger this late.`;
+          if (!soft("stale", why)) { results.push({ ...tag, placed: false, reason: why }); continue; }
         }
         const live = liveBySym[idea.symbol];
         if (live == null) { results.push({ ...tag, placed: false, reason: "Couldn't get a live quote to check the trigger." }); continue; }
@@ -854,8 +869,9 @@ async function run(req) {
           const q = quoteBySym[idea.symbol] || {};
           const read = extremeRead({ action: idea.action, price: live, low: q.low, high: q.high });
           if (read.atExtreme && fadeEnabled(read.side)) {
-            results.push({ ...tag, placed: false, reason: `At ${read.pos.toFixed(0)}% of the day's range ($${q.low}-$${q.high}) — the breakout is being chased, so this stands down and the fade playbook takes the other side.` });
-            continue;
+            const why = `At ${read.pos.toFixed(0)}% of the day's range ($${q.low}-$${q.high}) — the breakout is being chased, so this stands down and the fade playbook takes the other side.`;
+            // In learning mode both sides trade: this idea and its fade.
+            if (!soft("extreme", why)) { results.push({ ...tag, placed: false, reason: why }); continue; }
           }
         }
         // Trade off the live price, not the stale one from generation time —
@@ -876,8 +892,8 @@ async function run(req) {
         // staleness is about THIS idea's own age, not a shared batch's.
         const ageMin = (Date.now() - new Date(idea.createdAt).getTime()) / 60000;
         if (ageMin > MAX_BATCH_AGE_MIN) {
-          results.push({ ...tag, placed: false, reason: `This idea is ${ageMin.toFixed(0)} min old — too stale to trade on without a live re-check. Refresh Ideas first.` });
-          continue;
+          const why = `This idea is ${ageMin.toFixed(0)} min old — too stale to trade on without a live re-check. Refresh Ideas first.`;
+          if (!soft("stale", why)) { results.push({ ...tag, placed: false, reason: why }); continue; }
         }
       }
 
@@ -897,13 +913,11 @@ async function run(req) {
         // against a $3.92 invalidation scored 19.6:1 purely because the risk
         // distance had collapsed to 5 cents — a position autoexit would close
         // on its next pass for breaching the very level it was bought under.
-        if (e > 0 && v > 0 && (dir > 0 ? e <= v : e >= v)) {
-          results.push({ ...tag, placed: false, reason: `Live price $${e} is already ${dir > 0 ? "at or below" : "at or above"} the $${v} invalidation — the setup is void, not cheap.` });
-          continue;
-        }
+        const voidWhy = setupVoid({ dir, entry: e, target: t, invalidation: v }); // entryRules.js, hard
+        if (voidWhy) { results.push({ ...tag, placed: false, reason: voidWhy }); continue; }
         if (e > 0 && t > 0 && v > 0 && risk > 0 && reward / risk < MIN_REWARD_RISK) {
-          results.push({ ...tag, placed: false, reason: `Reward:risk ${(reward / risk).toFixed(2)}:1 at the live entry $${e} is below the ${MIN_REWARD_RISK}:1 floor — risking $${risk.toFixed(2)}/share to make $${reward.toFixed(2)}.` });
-          continue;
+          const why = `Reward:risk ${(reward / risk).toFixed(2)}:1 at the live entry $${e} is below the ${MIN_REWARD_RISK}:1 floor — risking $${risk.toFixed(2)}/share to make $${reward.toFixed(2)}.`;
+          if (!soft("reward_risk", why)) { results.push({ ...tag, placed: false, reason: why }); continue; }
         }
       }
 
@@ -927,8 +941,8 @@ async function run(req) {
           // "parked": acted on in the sandbox before practice moved off it.
           r.ideaId && r.ideaId === idea.id && (r.status === "closed" || r.status === "parked") && r.entryFillPrice != null);
         if (consumed) {
-          results.push({ ...tag, placed: false, reason: `Idea ${idea.id} already carried a ${idea.symbol} position to a close on ${String(consumed.exitAt ?? consumed.parkedAt).slice(0, 16)} (${consumed.exitReasonTag ?? "exit"}, P&L ${consumed.pnl == null ? "unbooked" : `$${Number(consumed.pnl).toFixed(0)}`}) — a played-out thesis is consumed, not re-tradeable.` });
-          continue;
+          const why = `Idea ${idea.id} already carried a ${idea.symbol} position to a close on ${String(consumed.exitAt ?? consumed.parkedAt).slice(0, 16)} (${consumed.exitReasonTag ?? "exit"}, P&L ${consumed.pnl == null ? "unbooked" : `$${Number(consumed.pnl).toFixed(0)}`}) — a played-out thesis is consumed, not re-tradeable.`;
+          if (!soft("consumed", why)) { results.push({ ...tag, placed: false, reason: why }); continue; }
         }
       }
 
@@ -941,10 +955,12 @@ async function run(req) {
         const today = new Date().toDateString();
         const baseline = readBaseline();
         const todayCount = listJournal().filter((r) => r.symbol === idea.symbol && r.createdAt && new Date(r.createdAt).toDateString() === today && !isLegacy(r, baseline)).length;
-        if (todayCount >= MAX_ENTRIES_PER_SYMBOL_DAY) {
-          results.push({ ...tag, placed: false, reason: `${idea.symbol} already has ${todayCount} entries today — at the ${MAX_ENTRIES_PER_SYMBOL_DAY}/symbol/day cap, so this is churn rather than a new position.` });
+        // Learning mode: the 4/day cap is recorded; 8/day is the hard runaway guard.
+        if (todayCount >= (LEARN ? LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY : MAX_ENTRIES_PER_SYMBOL_DAY)) {
+          results.push({ ...tag, placed: false, reason: `${idea.symbol} already has ${todayCount} entries today — at the ${LEARN ? LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY : MAX_ENTRIES_PER_SYMBOL_DAY}/symbol/day cap, so this is churn rather than a new position.` });
           continue;
         }
+        if (todayCount >= MAX_ENTRIES_PER_SYMBOL_DAY) soft("daily_cap", `${idea.symbol} already has ${todayCount} entries today (the ${MAX_ENTRIES_PER_SYMBOL_DAY}/day cap).`);
       }
 
       /* Cooldown after an exit on this symbol. Without it, taking profit frees
@@ -962,8 +978,8 @@ async function run(req) {
           const minsSince = (Date.now() - new Date(lastExit.exitAt).getTime()) / 60000;
           const ideaIsNewer = new Date(idea.createdAt).getTime() > new Date(lastExit.exitAt).getTime();
           if (minsSince < REENTRY_COOLDOWN_MIN && !ideaIsNewer) {
-            results.push({ ...tag, placed: false, reason: `Closed ${idea.symbol} ${minsSince.toFixed(0)} min ago (${lastExit.exitReasonTag ?? "exit"}) and this idea predates that exit — waiting ${REENTRY_COOLDOWN_MIN} min for a fresh read rather than re-buying what just played out.` });
-            continue;
+            const why = `Closed ${idea.symbol} ${minsSince.toFixed(0)} min ago (${lastExit.exitReasonTag ?? "exit"}) and this idea predates that exit — waiting ${REENTRY_COOLDOWN_MIN} min for a fresh read rather than re-buying what just played out.`;
+            if (!soft("cooldown", why)) { results.push({ ...tag, placed: false, reason: why }); continue; }
           }
         }
       }
@@ -993,8 +1009,8 @@ async function run(req) {
       if (idea.strategy === "intraday" && /continuation/i.test(String(idea.catalyst || ""))) {
         const t = await fetchTape(idea.symbol, { last: idea.entryPrice });
         if (t?.rangeUsedPct != null && t.rangeUsedPct >= ATR_USED_MAX_PCT) {
-          results.push({ ...tag, placed: false, reason: `Tape gate — ${idea.symbol} has already used ${t.rangeUsedPct.toFixed(0)}% of its normal daily range ($${t.dayLow}-$${t.dayHigh} against a $${t.atr14.toFixed(2)} ATR); a continuation here buys the end of the move.` });
-          continue;
+          const why = `Tape gate — ${idea.symbol} has already used ${t.rangeUsedPct.toFixed(0)}% of its normal daily range ($${t.dayLow}-$${t.dayHigh} against a $${t.atr14.toFixed(2)} ATR); a continuation here buys the end of the move.`;
+          if (!soft("tape", why)) { results.push({ ...tag, placed: false, reason: why }); continue; }
         }
       }
 
@@ -1002,11 +1018,12 @@ async function run(req) {
          $1090c was bought at 15:33 on 2026-10-07 with a forced sale due at 15:45:
          twelve minutes in which it could only pay the spread and two fees. */
       if (idea.flatByClose) {
-        const [hh, mm] = new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour12: false, hour: "2-digit", minute: "2-digit" }).split(":").map(Number);
-        if ((hh % 24) * 60 + mm >= LAST_FLAT_BY_CLOSE_ENTRY_MIN) {
-          results.push({ ...tag, placed: false, reason: "Short-dated contract that is sold before the close — too late in the day to open one (no entries after 15:00 ET)." });
+        const em = etNowMinutes();
+        if (lateEntryRefused({ flatByClose: true, etMinutes: em, learning: LEARN })) {
+          results.push({ ...tag, placed: false, reason: `Short-dated contract that is sold before the close — too late in the day to open one (no entries after ${LEARN ? "15:30" : "15:00"} ET).` });
           continue;
         }
+        if (lateEntryRefused({ flatByClose: true, etMinutes: em })) soft("late_entry", "Same-day contract opened after 15:00 ET, with less than 45 minutes to the 15:45 sale.");
       }
 
       /* Same-day trades are sized by what they can LOSE, not by what they cost.
@@ -1030,10 +1047,11 @@ async function run(req) {
         const sz = sizeOptionEntry({
           accountSize: ACCOUNT_SIZE, leg: idea.leg, entryPrice: idea.entryPrice, invalidation: idea.invalidation,
           action: idea.action, strategy: idea.strategy, profile: profileFor(idea.symbol),
-          riskMult: rawIdea.__riskMult ?? 1,
+          riskMult: rawIdea.__riskMult ?? 1, learning: LEARN,
         });
         idea.stopPct = sz.stopPct;
         if (!sz.ok) { results.push({ ...tag, placed: false, reason: sz.reason }); continue; }
+        overrides.push(...(sz.overrides || []));
         idea.sizing = { ...(idea.sizing || {}), contracts: sz.contracts, riskAtStop: sz.riskAtStop };
         tag.sizedByRisk = `${sz.contracts} contract${sz.contracts === 1 ? "" : "s"}, about $${sz.riskAtStop} at risk to the stop (option stop ${sz.stopPct}%)`;
       }
@@ -1118,6 +1136,9 @@ async function run(req) {
         continue;
       }
 
+      // Written on the journal row (journalOpen), so the edge report can split
+      // results by which rules were overridden.
+      idea.learningOverrides = overrides.length ? overrides : null;
       let r;
       if (idea.vehicle === "OPTION") r = await placeOption(idea, { dryRun, openOccs });
       else if (idea.vehicle === "SHARES") r = await placeShares(idea, { dryRun });
