@@ -475,7 +475,16 @@ function AutoJournalPanel() {
   // delayed prices; they are history, not this account's record.
   const isOld = (e) => e.legacy === true || (since && new Date(e.createdAt) < new Date(since));
   const older = all ? all.filter(isOld).length : 0;
-  const entries = all ? (showOld ? all : all.filter((e) => !isOld(e))) : null;
+  /* Newest EVENT first: a close lands at the top on the day it happens. Sorted
+     by open date, a position bought yesterday and sold today (GOOGL shares,
+     -$17.76, 2026-10-14) sat below all of today's trades under yesterday. */
+  const lastEvent = (e) => new Date(e.exitAt || e.entryAt || e.createdAt).getTime();
+  const entries = all ? (showOld ? all : all.filter((e) => !isOld(e))).slice().sort((a, b) => lastEvent(b) - lastEvent(a)) : null;
+  const when = (iso) => {
+    if (!iso) return "—";
+    const d = new Date(iso), today = new Date().toDateString() === d.toDateString();
+    return today ? d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : d.toLocaleDateString([], { month: "numeric", day: "numeric" }) + " " + d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  };
 
   return (
     <div className="card" style={{ overflowX: "auto" }}>
@@ -490,14 +499,15 @@ function AutoJournalPanel() {
       {entries && entries.length > 0 && (
         <table>
           <thead><tr>
-            <th style={{ textAlign: "left" }}>Opened</th><th style={{ textAlign: "left" }}>Symbol</th>
+            <th style={{ textAlign: "left" }}>Opened</th><th style={{ textAlign: "left" }}>Closed</th><th style={{ textAlign: "left" }}>Symbol</th>
             <th style={{ textAlign: "left" }}>Plan</th><th>Status</th>
             <th style={{ textAlign: "left" }}>Exit reason</th><th>P&amp;L</th><th>R</th><th>Days</th>
           </tr></thead>
           <tbody>
             {entries.map((e) => (
               <tr key={e.id} style={isOld(e) ? { opacity: 0.55 } : undefined}>
-                <td style={{ textAlign: "left" }} className="muted">{new Date(e.entryAt || e.createdAt).toLocaleDateString()}</td>
+                <td style={{ textAlign: "left" }} className="muted">{when(e.entryAt || e.createdAt)}</td>
+                <td style={{ textAlign: "left" }} className="muted">{e.status === "open" ? "open" : when(e.exitAt)}</td>
                 <td style={{ textAlign: "left", fontWeight: 600 }}>{e.symbol}</td>
                 <td style={{ textAlign: "left" }} title={e.thesis || ""}>
                   {e.vehicle === "OPTION" ? `${e.optionType ?? ""} ${e.strike ?? ""} ${e.expiration ?? ""}` : "shares"}
