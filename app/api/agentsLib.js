@@ -105,9 +105,16 @@ export function runAgent({ role, mode, labels = [], dateET, timeET, onDone = () 
   const file = path.join(REPORT_DIR, reportName({ dateET, timeET, role, mode }));
   const model = mode === "weekly" && ROLES[role].weeklyModel ? ROLES[role].weeklyModel : ROLES[role].model;
   const args = ["-p", taskPrompt({ role, mode, labels, dateET, timeET }), "--agent", role, "--model", model,
-    "--allowedTools", ...allowedTools(role), "--disallowedTools", ...DISALLOWED_TOOLS, "--output-format", "text"];
+    "--allowedTools", ...allowedTools(role), "--disallowedTools", ...DISALLOWED_TOOLS, "--output-format", "text",
+    // The server log and the schedule's log live outside the repo.
+    "--add-dir", "/tmp", path.join(process.env.HOME || "", "Library", "Logs")];
   const bin = process.env.CLAUDE_BIN || (fs.existsSync("/opt/homebrew/bin/claude") ? "/opt/homebrew/bin/claude" : "claude");
-  const child = spawn(bin, args, { cwd: process.cwd(), env: { ...process.env, PATH: `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH || ""}` }, stdio: ["ignore", "pipe", "pipe"] });
+  /* A clean environment, not this server's: the server carries .env.local
+     (halts switched off, a margin account, ...), and the QA agent's first run
+     reported 6 failing tests that only fail under those settings. */
+  const env = Object.fromEntries(["HOME", "USER", "LOGNAME", "SHELL", "LANG", "TMPDIR", "TERM"].filter((k) => process.env[k]).map((k) => [k, process.env[k]]));
+  env.PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+  const child = spawn(bin, args, { cwd: process.cwd(), env, stdio: ["ignore", "pipe", "pipe"] });
   let out = "", err = "";
   child.stdout.on("data", (d) => { out += d; });
   child.stderr.on("data", (d) => { err += d; });

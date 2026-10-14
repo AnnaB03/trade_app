@@ -7,6 +7,10 @@ import path from "node:path";
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "cockpit-risk-"));
 process.env.STORE_FILE = path.join(tmp, "test.db");
 const store = await import("../app/api/store.js");
+// These test the rules' defaults: clear any override a caller's environment
+// carries (the server's .env.local turns three halts off), so the suite passes
+// the same everywhere. Found 2026-10-14 by the QA agent, run from the server.
+for (const k of ["DAILY_LOSS_LIMIT_PCT", "DAILY_GOAL_PCT", "DAILY_PROFIT_LOCK_PCT", "DAY_GIVEBACK_PCT", "MAX_LOSS_STREAK"]) delete process.env[k];
 const risk = await import("../app/api/riskLib.js");
 after(() => { store._closeForTests(); fs.rmSync(tmp, { recursive: true, force: true }); });
 

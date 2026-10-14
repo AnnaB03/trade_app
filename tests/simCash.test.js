@@ -1,5 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+// A cash account, whatever the caller's environment says (.env.local runs margin).
+delete process.env.SIM_ACCOUNT_TYPE;
 const { cashState } = await import("../app/api/simBroker.js");
 
 const fill = (side, price, qty, when, opt = true) => ({
