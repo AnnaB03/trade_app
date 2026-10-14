@@ -38,7 +38,8 @@ import { tradier, asArray } from "./tradier.js";
 import { getClock } from "./clockLib.js";
 import { accountSize } from "./accountLib.js";
 
-const FILE = path.join(process.cwd(), "data", "sim.json");
+// SIM_FILE points the tests at a throwaway account; nothing else sets it.
+const FILE = process.env.SIM_FILE || path.join(process.cwd(), "data", "sim.json");
 export const SIM_ACCOUNT = "SIM-CASH";
 const feeEnv = process.env.SIM_OPTION_FEE_PER_CONTRACT;
 export const OPTION_FEE = feeEnv != null && feeEnv !== "" && Number(feeEnv) >= 0 ? Number(feeEnv) : 0.35;

@@ -1,0 +1,11 @@
+#!/bin/sh
+# Refuse to push if any test fails — including the rules contract
+# (tests/rules.contract.test.js). Installed 2026-10-14 at the user's request:
+# "make sure that all of the basic rules are always followed unless I agree".
+echo "pre-push: running the test suite..."
+if ! npm test --silent >/tmp/cockpit-prepush.log 2>&1; then
+  grep -E "^✖|AssertionError" /tmp/cockpit-prepush.log | head -20
+  echo "pre-push: TESTS FAILED — push refused. Full log: /tmp/cockpit-prepush.log"
+  exit 1
+fi
+echo "pre-push: $(grep -E '^ℹ pass' /tmp/cockpit-prepush.log) — ok"

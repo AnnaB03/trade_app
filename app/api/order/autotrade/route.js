@@ -9,6 +9,11 @@ import { isLegacy, readBaseline } from "../../ledgerLib";
 import { journalOpen } from "../../journalLib";
 import { OPTION_HARD_PCT } from "../../sizingLib";
 import { HARD_LOSS_PCT } from "../exitRules";
+import {
+  payPrice, sizeOptionEntry, SAME_DAY, MIN_CONVICTION, MIN_REWARD_RISK, MAX_SYMBOL_EXPOSURE_PCT,
+  MAX_SPREAD_SHARE_OF_LOSS, MAX_SPREAD_PCT_OF_PREMIUM, LAST_FLAT_BY_CLOSE_ENTRY_MIN, REENTRY_COOLDOWN_MIN,
+  MAX_ENTRIES_PER_SYMBOL_DAY, RISK_PER_TRADE_PCT as INTRADAY_RISK_PCT, isWatchOnly, entriesAllowed,
+} from "../entryRules";
 import { optionStopPct, profileFor } from "../../swingLib";
 import { extremeRead, fadePlan, fadeEnabled, EXTREME_PCT, FADE_SIDES } from "../../fadeLib";
 import { appendIdea } from "../../store";
@@ -84,7 +89,7 @@ import { buildOptionStopEstimate } from "../../../lib/orders";
    conviction 3 and nothing real is being filtered — rather than removed, so
    the field stays available if it ever starts carrying information. Do not
    cite the old gap again. */
-const MIN_CONVICTION = 2;
+// MIN_CONVICTION lives in entryRules.js (pinned by tests/rules.contract.test.js).
 /* Reward:risk floor. Raised from 1.0 on arithmetic rather than backtest: a
    plan's breakeven win rate is 1/(1+RR), so 1.0:1 needs 50% and 1.09:1 needs
    48%. Measured directional accuracy across this whole ledger is about 50%, so
@@ -99,7 +104,7 @@ const MIN_CONVICTION = 2;
    target/invalidation distances by the option PREMIUM, which mixes units and
    is meaningless; the gate uses idea.entryPrice, the underlying, and always
    did.) */
-const MIN_REWARD_RISK = 1.5;
+// MIN_REWARD_RISK lives in entryRules.js (pinned by tests/rules.contract.test.js).
 // How far price may have slipped back below (or above, for a short) a trigger
 // it crossed intraday and still count as confirmation. See the cross-check
 // below for the ROG and DXST cases that set this.
@@ -115,7 +120,7 @@ const MAX_TRIGGER_SLIP_PCT = 0.5;
    gate prices it off the mid while the order fills at the ask, so a cap-sized
    position was being refused by a few dollars. The ceiling now leaves room for
    one full position plus rounding, and still blocks stacking a second lot. */
-const MAX_SYMBOL_EXPOSURE_PCT = 20;
+// MAX_SYMBOL_EXPOSURE_PCT lives in entryRules.js (pinned by tests/rules.contract.test.js).
 /* Hard ceiling on capital deployed across ALL open positions, as a share of
    ACCOUNT_SIZE. Set 2026-10-06 when the working account size went from the
    $99K paper balance to $10K, the amount expected to go live. Nothing capped
@@ -134,7 +139,7 @@ const DIRECTION_SIGN = { CALL: 1, BUY: 1, PUT: -1, SELL: -1 };
 const INTRADAY_WATCH_ONLY = process.env.INTRADAY_LIVE !== "true";
 // Playbooks that open and close inside one session: sized by risk, refused
 // outright when one contract is too much, and flat by the close.
-const SAME_DAY = new Set(["intraday", "contrarian", "fade_scan"]);
+// SAME_DAY lives in entryRules.js
 // Playbooks that record what they would have bought and place nothing (shadowLib.js).
 /* The fade (contrarian) is watch-only unless FADE_LIVE=true. It traded live for
    one day, 2026-10-13/14, and went 0 for 2 (-$324): NVDA stopped out in ten
@@ -142,23 +147,23 @@ const SAME_DAY = new Set(["intraday", "contrarian", "fade_scan"]);
    the mid for three minutes, missed the move it was right about (the put
    traded 2.56 -> 2.93), and filled only as the stock turned back up. */
 const FADE_LIVE = process.env.FADE_LIVE === "true";
-const watchOnly = (strategy) => strategy === "fade_scan" || (strategy === "contrarian" && !FADE_LIVE) || (strategy === "intraday" && INTRADAY_WATCH_ONLY);
+const watchOnly = (strategy) => isWatchOnly(strategy); // entryRules.js
 const STRICT_TRIGGERS = process.env.LOOSE_TRIGGERS !== "true";
 const etNowMinutes = () => {
   const [h, m] = new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour12: false, hour: "2-digit", minute: "2-digit" }).split(":").map(Number);
   return (h % 24) * 60 + m;
 };
-const MAX_SPREAD_SHARE_OF_LOSS = 0.4;
-const MAX_SPREAD_PCT_OF_PREMIUM = 6; // of the entry price; the option stop is -10% // of the per-trade loss limit
-const INTRADAY_RISK_PCT = 1; // % of the account a same-day trade may lose at its stop
-const LAST_FLAT_BY_CLOSE_ENTRY_MIN = 15 * 60; // ET minutes; flat-by-close contracts are not opened after this
-const REENTRY_COOLDOWN_MIN = 45; // no re-entry on a just-exited symbol without a newer idea
+// MAX_SPREAD_SHARE_OF_LOSS lives in entryRules.js (pinned by tests/rules.contract.test.js).
+// MAX_SPREAD_PCT_OF_PREMIUM lives in entryRules.js; // of the entry price; the option stop is -10% // of the per-trade loss limit
+// INTRADAY_RISK_PCT lives in entryRules.js (pinned by tests/rules.contract.test.js).
+// LAST_FLAT_BY_CLOSE_ENTRY_MIN lives in entryRules.js (pinned by tests/rules.contract.test.js).
+// REENTRY_COOLDOWN_MIN lives in entryRules.js (pinned by tests/rules.contract.test.js).
 /* 2 -> 4 on 2026-10-13. At 2 it stopped the fade playbook on the one name that
    was active: NVDA had used both entries by 12:25, and the two fades derived
    after that (13:12 at $227.54 and 14:27 at $227.70, each aiming ~$0.85 lower)
    were refused as churn while NVDA went to $226.93. The 45-minute cooldown
    after an exit still applies, so this is at most one entry an hour. */
-const MAX_ENTRIES_PER_SYMBOL_DAY = 4;
+// MAX_ENTRIES_PER_SYMBOL_DAY lives in entryRules.js (pinned by tests/rules.contract.test.js).
 const MAX_BATCH_AGE_MIN = 20; // non-conditional ideas: reject a batch older than this
 const DEFAULT_TRIGGER_STALE_MIN = 120; // conditional ideas with no staleMinutes of their own
 const LOOKBACK_HOURS = 24; // how far back to search for each symbol's own latest idea
@@ -376,12 +381,7 @@ const ATTACH_STOPS = !isPaperSandbox() || process.env.PAPER_ATTACH_STOPS === "tr
    until the market comes to it, which costs some fills and keeps the rest;
    autoexit withdraws an entry that has not filled in 5 minutes. Set
    ENTRY_AT_ASK=true to go back to paying the ask. */
-const payPrice = (leg) => {
-  const bid = Number(leg?.bid), ask = Number(leg?.ask);
-  if (process.env.ENTRY_AT_ASK === "true") return ask > 0 ? ask : leg?.mid;
-  if (bid > 0 && ask > 0) return Math.round(((bid + ask) / 2) * 100) / 100;
-  return ask > 0 ? ask : leg?.mid;
-};
+// payPrice lives in entryRules.js (default: the ask).
 
 // Attempt one specific contract. Returns { ok: true, orderResult, vet } or
 // { ok: false, error } — never throws, so the caller can try alternates.
@@ -704,7 +704,7 @@ async function run(req) {
        except a false line in the report. */
     if (!dryRun) {
       const clock = await getClock();
-      if (clock.state !== "open") {
+      if (!entriesAllowed(clock.state)) {
         return NextResponse.json({ dryRun, marketClosed: true, marketState: clock.state, candidateCount: 0, placed: 0, skipped: 0, results: [] });
       }
     }
@@ -1023,65 +1023,16 @@ async function run(req) {
          before that level is reached. Only same-day trades are refused outright
          when one contract is too much. */
       if (idea.vehicle === "OPTION") {
-        const intradayIdea = SAME_DAY.has(idea.strategy);
-        const delta = Math.abs(Number(idea.leg?.delta)) || 0.6;
-        const stopDist = Math.abs(Number(idea.entryPrice) - Number(idea.invalidation));
-        const spread = Math.max(0, (Number(idea.leg?.ask) || 0) - (Number(idea.leg?.bid) || 0));
-        /* Risk per contract is the loss at whichever stop fires FIRST. Since
-           2026-10-14 an option is sold at -HARD_LOSS_PCT of its entry price
-           (exitRules.js), which on most contracts comes long before the idea's
-           own invalidation. Sizing off the invalidation alone bought ONE HOOD
-           10/23 $105 put ($3.75): its invalidation implied $127 a contract,
-           while the option stop caps it at about $38 — room for six inside the
-           same 1% budget. The win side scales with it, so the win/loss ratio
-           the option stop was built for is unchanged; only the size is. */
-        const premium = Number(payPrice(idea.leg)) || 0;
-        const ideaStopRisk = (delta * stopDist + spread) * 100;
-        /* The option stop for THIS contract, from its stock's own history
-           (swingLib.js): wide for a name that swings, tight for one that does
-           not. No profile yet -> the flat HARD_LOSS_PCT. */
-        const optType = idea.action === "PUT" ? "put" : "call";
-        const stopPct = optionStopPct({ optionType: optType, profile: profileFor(idea.symbol), price: idea.entryPrice, delta, premium }) ?? HARD_LOSS_PCT.OPTION;
-        const optionStopRisk = premium > 0 && stopPct ? (premium * (stopPct / 100) + spread) * 100 : Infinity;
-        const riskPer = Math.min(ideaStopRisk, optionStopRisk);
-        idea.stopPct = stopPct;
-        const budget = (ACCOUNT_SIZE * INTRADAY_RISK_PCT) / 100;
-        if (!(riskPer > 0)) { results.push({ ...tag, placed: false, reason: "Cannot size this trade: no usable stop distance." }); continue; }
-        let n = Math.floor(budget / riskPer);
-        if (n < 1) {
-          if (intradayIdea && riskPer > budget * 1.5) {
-            results.push({ ...tag, placed: false, reason: `One contract would lose about $${riskPer.toFixed(0)} at the stop — over the $${(budget * 1.5).toFixed(0)} most a same-day trade may risk (${INTRADAY_RISK_PCT}% of the account, with half again of leeway).` });
-            continue;
-          }
-          n = 1;
-        }
-        const perContract = (Number(payPrice(idea.leg)) || 0) * 100;
-        if (perContract > 0) n = Math.max(1, Math.min(n, Math.floor((ACCOUNT_SIZE * OPTION_HARD_PCT) / perContract) || 1));
-        /* The spread is paid the moment the order fills: bought at the ask,
-           worth the bid. GOOGL 11/6 $355c was bought on 2026-10-12 at $14.55
-           against a $13.60 bid — down $95 on arrival, against a $100 loss
-           limit, so the first tick lower would sell it for the spread alone.
-           Wide-spread orders used to be waved through ("nothing to protect in a
-           paper account"); with honest fills and a hard loss limit that is a
-           guaranteed loser. An entry may spend at most 40% of the loss limit on
-           the spread. */
-        const spreadCost = spread * 100 * n;
-        /* And in PERCENT of the premium: the option is sold at -10% of its
-           entry price (exitRules HARD_LOSS_PCT), and it is worth the bid the
-           moment it fills, so a spread of 8% would put it most of the way to
-           that stop on arrival. HOOD 10/23 $105p on 2026-10-14: $4.10 paid,
-           $3.90 bid, -4.9% before the stock moved. */
-        const entryPx = Number(payPrice(idea.leg)) || 0;
-        if (entryPx > 0 && (spread / entryPx) * 100 > MAX_SPREAD_PCT_OF_PREMIUM) {
-          results.push({ ...tag, placed: false, reason: `Spread is ${((spread / entryPx) * 100).toFixed(1)}% of the premium ($${idea.leg?.bid}/$${idea.leg?.ask}) — over ${MAX_SPREAD_PCT_OF_PREMIUM}%, so the position would open most of the way to its ${HARD_LOSS_PCT.OPTION}% stop.` });
-          continue;
-        }
-        if (spreadCost > budget * MAX_SPREAD_SHARE_OF_LOSS) {
-          results.push({ ...tag, placed: false, reason: `Spread too wide: buying at $${idea.leg?.ask} against a $${idea.leg?.bid} bid costs $${spreadCost.toFixed(0)} on arrival — over ${(MAX_SPREAD_SHARE_OF_LOSS * 100).toFixed(0)}% of the $${budget.toFixed(0)} a trade may lose.` });
-          continue;
-        }
-        idea.sizing = { ...(idea.sizing || {}), contracts: n, riskAtStop: Number((riskPer * n).toFixed(0)) };
-        tag.sizedByRisk = `${n} contract${n === 1 ? "" : "s"}, about $${(riskPer * n).toFixed(0)} at risk to the stop (option stop ${stopPct}%)`;
+        // entryRules.sizeOptionEntry: contracts from the stop that fires first,
+        // the 15% position cap, and the spread checks. Tested on its own.
+        const sz = sizeOptionEntry({
+          accountSize: ACCOUNT_SIZE, leg: idea.leg, entryPrice: idea.entryPrice, invalidation: idea.invalidation,
+          action: idea.action, strategy: idea.strategy, profile: profileFor(idea.symbol),
+        });
+        idea.stopPct = sz.stopPct;
+        if (!sz.ok) { results.push({ ...tag, placed: false, reason: sz.reason }); continue; }
+        idea.sizing = { ...(idea.sizing || {}), contracts: sz.contracts, riskAtStop: sz.riskAtStop };
+        tag.sizedByRisk = `${sz.contracts} contract${sz.contracts === 1 ? "" : "s"}, about $${sz.riskAtStop} at risk to the stop (option stop ${sz.stopPct}%)`;
       }
 
       /* Re-check the position cap at the price actually being paid. Sizing
