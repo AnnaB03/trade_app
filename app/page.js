@@ -1150,40 +1150,43 @@ function Ideas() {
   // gets a fresh ref and still loads normally.
   const bootedRef = useRef(false);
 
+  /* The tab shows the automation's own latest refresh (/api/ideas/latest,
+     read from the ledger, free) and re-reads it every minute. It used to make
+     its own billed call on open, on an old browser-saved six-symbol list and
+     its own schedule, so it never showed what the automation trades from.
+     "Refresh now" asks for a new refresh of the SAME list the schedule uses
+     (symbols=auto) — one billed call. */
+  const show = useCallback((d, { fresh } = {}) => {
+    const list = d.ideas || [];
+    setIdeas(list);
+    setAsOf(d.timestamp ? new Date(d.timestamp).getTime() : Date.now());
+    setErr("");
+    if (fresh) notifyGoodIdeas(list);
+  }, []);
+  const readLatest = useCallback(async () => {
+    try { show(await getJSON("/api/ideas/latest")); } catch (e) { setErr(e.message); }
+  }, [show]);
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      let syms = DEFAULT_SYMS;
-      try {
-        const saved = JSON.parse(localStorage.getItem("cockpit_watch"));
-        if (Array.isArray(saved) && saved.length) syms = saved;
-      } catch {}
-      const d = await getJSON(`/api/suggestions?symbols=${syms.join(",")}&account=${readAccount()}`);
-      setIdeas(d.ideas || []);
-      setAsOf(d.timestamp ? new Date(d.timestamp).getTime() : Date.now());
-      setErr("");
-      notifyGoodIdeas(d.ideas);
+      show(await getJSON(`/api/suggestions?symbols=auto&account=${readAccount()}`), { fresh: true });
     } catch (e) {
       setErr(e.message);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [show]);
 
   // Load once on open. After that, refresh ONLY on the click of Refresh or at
   // the next scheduled slot above — no interval polling. Market fully closed
   // (weekend/holiday) suspends scheduling entirely until it reopens.
   useEffect(() => {
-    if (asOf == null) {
-      if (bootedRef.current) return;
-      bootedRef.current = true;
-      load();
-      return;
-    }
-    if (!clock || clock.state === "closed") return;
-    const t = setTimeout(load, msUntilNextIdeasSlot());
-    return () => clearTimeout(t);
-  }, [clock?.state, asOf, load]);
+    if (bootedRef.current) return;
+    bootedRef.current = true;
+    readLatest();
+    const t = setInterval(readLatest, 60000);
+    return () => clearInterval(t);
+  }, [readLatest]);
 
   // Bigger bets aren't hidden or converted to shares anymore — they're the
   // same real CALL/PUT ideas, just sorted below anything that actually fits
@@ -1224,7 +1227,7 @@ function Ideas() {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
         <span className="label" style={{ margin: 0 }}>
           <span className="live" style={closed ? { background: "var(--faint)" } : undefined} />
-          Ideas{asOf ? <span className="muted" style={{ textTransform: "none", letterSpacing: 0 }}> · as of {new Date(asOf).toLocaleTimeString()} · auto-refreshes {IDEAS_SCHEDULE_LABEL}</span> : ""}
+          Ideas{asOf ? <span className="muted" style={{ textTransform: "none", letterSpacing: 0 }}> · as of {new Date(asOf).toLocaleTimeString()} · from the automation's refresh, every 30 min (9:21, 9:42, then :12 and :42 to 14:42)</span> : ""}
         </span>
         <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
           <label className="mono muted" style={{ fontSize: 11, display: "flex", gap: 4, alignItems: "center" }} title="Ideas are sized for this account: which cheaper names get scanned, whether a contract fits (hard cap 10%), and how many shares (1% risk to the stop). Takes effect on the next refresh.">
@@ -1234,7 +1237,7 @@ function Ideas() {
           </label>
           <AlertsToggle />
           <button className="chip" onClick={() => setShowPro((v) => !v)}>{showPro ? "Plain view" : "Pro view"}</button>
-          <button className="btn" onClick={load} disabled={loading}>{loading ? "Loading..." : "Refresh"}</button>
+          <button className="btn" onClick={load} disabled={loading}>{loading ? "Refreshing (about 90s)…" : "Refresh now"}</button>
         </div>
       </div>
       {err && <div className="err">{err}</div>}
