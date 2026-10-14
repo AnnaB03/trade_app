@@ -38,17 +38,19 @@ const ACCOUNT = 25000;
 
 /* ---------- 1. Money at risk ---------- */
 
-test("RULE: one trade may lose at most 1% of the account ($250 at $25K) — 2026-10-08, the user's '$100' rule at $10K", () => {
-  assert.equal(exits.MAX_LOSS_PCT, 1);
-  assert.equal(exits.exitConfig(ACCOUNT).maxLossUsd, 250);
-  assert.equal(entry.RISK_PER_TRADE_PCT, 1);
-  const f = { vehicle: "OPTION", entryPremium: 2, markNow: 1.37, gainPct: -31.5, gainUsd: -252, peakGainPct: 0, peakGainUsd: 0, peakMark: 2 };
-  assert.equal(exits.decideProfitExit(exits.exitConfig(ACCOUNT), f).tag, "max_loss", "a position down $252 is sold");
+/* 1% -> 2% on 2026-10-14, the owner choosing "2%, and a 10% daily halt", after
+   the 20% option stop had halved the contracts bought for the same $250. */
+test("RULE: one trade may lose at most 2% of the account ($500 at $25K) — 2026-10-08 at 1%, 2% since 2026-10-14", () => {
+  assert.equal(exits.MAX_LOSS_PCT, 2);
+  assert.equal(exits.exitConfig(ACCOUNT).maxLossUsd, 500);
+  assert.equal(entry.RISK_PER_TRADE_PCT, 2);
+  const f = { vehicle: "OPTION", entryPremium: 2, markNow: 1.37, gainPct: -31.5, gainUsd: -502, peakGainPct: 0, peakGainUsd: 0, peakMark: 2 };
+  assert.equal(exits.decideProfitExit(exits.exitConfig(ACCOUNT), f).tag, "max_loss", "a position down $502 is sold");
 });
 
-test("RULE: the day stops at a loss of 5% of the account ($1,250) — the one halt kept on 2026-10-13", () => {
-  assert.equal(risk.DAILY_LOSS_LIMIT_PCT, 5);
-  assert.equal(risk.planLimits(ACCOUNT).lossLimitUsd, 1250);
+test("RULE: the day stops at a loss of 10% of the account ($2,500) — the one halt kept on 2026-10-13; 5% until 2026-10-14", () => {
+  assert.equal(risk.DAILY_LOSS_LIMIT_PCT, 10);
+  assert.equal(risk.planLimits(ACCOUNT).lossLimitUsd, 2500);
 });
 
 test("RULE: one account size for every rule, read from ACCOUNT_SIZE", () => {
@@ -93,13 +95,14 @@ test("RULE: same-day contracts are not opened after 15:00 ET", () => {
 const hoodLeg = { bid: 3.65, ask: 3.75, delta: -0.4381 };
 const qqqProfile = { up: { p90: 0.30 }, down: { p90: 0.28 } };
 
-test("RULE: contracts come from the stop that fires FIRST, inside 1% of the account — 2026-10-14, 'why only 1 option for HOOD'", () => {
-  // Flat 20% option stop (10% until 2026-10-14): $75 + $10 spread = $85 a contract -> 2.
+test("RULE: contracts come from the stop that fires FIRST, inside 2% of the account — 2026-10-14, 'why only 1 option for HOOD'", () => {
+  // Flat 20% option stop (10% until 2026-10-14): $75 + $10 spread = $85 a contract;
+  // $500 of risk (2% since 2026-10-14) -> 5, the same 5 the 10% stop bought at 1%.
   const flat = entry.sizeOptionEntry({ accountSize: ACCOUNT, leg: hoodLeg, entryPrice: 104.82, invalidation: 107.5, action: "PUT", strategy: undefined });
   assert.equal(flat.ok, true);
   assert.equal(flat.stopPct, 20);
-  assert.equal(flat.contracts, 2);
-  assert.ok(flat.riskAtStop <= 250, `risk ${flat.riskAtStop} must stay inside $250`);
+  assert.equal(flat.contracts, 5);
+  assert.ok(flat.riskAtStop <= 500, `risk ${flat.riskAtStop} must stay inside $500`);
 });
 
 /* Floor 8 -> 20 and the flat stop 10 -> 20 on 2026-10-14, the owner: "lets not
@@ -111,7 +114,7 @@ test("RULE: each option's stop comes from its own stock's swings, 20% to 35% —
   assert.equal(swing.STOP_PCTILE, "p90");
   const qqq = entry.sizeOptionEntry({ accountSize: ACCOUNT, leg: { bid: 5.21, ask: 5.25, delta: -0.48 }, entryPrice: 736, invalidation: 740.6, action: "PUT", profile: qqqProfile });
   assert.ok(qqq.stopPct > 13.9, `QQQ's stop ${qqq.stopPct}% must sit outside the 13.9% dip of 2026-10-14`);
-  assert.ok(qqq.riskAtStop <= 250);
+  assert.ok(qqq.riskAtStop <= 500);
 });
 
 test("RULE: never more than the 15% position cap, however cheap the risk", () => {
@@ -121,9 +124,10 @@ test("RULE: never more than the 15% position cap, however cheap the risk", () =>
 
 test("RULE: a same-day trade is refused when one contract risks more than 1.5x the budget; a multi-day one takes one contract", () => {
   const big = { bid: 39.9, ask: 40.0, delta: 0.9 };
-  const sameDay = entry.sizeOptionEntry({ accountSize: ACCOUNT, leg: big, entryPrice: 500, invalidation: 495, action: "CALL", strategy: "intraday" });
+  // $40 contract, delta 0.9, $12 to the stop: about $1,090 a contract, over 1.5x the $500 budget.
+  const sameDay = entry.sizeOptionEntry({ accountSize: ACCOUNT, leg: big, entryPrice: 500, invalidation: 488, action: "CALL", strategy: "intraday" });
   assert.equal(sameDay.ok, false);
-  const multiDay = entry.sizeOptionEntry({ accountSize: ACCOUNT, leg: big, entryPrice: 500, invalidation: 495, action: "CALL" });
+  const multiDay = entry.sizeOptionEntry({ accountSize: ACCOUNT, leg: big, entryPrice: 500, invalidation: 488, action: "CALL" });
   assert.equal(multiDay.ok, true);
   assert.equal(multiDay.contracts, 1);
 });
@@ -177,8 +181,8 @@ test("RULE: learning mode keeps the safety core — same-day entries end at 15:3
   assert.equal(entry.LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY, 8);
   assert.equal(entry.lateEntryRefused({ flatByClose: true, etMinutes: 15 * 60 + 10, learning: true }), false, "15:00-15:30 is an override, not a refusal");
   assert.equal(entry.lateEntryRefused({ flatByClose: true, etMinutes: 15 * 60 + 30, learning: true }), true);
-  // The losses are still capped: the 1% max-loss exit and the position cap are unchanged.
-  assert.equal(entry.RISK_PER_TRADE_PCT, 1);
+  // The losses are still capped: the max-loss exit (2% since 2026-10-14) and the position cap.
+  assert.equal(entry.RISK_PER_TRADE_PCT, 2);
   assert.equal(sizing.OPTION_HARD_PCT, 0.15);
 });
 
@@ -338,7 +342,7 @@ test("RULE: the edge throttle — a losing recent record cuts size to 1/2 or 1/4
   const leg = { bid: 3.65, ask: 3.75, delta: -0.4381 };
   const full = entry.sizeOptionEntry({ accountSize: ACCOUNT, leg, entryPrice: 104.82, invalidation: 107.5, action: "PUT" });
   const half = entry.sizeOptionEntry({ accountSize: ACCOUNT, leg, entryPrice: 104.82, invalidation: 107.5, action: "PUT", riskMult: 0.5 });
-  assert.ok(half.contracts < full.contracts && half.riskAtStop <= 125 + 1, `half ${half.contracts}/${half.riskAtStop} vs full ${full.contracts}`);
+  assert.ok(half.contracts < full.contracts && half.riskAtStop <= 250 + 1, `half ${half.contracts}/${half.riskAtStop} vs full ${full.contracts}`);
 });
 
 test("RULE: same-day ideas are asked for 1.8x reward to risk at the trigger — 2026-10-14", () => {

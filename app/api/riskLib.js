@@ -33,7 +33,10 @@ import { notifyHalt } from "./notifyLib.js";
 
 export const HALT_KEY = "trading_halt";
 const pct = (name, dflt) => { const n = Number(process.env[name]); return Number.isFinite(n) && n >= 0 && process.env[name] !== undefined && process.env[name] !== "" ? n : dflt; };
-export const DAILY_LOSS_LIMIT_PCT = pct("DAILY_LOSS_LIMIT_PCT", 5);
+/* 5 -> 10 ($2,500 at $25K, five full losers at 2%): 2026-10-14, the owner, choosing "2%, and a 10% daily halt": the 20% option
+   stop had halved the contracts bought for the same $250, and this keeps the
+   contract counts while the stop gives the price room. */
+export const DAILY_LOSS_LIMIT_PCT = pct("DAILY_LOSS_LIMIT_PCT", 10);
 export const DAILY_GOAL_PCT = pct("DAILY_GOAL_PCT", 1);
 export const DAILY_PROFIT_LOCK_PCT = pct("DAILY_PROFIT_LOCK_PCT", 2);
 export const DAY_GIVEBACK_PCT = pct("DAY_GIVEBACK_PCT", 50);

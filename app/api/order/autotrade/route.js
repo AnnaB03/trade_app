@@ -739,7 +739,7 @@ async function run(req) {
        closed trades to be judged on. EDGE_GATE=false turns it off. */
     const edgeBaseline = readBaseline();
     const verdicts = process.env.EDGE_GATE !== "false"
-      ? playbookVerdicts(closedTrades(listJournal().filter((r) => !isLegacy(r, edgeBaseline))), { rUsd: ACCOUNT_SIZE * 0.01 })
+      ? playbookVerdicts(closedTrades(listJournal().filter((r) => !isLegacy(r, edgeBaseline))), { rUsd: (ACCOUNT_SIZE * INTRADAY_RISK_PCT) / 100 })
       : null;
     const openJournal = listJournal().filter((r) => r.status === "open");
     const openOccs = new Set(openJournal.filter((r) => r.occ).map((r) => r.occ));

@@ -23,8 +23,8 @@ const noBaseline = { freshStartAt: null, freshStartMs: 0 };
 const L = risk.planLimits(10000);
 
 test("planLimits: the plan in dollars for a $10K account", () => {
-  assert.deepEqual({ loss: L.lossLimitUsd, goal: L.goalUsd, lock: L.profitLockUsd, streak: L.maxStreak, giveback: L.givebackPct }, { loss: 500, goal: 100, lock: 200, streak: 3, giveback: 50 });
-  assert.equal(risk.dailyLossLimitUsd(10000), 500);
+  assert.deepEqual({ loss: L.lossLimitUsd, goal: L.goalUsd, lock: L.profitLockUsd, streak: L.maxStreak, giveback: L.givebackPct }, { loss: 1000, goal: 100, lock: 200, streak: 3, giveback: 50 }); // daily loss 10% since 2026-10-14
+  assert.equal(risk.dailyLossLimitUsd(10000), 1000);
   assert.equal(risk.dailyLossLimitUsd(undefined), 0, "no account, no limit");
 });
 
@@ -54,9 +54,9 @@ const ev = (day, stored = null) => risk.evaluateHalt({ stored, day, limits: L, t
 const D = (o) => ({ realized: 0, peak: 0, streak: 0, closes: 0, wins: 0, losses: 0, ...o });
 
 test("daily_loss: trips at the limit, not before, and says why", () => {
-  assert.deepEqual(ev(D({ realized: -499 })), { halted: false });
-  const v = ev(D({ realized: -500 }));
-  assert.equal(v.kind, "daily_loss"); assert.ok(v.fresh); assert.match(v.reason, /\$500 daily loss limit/);
+  assert.deepEqual(ev(D({ realized: -999 })), { halted: false });
+  const v = ev(D({ realized: -1000 }));
+  assert.equal(v.kind, "daily_loss"); assert.ok(v.fresh); assert.match(v.reason, /\$1000 daily loss limit/);
 });
 
 test("loss_streak: three in a row stops the day even when the dollars are small", () => {
@@ -99,7 +99,7 @@ test("a stored automatic halt holds for its day and lapses the next; a manual on
 
 test("a lapsed halt does not hide today's own figures", () => {
   const stored = { halted: true, kind: "profit_lock", day: "2026-01-01", reason: "y", since: "x" };
-  const v = ev(D({ realized: -600 }), stored);
+  const v = ev(D({ realized: -1100 }), stored);
   assert.equal(v.kind, "daily_loss"); assert.ok(v.fresh); assert.ok(v.expired);
 });
 
@@ -110,15 +110,15 @@ test("a rule set to 0% is off", () => {
 
 test("tradingHalt: records a fresh halt with its time, clears a lapsed one, and the manual switch round-trips", () => {
   assert.equal(risk.tradingHalt({ accountSize: 10000, journal: [] }).halted, false);
-  assert.equal(risk.tradingHalt({ accountSize: 10000, journal: [closed(-300), closed(-190)] }).halted, false, "-$490 is inside the line");
-  const tripped = risk.tradingHalt({ accountSize: 10000, journal: [closed(-300), closed(-250)] });
+  assert.equal(risk.tradingHalt({ accountSize: 10000, journal: [closed(-600), closed(-390)] }).halted, false, "-$990 is inside the line");
+  const tripped = risk.tradingHalt({ accountSize: 10000, journal: [closed(-600), closed(-500)] });
   assert.equal(tripped.kind, "daily_loss");
-  assert.equal(tripped.day.realized, -550);
-  assert.equal(tripped.lossToday, -550, "older field name still answered");
-  assert.equal(tripped.limits.lossLimitUsd, 500);
+  assert.equal(tripped.day.realized, -1100);
+  assert.equal(tripped.lossToday, -1100, "older field name still answered");
+  assert.equal(tripped.limits.lossLimitUsd, 1000);
   assert.equal(tripped.since, risk.readHalt().since, "the tripping call reports the recorded time");
   const tomorrow = new Date(Date.now() + 36 * 3600000);
-  assert.equal(risk.tradingHalt({ accountSize: 10000, journal: [closed(-300), closed(-250)], now: tomorrow }).halted, false);
+  assert.equal(risk.tradingHalt({ accountSize: 10000, journal: [closed(-600), closed(-500)], now: tomorrow }).halted, false);
   assert.equal(risk.readHalt(), null);
   risk.haltTrading("earnings week");
   assert.equal(risk.tradingHalt({ accountSize: 10000, journal: [] }).reason, "earnings week");

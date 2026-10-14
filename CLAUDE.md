@@ -12,8 +12,8 @@ learn from every single contract or trade."
 - The safety core still refuses:
   - paper only;
   - the regular session only;
-  - the daily loss halt;
-  - the 1% max-loss exit and the option stop;
+  - the daily loss halt (10%, $2,500);
+  - the 2% max-loss exit ($500) and the option stop (20% minimum);
   - the 15% position, 20% per-symbol and total-capital caps;
   - the idea's trigger has not fired;
   - price is already through the invalidation, or already at the target;

@@ -93,7 +93,10 @@ export const TRAIL_GIVEBACK_PCT_LARGE = 15;
 // Absolute ceiling, separate from the trail: a position up this much is
 // banked outright rather than risking a gap on the way back down.
 export const HARD_TAKE_PROFIT_PCT = { OPTION: 150, SHARES: 60 };
-export const MAX_LOSS_PCT = 1; // % of the account one trade may lose before it is sold
+/* 1 -> 2 with entryRules.RISK_PER_TRADE_PCT: 2026-10-14, the owner, choosing "2%, and a 10% daily halt": the 20% option
+   stop had halved the contracts bought for the same $250, and this keeps the
+   contract counts while the stop gives the price room. */
+export const MAX_LOSS_PCT = 2; // % of the account one trade may lose before it is sold
 /* The loser is cut at the same scale the winners are banked. Set 2026-10-14
    at the user's call ("lets implement option 1"). The profit rules take a
    5-7% move in the option; the loss side was the account rule above, 1% of

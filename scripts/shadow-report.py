@@ -40,7 +40,7 @@ def account_size():
     return 10000.0
 
 
-TARGET_PCT, MAX_LOSS = 7.0, account_size() * 0.01
+TARGET_PCT, MAX_LOSS = 7.0, account_size() * 0.02  # 2% since 2026-10-14 (entryRules.RISK_PER_TRADE_PCT)
 
 
 def token():

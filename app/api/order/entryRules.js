@@ -11,7 +11,10 @@ import { OPTION_HARD_PCT } from "../sizingLib.js";
 import { HARD_LOSS_PCT } from "./exitRules.js";
 import { optionStopPct } from "../swingLib.js";
 
-export const RISK_PER_TRADE_PCT = 1;            // of the account, lost at the stop
+/* 1 -> 2: 2026-10-14, the owner, choosing "2%, and a 10% daily halt": the 20% option
+   stop had halved the contracts bought for the same $250, and this keeps the
+   contract counts while the stop gives the price room. */
+export const RISK_PER_TRADE_PCT = 2;            // of the account, lost at the stop ($500 at $25K)
 export const MIN_CONVICTION = 2;
 export const MIN_REWARD_RISK = 1.5;
 export const MAX_SYMBOL_EXPOSURE_PCT = 20;      // of the account, one underlying

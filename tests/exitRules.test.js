@@ -26,9 +26,9 @@ test("exitConfig scales the dollar bars with the account", () => {
   const ref = exitConfig(99000);
   assert.equal(ref.eodTakeProfitUsd, 200);
   assert.equal(ref.trailTightenUsd, 2000);
-  assert.equal(ref.maxLossUsd, 990);
+  assert.equal(ref.maxLossUsd, 1980); // 2% since 2026-10-14
   assert.ok(Math.abs(CFG.eodTakeProfitUsd - 20.2) < 0.01, "$200 at $99K is ~$20 at $10K");
-  assert.equal(CFG.maxLossUsd, 100, "1% of $10K");
+  assert.equal(CFG.maxLossUsd, 200, "2% of $10K (1% until 2026-10-14)");
   assert.equal(exitConfig(undefined).account, 99000, "no account = the reference account");
 });
 
@@ -229,7 +229,7 @@ test("premium stop: an option is cut at -20% of its entry price (10% until 2026-
   assert.equal(cut?.tag, "premium_stop");
   assert.equal(decideProfitExit(cfg, { ...base, markNow: 4.95, gainPct: -10.3, gainUsd: -57 }), null, "inside the stop, nothing fires");
   // The account rule still wins when it is the larger loss, as on a multi-contract position.
-  const big = decideProfitExit(cfg, { ...base, markNow: 4.95, gainPct: -10.3, gainUsd: -456 });
+  const big = decideProfitExit(cfg, { ...base, markNow: 4.95, gainPct: -10.3, gainUsd: -560 }); // past $500 = 2% of $25K
   assert.equal(big?.tag, "max_loss");
   // Shares are not held to a percentage of their price.
   assert.equal(decideProfitExit(cfg, { vehicle: "SHARES", entryPremium: 355.73, markNow: 320, gainPct: -10.1, gainUsd: -143, peakGainPct: 0, peakGainUsd: 0, peakMark: 355.73 }), null);
