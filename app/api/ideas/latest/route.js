@@ -14,8 +14,20 @@ const BATCH_WINDOW_MS = 30 * 60000; // one refresh slot
 
 export async function GET() {
   try {
-    const rows = listIdeas().filter((i) => i.strategy !== "contrarian" && i.strategy !== "fade_scan");
-    if (!rows.length) return NextResponse.json({ ideas: [], timestamp: null });
+    const all = listIdeas();
+    /* The market analyst's ideas (strategy "news", newsIdeasLib.js): today's,
+       newest per symbol and direction, shown in their own section. */
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+    const dayOf = (t) => new Date(t).toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+    const newsSeen = new Set(), news = [];
+    for (const i of all) {
+      if (i.strategy !== "news" || dayOf(i.createdAt) !== today) continue;
+      const k = `${i.symbol}|${i.action}`;
+      if (newsSeen.has(k)) continue;
+      newsSeen.add(k); news.push(i);
+    }
+    const rows = all.filter((i) => i.strategy !== "contrarian" && i.strategy !== "fade_scan" && i.strategy !== "news");
+    if (!rows.length) return NextResponse.json({ ideas: [], timestamp: null, news });
     const newest = new Date(rows[0].createdAt).getTime(); // listIdeas is newest first
     /* Two refreshes can land minutes apart (a scheduled one and a click), and
        each covers its own list, so a fixed window merged them into duplicates.
@@ -28,7 +40,7 @@ export async function GET() {
       if (seen.has(k)) continue;
       seen.add(k); ideas.push(i);
     }
-    return NextResponse.json({ ideas, timestamp: new Date(newest).toISOString(), count: ideas.length, source: "ledger" });
+    return NextResponse.json({ ideas, news, timestamp: new Date(newest).toISOString(), count: ideas.length, source: "ledger" });
   } catch (e) {
     return NextResponse.json({ error: String(e.message || e) }, { status: 502 });
   }

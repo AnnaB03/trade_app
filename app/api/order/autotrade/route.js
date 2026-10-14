@@ -22,6 +22,7 @@ import { appendIdea } from "../../store";
 import { selectionVerdict } from "../../selectionLib";
 import { markActivity } from "../../activityLib";
 import { recordShadowEntry } from "../../shadowLib";
+import { shortDatedContract } from "../../contractLib";
 import { tradingHalt } from "../../riskLib";
 import { accountSize } from "../../accountLib";
 import { closedTrades, playbookVerdicts, edgeRiskMultiplier } from "../../edgeLib";
@@ -557,32 +558,8 @@ async function placeShares(idea, { dryRun }) {
    close, because a failed breakout resolves in minutes or not at all. */
 const FADE_DTE_MIN = 1, FADE_DTE_MAX = 4, FADE_TARGET_DELTA = 0.6;
 
-async function fadeContract(symbol, type, price) {
-  try {
-    const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
-    const dte = (e) => Math.round((Date.parse(e + "T00:00:00Z") - Date.parse(today + "T00:00:00Z")) / 86400000);
-    const ex = await tradier(`/markets/options/expirations?symbol=${encodeURIComponent(symbol)}&includeAllRoots=true`, { timeoutMs: 8000 });
-    // Later first: the same move costs less decay a few days out.
-    const exps = asArray(ex?.expirations?.date).filter((e) => dte(e) >= FADE_DTE_MIN && dte(e) <= FADE_DTE_MAX).sort().reverse();
-    for (const exp of exps) {
-      const cd = await tradier(`/markets/options/chains?symbol=${encodeURIComponent(symbol)}&expiration=${encodeURIComponent(exp)}&greeks=true`, { timeoutMs: 9000 });
-      const fits = asArray(cd?.options?.option)
-        .filter((o) => o.option_type === type)
-        .map((o) => {
-          const bid = Number(o.bid), ask = Number(o.ask), mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : 0;
-          return { o, bid, ask, mid, delta: Math.abs(Number(o.greeks?.delta) || 0) };
-        })
-        .filter((c) => c.mid > 0 && c.delta >= 0.35 && c.delta <= 0.75 && ((c.ask - c.bid) / c.mid) * 100 <= 10 && c.mid * 100 <= ACCOUNT_SIZE * OPTION_HARD_PCT)
-        .sort((a, b) => Math.abs(a.delta - FADE_TARGET_DELTA) - Math.abs(b.delta - FADE_TARGET_DELTA));
-      if (fits.length) {
-        const c = fits[0];
-        return { expiration: exp, dte: dte(exp), strike: Number(c.o.strike),
-          leg: { occ: c.o.symbol, strike: Number(c.o.strike), bid: c.bid, ask: c.ask, mid: c.mid, delta: c.o.greeks?.delta != null ? Number(c.o.greeks.delta) : null } };
-      }
-    }
-  } catch {}
-  return null;
-}
+// The picker is shared with the news playbook (contractLib.js).
+const fadeContract = (symbol, type) => shortDatedContract(symbol, type, { accountSize: ACCOUNT_SIZE, dteMin: FADE_DTE_MIN, dteMax: FADE_DTE_MAX, targetDelta: FADE_TARGET_DELTA });
 
 async function deriveFades(now = Date.now()) {
   const made = [];
@@ -697,7 +674,7 @@ async function run(req) {
     // Two playbooks share this route and never read each other's ideas: the
     // multi-day AI ideas (no strategy tag) and the intraday ones.
     const asked = params.get("playbook");
-    const playbook = ["intraday", "contrarian", "fade_scan"].includes(asked) ? asked : null;
+    const playbook = ["intraday", "contrarian", "fade_scan", "news"].includes(asked) ? asked : null;
     const derived = playbook === "contrarian" ? await deriveFades() : playbook === "fade_scan" ? await deriveScanFades() : [];
     const all = listIdeas().filter((i) => (playbook ? i.strategy === playbook : !i.strategy));
     const batch = latestPerSymbol(all);
@@ -784,7 +761,7 @@ async function run(req) {
         if (!soft("conviction", why)) { results.push({ ...tag, placed: false, reason: why }); continue; }
       }
       if (verdicts) {
-        const pb = rawIdea.strategy === "intraday" ? "intraday" : rawIdea.strategy === "contrarian" ? "contrarian" : "swing";
+        const pb = ["intraday", "contrarian", "fade_scan", "news"].includes(rawIdea.strategy) ? rawIdea.strategy : "swing";
         // The edge THROTTLE (edgeLib.edgeRiskMultiplier): a losing recent record
         // cuts the size, never to zero. It used to refuse the trade outright.
         const th = edgeRiskMultiplier(verdicts[pb]);
@@ -1248,7 +1225,7 @@ export function GET(req) {
     const u = new URL(req.url);
     let out = res;
     if (u.searchParams.get("playbook") == null) {
-      for (const pb of ["intraday", "contrarian", "fade_scan"]) {
+      for (const pb of ["intraday", "contrarian", "fade_scan", "news"]) {
         const pu = new URL(u);
         pu.searchParams.set("playbook", pb);
         try {

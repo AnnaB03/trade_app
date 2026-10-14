@@ -124,7 +124,7 @@ export const HARD_LOSS_PCT = { OPTION: 20, SHARES: null };
    fade, app/api/fadeLib.js) is one of them, and it is BUILT against the
    multi-day read on its symbol, so the reversal rule would close it the moment
    it opened. */
-export const SAME_DAY_STRATEGIES = new Set(["intraday", "contrarian"]);
+export const SAME_DAY_STRATEGIES = new Set(["intraday", "contrarian", "news"]);
 export const SHORT_DATED_TARGET_PCT = 7; // sell a closeByEod contract outright at this gain
 export const EOD_FLAT_FROM_ET_MIN = 15 * 60 + 45; // closeByEod positions leave from 15:45 ET
 /* Dollar thresholds were tuned on the $99K paper account, where one position

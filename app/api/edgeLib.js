@@ -20,7 +20,11 @@
    verdict: ten trades is a story, not a statistic. Pure functions; the
    /api/edge route feeds them the journal. */
 
-const PLAYBOOK = (r) => (r.strategy === "intraday" ? "intraday" : r.strategy ? "swing" : "manual");
+/* Each same-day playbook under its own name; "ai" (and any other tag) is the
+   multi-day swing playbook. Until 2026-10-14 every non-intraday tag counted as
+   swing, so the fade never had a record of its own in /api/edge or the throttle. */
+const OWN_PLAYBOOKS = new Set(["intraday", "contrarian", "fade_scan", "news"]);
+export const PLAYBOOK = (r) => (OWN_PLAYBOOKS.has(r.strategy) ? r.strategy : r.strategy ? "swing" : "manual");
 const hourET = (iso) => Number(new Date(iso).toLocaleString("en-US", { timeZone: "America/New_York", hour12: false, hour: "2-digit" })) % 24;
 
 // Closed rows with a booked number, oldest close first.
@@ -92,7 +96,7 @@ export function edgeReport(rows, { rUsd, minN = 10, lastN = 20 } = {}) {
    the record has to be earned before it can be judged. */
 export function playbookVerdicts(trades, { rUsd, lastN = 20, minN = 20 } = {}) {
   const out = {};
-  for (const pb of ["swing", "intraday", "manual"]) {
+  for (const pb of ["swing", "intraday", "contrarian", "fade_scan", "news", "manual"]) {
     const mine = trades.filter((t) => PLAYBOOK(t) === pb);
     const recent = mine.slice(-lastN);
     const s = edgeStats(recent, { rUsd });

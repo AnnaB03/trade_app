@@ -1127,6 +1127,8 @@ function IdeaCard({ idea, isLast, asOf, showPro, variant }) {
 
 function Ideas() {
   const [ideas, setIdeas] = useState([]);
+  // The market analyst's ideas (strategy "news"), from /api/ideas/latest only.
+  const [newsIdeas, setNewsIdeas] = useState([]);
   const [asOf, setAsOf] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
@@ -1160,6 +1162,7 @@ function Ideas() {
   const show = useCallback((d, { fresh } = {}) => {
     const list = d.ideas || [];
     setIdeas(list);
+    if (Array.isArray(d.news)) setNewsIdeas(d.news);
     setAsOf(d.timestamp ? new Date(d.timestamp).getTime() : Date.now());
     setErr("");
     if (fresh) notifyGoodIdeas(list);
@@ -1264,6 +1267,16 @@ function Ideas() {
       {biggerIdeas.map((idea, i) => (
         <IdeaCard key={idea.id ?? `${idea.symbol}-big-${i}`} idea={idea} isLast={i === biggerIdeas.length - 1} asOf={asOf} showPro={showPro} />
       ))}
+      <div style={{ margin: "18px 0 10px", paddingTop: 14, borderTop: "1px solid var(--line)" }}>
+        <span className="label" style={{ margin: 0 }}>From the market analyst · news ideas, traded live under the same rules</span>
+        <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+          Written by the risk &amp; market agent from the morning brief, the midday check and the read after each big release. Same-day, sized and stopped like every other trade, and scored separately (playbook &quot;news&quot;). The full reports are in the Team tab.
+        </div>
+      </div>
+      {newsIdeas.map((idea, i) => (
+        <IdeaCard key={idea.id ?? `${idea.symbol}-news-${i}`} idea={idea} isLast={i === newsIdeas.length - 1} asOf={idea.createdAt ? new Date(idea.createdAt).getTime() : asOf} showPro={showPro} />
+      ))}
+      {!newsIdeas.length && <div className="muted" style={{ fontSize: 12.5, marginBottom: 12 }}>None today yet. The analyst proposes a trade only when the news gives a real edge, so most runs have none.</div>}
       {!actionable.length && !loading && (
         <div className="muted">
           {ideas.length ? "Nothing actionable on this refresh — every idea came back WAIT. Check the Watchlist for the reality checks behind that, or Refresh again." : "Click Refresh to get trading ideas from Claude AI"}

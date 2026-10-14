@@ -24,7 +24,7 @@ export const REENTRY_COOLDOWN_MIN = 45;
 export const LAST_FLAT_BY_CLOSE_ENTRY_MIN = 15 * 60; // ET; same-day contracts not opened after 15:00
 export const MAX_SPREAD_PCT_OF_PREMIUM = 6;
 export const MAX_SPREAD_SHARE_OF_LOSS = 0.4;
-export const SAME_DAY = new Set(["intraday", "contrarian", "fade_scan"]);
+export const SAME_DAY = new Set(["intraday", "contrarian", "fade_scan", "news"]); // "news": the analyst's ideas, 2026-10-14
 
 /* ---------- Learning mode (2026-10-14) ----------
    The owner, 2026-10-14: "remove all the blockers that will block you from

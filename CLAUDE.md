@@ -24,6 +24,7 @@ learn from every single contract or trade."
   - a second fade of a stock in a day, or the other side of a stock within 30 minutes;
   - more than 8 entries per stock per day.
 - When nothing is trading, that is the bug. Print every idea's refusal reason and fix the cause.
+- The agent team (`.claude/agents/`, run by `app/api/agentsLib.js`) is read-only and reports in the Team tab. The risk & market agent's trade ideas reach the Cockpit only through the server's checks (`app/api/newsIdeasLib.js`), as playbook `news`.
 - Every agreed rule is in `RULES.md` and pinned by `tests/rules.contract.test.js`. Never push
   red tests; the pre-push hook enforces this.
 - Paper only. No live orders, and nothing touches real money.

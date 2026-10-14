@@ -124,7 +124,7 @@ export function runAgent({ role, mode, labels = [], dateET, timeET, onDone = () 
     const body = out.trim() || `(no report — the agent exited with code ${code})\n\n${err.trim().slice(-2000)}`;
     const header = `<!-- role: ${role} | mode: ${mode} | model: ${model} | started: ${dateET} ${timeET} ET | exit: ${code} -->\n`;
     try { fs.writeFileSync(file, header + body + "\n"); } catch {}
-    onDone({ role, mode, file, code, alerts: alertsIn(body) });
+    onDone({ role, mode, file, code, body, header, alerts: alertsIn(body) });
   };
   child.on("close", finish);
   child.on("error", (e) => { err += String(e?.message || e); finish(-1); });
