@@ -8,6 +8,7 @@ import {
 import Journal, { HALT_EVENT } from "./components/Journal";
 import TrackRecord from "./components/TrackRecord";
 import NewsBoard from "./components/NewsBoard";
+import Team from "./components/Team";
 import { buildOptionStopEstimate } from "./lib/orders";
 
 // Account size the Ideas engine sizes for — per browser, editable in the
@@ -1336,6 +1337,7 @@ export default function Page() {
         <button className={"tab" + (tab === "track" ? " on" : "")} onClick={() => setTab("track")}>Track Record</button>
         <button className={"tab" + (tab === "journal" ? " on" : "")} onClick={() => setTab("journal")}>Journal</button>
         <button className={"tab" + (tab === "ideas" ? " on" : "")} onClick={() => setTab("ideas")}>Ideas</button>
+        <button className={"tab" + (tab === "team" ? " on" : "")} onClick={() => setTab("team")}>Team</button>
       </div>
       {/* Every panel below stays mounted at all times — only display:none
           toggles which one shows. Switching tabs used to unmount/remount
@@ -1350,6 +1352,7 @@ export default function Page() {
       <div hidden={tab !== "track"}><TrackRecord /></div>
       <div hidden={tab !== "journal"}><Journal /></div>
       <div hidden={tab !== "ideas"}><Ideas /></div>
+      <div hidden={tab !== "team"}><Team /></div>
       <div className="foot">
         Informational only — not financial advice. Real-time data requires a funded Tradier brokerage account; without one the feed is delayed.
         Risk figures assume holding to expiration and ignore commissions, assignment, and slippage — confirm in your broker before trading.
