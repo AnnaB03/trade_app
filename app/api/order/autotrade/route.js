@@ -133,10 +133,7 @@ const MAX_TRIGGER_SLIP_PCT = 0.5;
 const MAX_TOTAL_EXPOSURE_PCT = Number(process.env.MAX_TOTAL_EXPOSURE_PCT) > 0 ? Number(process.env.MAX_TOTAL_EXPOSURE_PCT) : 100;
 const ACCOUNT_SIZE = accountSize();
 const DIRECTION_SIGN = { CALL: 1, BUY: 1, PUT: -1, SELL: -1 };
-/* The same-day playbook records its trades and does not place them, until it
-   has shown what it would have done. Set INTRADAY_LIVE=true in .env.local (and
-   restart the server) to let it trade the account again. */
-const INTRADAY_WATCH_ONLY = process.env.INTRADAY_LIVE !== "true";
+// Which playbooks only record (watch-only) is decided in entryRules.isWatchOnly.
 // Playbooks that open and close inside one session: sized by risk, refused
 // outright when one contract is too much, and flat by the close.
 // SAME_DAY lives in entryRules.js

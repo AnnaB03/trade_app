@@ -80,12 +80,16 @@ export function lateEntryRefused({ flatByClose, etMinutes }) {
 
 /* Which playbooks record what they would buy and place nothing.
    fade_scan: always (unproven population). contrarian (the fade): unless
-   FADE_LIVE=true — it went 0 for 2 live. intraday: unless INTRADAY_LIVE=true
-   — switched off 2026-10-08 after the wrong-side-entry losses. */
+   FADE_LIVE=true — it went 0 for 2 live.
+   intraday (same-day ideas): LIVE since 2026-10-14 ~12:00 ET, the owner's
+   call ("lets have those live and learn"). It was watch-only from 2026-10-08,
+   after the wrong-side-entry losses, and recorded 5 for 5 (about +$319,
+   estimated from traded prices) once that bug was fixed. INTRADAY_LIVE=false
+   puts it back to recording only. */
 export function isWatchOnly(strategy, env = process.env) {
   if (strategy === "fade_scan") return true;
   if (strategy === "contrarian") return env.FADE_LIVE !== "true";
-  if (strategy === "intraday") return env.INTRADAY_LIVE !== "true";
+  if (strategy === "intraday") return env.INTRADAY_LIVE === "false";
   return false;
 }
 

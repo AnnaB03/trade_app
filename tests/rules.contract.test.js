@@ -147,10 +147,11 @@ test("RULE: no bullish ideas in an uptrend, no bearish ones in a transitioning t
 
 /* ---------- 5. What trades live, and what only records ---------- */
 
-test("RULE: the fade, the fade scan and the same-day playbook only RECORD — 2026-10-08 and 2026-10-14", () => {
+test("RULE: the fade and the fade scan only RECORD; same-day ideas TRADE — 2026-10-14, 'lets have those live and learn'", () => {
   assert.equal(entry.isWatchOnly("contrarian", {}), true, "FADE_LIVE=true to trade it");
   assert.equal(entry.isWatchOnly("fade_scan", {}), true);
-  assert.equal(entry.isWatchOnly("intraday", {}), true, "INTRADAY_LIVE=true to trade it");
+  assert.equal(entry.isWatchOnly("intraday", {}), false, "live since 2026-10-14; watch-only 2026-10-08 to 10-14");
+  assert.equal(entry.isWatchOnly("intraday", { INTRADAY_LIVE: "false" }), true, "INTRADAY_LIVE=false to record only");
   assert.equal(entry.isWatchOnly(undefined, {}), false, "multi-day ideas trade");
   assert.equal(entry.isWatchOnly("contrarian", { FADE_LIVE: "true" }), false);
 });

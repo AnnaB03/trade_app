@@ -24,7 +24,8 @@ when any test fails.
 | Option stop | from its stock's p90 30-minute adverse move, 8–35%; else 10% | `swingLib.optionStopPct`, `exitRules.HARD_LOSS_PCT` | 2026-10-14 |
 | Spread at entry | at most 6% of the premium and 40% of the loss limit | `entryRules` | 2026-10-12/14 |
 | Selection | no calls in an uptrend, no puts in a transitioning tape, no calls after 14:00, no FDA | `selectionLib` | 2026-10-13 |
-| Watch-only (record, never trade) | the fade, the fade scan, the same-day playbook | `entryRules.isWatchOnly` | 2026-10-08/14 |
+| Watch-only (record, never trade) | the fade, the fade scan | `entryRules.isWatchOnly` | 2026-10-14 |
+| Same-day ideas | trade live (`INTRADAY_LIVE=false` to record only) | `entryRules.isWatchOnly` | 2026-10-14 |
 | Fades | not before 10:00; stop at least 0.5% of the price away | `fadeLib` | 2026-10-14 |
 | Take profits | trail arms at +5% (options), sells on a 25% giveback; 1–3 day contracts at +7%, flat from 15:45 | `exitRules` | 2026-10-07 |
 | Account | margin: proceeds reusable at once; 3 day trades per 5 days under $25K equity | `simBroker` | 2026-10-13 |
