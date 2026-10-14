@@ -1025,7 +1025,18 @@ async function run(req) {
         const delta = Math.abs(Number(idea.leg?.delta)) || 0.6;
         const stopDist = Math.abs(Number(idea.entryPrice) - Number(idea.invalidation));
         const spread = Math.max(0, (Number(idea.leg?.ask) || 0) - (Number(idea.leg?.bid) || 0));
-        const riskPer = (delta * stopDist + spread) * 100;
+        /* Risk per contract is the loss at whichever stop fires FIRST. Since
+           2026-10-14 an option is sold at -HARD_LOSS_PCT of its entry price
+           (exitRules.js), which on most contracts comes long before the idea's
+           own invalidation. Sizing off the invalidation alone bought ONE HOOD
+           10/23 $105 put ($3.75): its invalidation implied $127 a contract,
+           while the option stop caps it at about $38 — room for six inside the
+           same 1% budget. The win side scales with it, so the win/loss ratio
+           the option stop was built for is unchanged; only the size is. */
+        const premium = Number(payPrice(idea.leg)) || 0;
+        const ideaStopRisk = (delta * stopDist + spread) * 100;
+        const optionStopRisk = premium > 0 && HARD_LOSS_PCT.OPTION ? (premium * (HARD_LOSS_PCT.OPTION / 100) + spread) * 100 : Infinity;
+        const riskPer = Math.min(ideaStopRisk, optionStopRisk);
         const budget = (ACCOUNT_SIZE * INTRADAY_RISK_PCT) / 100;
         if (!(riskPer > 0)) { results.push({ ...tag, placed: false, reason: "Cannot size this trade: no usable stop distance." }); continue; }
         let n = Math.floor(budget / riskPer);

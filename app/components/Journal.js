@@ -28,61 +28,65 @@ function latestIv(sym) {
 // real (paper) closing order once you confirm. The server derives which
 // Tradier side to use (sell / buy_to_cover / sell_to_close) from the actual
 // live position, so a mislabeled close can't open the opposite exposure.
+/* Sell a position by hand: one button, at the price it can be sold for now.
+
+   It used to be three steps — type a reason, Preview, then Send — and the
+   Preview button was silently disabled until a reason was typed, so a share
+   sale could look broken (2026-10-14: "I can't sell stocks myself"). The
+   server path was fine. The reason is now optional, the price defaults to the
+   live bid, and the result says whether the sale filled or is resting. */
 function ClosePositionControl({ position, onClosed }) {
   const [qty, setQty] = useState(String(Math.abs(position.quantity)));
   const [price, setPrice] = useState(position.last != null ? Number(position.last).toFixed(2) : "");
   const [reason, setReason] = useState("");
   const [state, setState] = useState({ status: "idle" });
+  const isOption = position.vehicle === "OPTION";
+  const note = reason.trim() || "Sold by hand from the Journal tab";
 
-  const body = () => position.vehicle === "OPTION"
-    ? { legs: [{ action: "sell", type: position.optionType, strike: String(position.strike), premium: price, qty: Number(qty), occ: position.symbol }], closing: true, outcome_note: reason, outcome_tag: "manual" }
-    : { equity: { symbol: position.underlying, quantity: Number(qty), price: Number(price) }, closing: true, outcome_note: reason, outcome_tag: "manual" };
+  const body = () => isOption
+    ? { legs: [{ action: "sell", type: position.optionType, strike: String(position.strike), premium: price, qty: Number(qty), occ: position.symbol }], closing: true, limit_price: Number(price), outcome_note: note, outcome_tag: "manual" }
+    : { equity: { symbol: position.underlying, quantity: Number(qty), price: Number(price) }, closing: true, outcome_note: note, outcome_tag: "manual" };
 
-  const submit = async (url) => {
-    const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body()) });
-    const d = await r.json();
-    if (!r.ok) throw new Error(d.error || "Request failed");
-    return d;
-  };
-  const preview = async () => {
-    setState({ status: "previewing" });
+  const sell = async () => {
+    if (!(Number(qty) > 0) || !(Number(price) > 0)) { setState({ status: "error", msg: "Enter a quantity and a price." }); return; }
+    setState({ status: "placing" });
     try {
-      await submit("/api/order/stage");
-      setState({ status: "previewed", msg: `Preview only, nothing sent yet — closing ${qty} @ $${Number(price || 0).toFixed(2)}` });
-    } catch (e) { setState({ status: "error", msg: e.message }); }
-  };
-  const place = async () => {
-    setState((s) => ({ ...s, status: "placing" }));
-    try {
-      const d = await submit("/api/order/place");
-      setState({ status: "placed", msg: `Sent to the paper account — order #${d.order?.id ?? "?"}, status ${d.order?.status ?? "submitted"}.` });
+      const r = await fetch("/api/order/place", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body()) });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || "The sale was refused");
+      // Did it fill? The position is gone from the account if it did.
+      const pos = await fetch("/api/positions").then((x) => x.json()).catch(() => null);
+      const still = pos?.positions?.find((p) => p.symbol === position.symbol);
+      setState({
+        status: "placed",
+        msg: still
+          ? `Sell order resting at $${Number(price).toFixed(2)} — not filled yet. It fills if the bid reaches your price; to sell immediately, use the current bid.`
+          : `Sold ${qty} ${isOption ? "contract" + (Number(qty) === 1 ? "" : "s") : "share" + (Number(qty) === 1 ? "" : "s")} at about $${Number(price).toFixed(2)}.`,
+      });
       onClosed?.();
     } catch (e) { setState({ status: "error", msg: e.message }); }
   };
 
   if (state.status === "placed") return <div className="safe" style={{ fontSize: 12.5, padding: "8px 10px", marginTop: 6 }}>✓ {state.msg}</div>;
 
+  const atBid = position.last != null && Number(price) === Number(Number(position.last).toFixed(2));
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8 }}>
       <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
         <input className="in" style={{ width: 56, padding: "3px 6px", fontSize: 12 }} inputMode="numeric" value={qty} disabled={state.status === "placing"}
-          onChange={(e) => setQty(e.target.value.replace(/[^0-9]/g, ""))} />
+          onChange={(e) => setQty(e.target.value.replace(/[^0-9]/g, ""))} aria-label="Quantity" />
         <span className="mono muted" style={{ fontSize: 12 }}>@ $</span>
         <input className="in" style={{ width: 76, padding: "3px 6px", fontSize: 12 }} inputMode="decimal" value={price} disabled={state.status === "placing"}
-          onChange={(e) => setPrice(e.target.value.replace(/[^0-9.]/g, ""))} />
-        <input className="in" style={{ flex: 1, minWidth: 180, padding: "3px 6px", fontSize: 12 }} placeholder="Reason for closing (required)" value={reason}
-          disabled={state.status === "placing"} onChange={(e) => setReason(e.target.value)} />
-      </div>
-      {state.status === "previewed" ? (
-        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-          <span className="mono muted" style={{ fontSize: 12 }}>{state.msg}</span>
-          <button className="chip" onClick={place} disabled={state.status === "placing"}>{state.status === "placing" ? "Sending…" : "Send to the paper account"}</button>
-        </div>
-      ) : (
-        <button className="chip" onClick={preview} disabled={state.status === "previewing" || !reason.trim() || !price} style={{ alignSelf: "flex-start" }}>
-          {state.status === "previewing" ? "Checking…" : "Preview close"}
+          onChange={(e) => setPrice(e.target.value.replace(/[^0-9.]/g, ""))} aria-label="Limit price" />
+        <button className="btn" onClick={sell} disabled={state.status === "placing"}>
+          {state.status === "placing" ? "Selling…" : `Sell ${qty || ""} now`}
         </button>
-      )}
+      </div>
+      <input className="in" style={{ padding: "3px 6px", fontSize: 12 }} placeholder="Why are you selling? (optional — it helps the review later)" value={reason}
+        disabled={state.status === "placing"} onChange={(e) => setReason(e.target.value)} />
+      <span className="mono muted" style={{ fontSize: 11 }}>
+        {atBid ? "Price is the current bid, so this sells immediately." : "Above the bid, the order rests until the market reaches your price."}
+      </span>
       {state.status === "error" && <div className="err" style={{ fontSize: 12.5 }}>{state.msg}</div>}
     </div>
   );
