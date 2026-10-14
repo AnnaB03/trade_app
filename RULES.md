@@ -32,6 +32,7 @@ contract or trade."* On unless `LEARNING_MODE=false` (`entryRules.learningMode`)
   - price already through the invalidation, or already at the target;
   - an exact duplicate of an open position;
   - no usable stop;
+  - an idea from an earlier session, or one that already reached its target;
   - same-day contracts after **15:30**;
   - at most **8** entries per stock per day.
 
