@@ -63,7 +63,9 @@ for r in d.get("results") or []:
     if r.get("closed"):
         acted.append(f"CLOSED {r.get('symbol')} {r.get('tag') or ''} @{r.get('exitPrice')}")
     elif r.get("placed"):
-        acted.append(f"OPENED {r.get('symbol')} {r.get('action') or ''}")
+        # Entries rest at the mid, so placed is not filled: say which.
+        verb = "ORDER RESTING" if r.get("working") else "OPENED"
+        acted.append(f"{verb} {r.get('symbol')} {r.get('action') or ''}{' ' + r.get('playbook') if r.get('playbook') else ''}")
 
 if acted:
     counts = " ".join(f"{k}={d[k]}" for k in ("closed", "placed", "checked") if d.get(k) is not None)
