@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   exitConfig, updatePeak, gainFigures, decideProfitExit, decideLevelExit, decideReversalExit,
   latestIdeaForSymbol, intrinsicAtExpiry, directionOf, heldQuantity,
-  TRAIL_ARM_PCT, TRAIL_GIVEBACK_PCT, HARD_TAKE_PROFIT_PCT, EOD_FLAT_FROM_ET_MIN,
+  TRAIL_ARM_PCT, TRAIL_GIVEBACK_PCT, HARD_TAKE_PROFIT_PCT, EOD_FLAT_FROM_ET_MIN, HARD_LOSS_PCT,
 } from "../app/api/order/exitRules.js";
 
 /* The cases here are the trades named in the rule comments. Each test states
@@ -78,16 +78,20 @@ test("NVDA 10/07 $232.50c (25 contracts): a peak gain past the tighten bar halve
 });
 
 test("max loss: 1% of the account at the bid closes a multi-day position whatever its own levels say", () => {
-  // INTC put, four contracts, -$436: over the $100 line at $10K.
+  // INTC put, four contracts, -$436: over the $100 line at $10K. The dollar
+  // rule is reported first when it is the larger loss.
   const f = figures({ entry: 2.00, peak: 2.00, mark: 0.91, qty: 4 }); // -$436
   assert.equal(decideProfitExit(CFG, f).tag, "max_loss");
-  // Just inside the line holds.
-  assert.equal(decideProfitExit(CFG, figures({ entry: 2.00, peak: 2.00, mark: 1.76, qty: 4 })), null); // -$96
+  // Inside the dollar line but 12% down: since 2026-10-14 the option stop takes it.
+  assert.equal(decideProfitExit(CFG, figures({ entry: 2.00, peak: 2.00, mark: 1.76, qty: 4 })).tag, "premium_stop"); // -12%, -$96
+  // Inside both: holds.
+  assert.equal(decideProfitExit(CFG, figures({ entry: 2.00, peak: 2.00, mark: 1.84, qty: 4 })), null); // -8%, -$64
 });
 
-test("max loss uses dollars, so a tiny position never hits it on a large percentage", () => {
-  const f = figures({ entry: 0.50, peak: 0.50, mark: 0.05, qty: 1 }); // -90%, -$45
-  assert.equal(decideProfitExit(CFG, f), null);
+test("a tiny option position is cut on percentage even though the dollars never reach the account rule", () => {
+  // -90% on a $50 contract is $45: the dollar rule never fires, the option stop does.
+  const f = figures({ entry: 0.50, peak: 0.50, mark: 0.05, qty: 1 });
+  assert.equal(decideProfitExit(CFG, f).tag, "premium_stop");
 });
 
 test("short-dated (closeByEod) contract: +7% is taken outright, before the trail", () => {
@@ -99,7 +103,8 @@ test("short-dated (closeByEod) contract: +7% is taken outright, before the trail
 });
 
 test("short-dated contract goes flat from 15:45 ET on the eod pass, win or lose", () => {
-  const loser = figures({ entry: 5, peak: 5, mark: 4.5 });
+  // -6%: inside the option stop, so this is about the close rule alone.
+  const loser = figures({ entry: 5, peak: 5, mark: 4.7 });
   assert.equal(decideProfitExit(CFG, { ...loser, closeByEod: true, eod: true, nowEtMinutes: at15 }).tag, "eod_flat");
   assert.equal(decideProfitExit(CFG, { ...loser, closeByEod: true, eod: true, nowEtMinutes: at15 - 1 }), null, "15:44 is not yet the close");
   assert.equal(decideProfitExit(CFG, { ...loser, closeByEod: true, eod: false, nowEtMinutes: at15 }), null, "only on the eod sweep");
@@ -209,4 +214,19 @@ test("direction and held quantity read the row the way the order path does", () 
   assert.equal(directionOf({ vehicle: "SHARES", side: "buy" }), 1);
   assert.equal(heldQuantity({ entryQuantity: 4, entryFilledQuantity: 3 }), 3, "a partial fill sells what filled");
   assert.equal(heldQuantity({ entryQuantity: 4 }), 4);
+});
+
+
+test("premium stop: an option is cut at -10% of its entry price, the size of a typical win", () => {
+  const cfg = exitConfig(25000);
+  const base = { vehicle: "OPTION", entryPremium: 5.52, peakGainPct: 0, peakGainUsd: 0, peakMark: 5.52 };
+  assert.equal(HARD_LOSS_PCT.OPTION, 10);
+  const cut = decideProfitExit(cfg, { ...base, markNow: 4.95, gainPct: -10.3, gainUsd: -57 });
+  assert.equal(cut?.tag, "premium_stop");
+  assert.equal(decideProfitExit(cfg, { ...base, markNow: 5.05, gainPct: -8.5, gainUsd: -47 }), null, "inside the stop, nothing fires");
+  // The account rule still wins when it is the larger loss, as on a multi-contract position.
+  const big = decideProfitExit(cfg, { ...base, markNow: 4.95, gainPct: -10.3, gainUsd: -456 });
+  assert.equal(big?.tag, "max_loss");
+  // Shares are not held to a percentage of their price.
+  assert.equal(decideProfitExit(cfg, { vehicle: "SHARES", entryPremium: 355.73, markNow: 320, gainPct: -10.1, gainUsd: -143, peakGainPct: 0, peakGainUsd: 0, peakMark: 355.73 }), null);
 });

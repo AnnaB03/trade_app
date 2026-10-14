@@ -8,6 +8,7 @@ import { getClock } from "../../clockLib";
 import { isLegacy, readBaseline } from "../../ledgerLib";
 import { journalOpen } from "../../journalLib";
 import { OPTION_HARD_PCT } from "../../sizingLib";
+import { HARD_LOSS_PCT } from "../exitRules";
 import { extremeRead, fadePlan, fadeEnabled, EXTREME_PCT, FADE_SIDES } from "../../fadeLib";
 import { appendIdea } from "../../store";
 import { selectionVerdict } from "../../selectionLib";
@@ -146,7 +147,8 @@ const etNowMinutes = () => {
   const [h, m] = new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour12: false, hour: "2-digit", minute: "2-digit" }).split(":").map(Number);
   return (h % 24) * 60 + m;
 };
-const MAX_SPREAD_SHARE_OF_LOSS = 0.4; // of the per-trade loss limit
+const MAX_SPREAD_SHARE_OF_LOSS = 0.4;
+const MAX_SPREAD_PCT_OF_PREMIUM = 6; // of the entry price; the option stop is -10% // of the per-trade loss limit
 const INTRADAY_RISK_PCT = 1; // % of the account a same-day trade may lose at its stop
 const LAST_FLAT_BY_CLOSE_ENTRY_MIN = 15 * 60; // ET minutes; flat-by-close contracts are not opened after this
 const REENTRY_COOLDOWN_MIN = 45; // no re-entry on a just-exited symbol without a newer idea
@@ -1045,6 +1047,16 @@ async function run(req) {
            guaranteed loser. An entry may spend at most 40% of the loss limit on
            the spread. */
         const spreadCost = spread * 100 * n;
+        /* And in PERCENT of the premium: the option is sold at -10% of its
+           entry price (exitRules HARD_LOSS_PCT), and it is worth the bid the
+           moment it fills, so a spread of 8% would put it most of the way to
+           that stop on arrival. HOOD 10/23 $105p on 2026-10-14: $4.10 paid,
+           $3.90 bid, -4.9% before the stock moved. */
+        const entryPx = Number(payPrice(idea.leg)) || 0;
+        if (entryPx > 0 && (spread / entryPx) * 100 > MAX_SPREAD_PCT_OF_PREMIUM) {
+          results.push({ ...tag, placed: false, reason: `Spread is ${((spread / entryPx) * 100).toFixed(1)}% of the premium ($${idea.leg?.bid}/$${idea.leg?.ask}) — over ${MAX_SPREAD_PCT_OF_PREMIUM}%, so the position would open most of the way to its ${HARD_LOSS_PCT.OPTION}% stop.` });
+          continue;
+        }
         if (spreadCost > budget * MAX_SPREAD_SHARE_OF_LOSS) {
           results.push({ ...tag, placed: false, reason: `Spread too wide: buying at $${idea.leg?.ask} against a $${idea.leg?.bid} bid costs $${spreadCost.toFixed(0)} on arrival — over ${(MAX_SPREAD_SHARE_OF_LOSS * 100).toFixed(0)}% of the $${budget.toFixed(0)} a trade may lose.` });
           continue;

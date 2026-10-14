@@ -94,6 +94,18 @@ export const TRAIL_GIVEBACK_PCT_LARGE = 15;
 // banked outright rather than risking a gap on the way back down.
 export const HARD_TAKE_PROFIT_PCT = { OPTION: 150, SHARES: 60 };
 export const MAX_LOSS_PCT = 1; // % of the account one trade may lose before it is sold
+/* The loser is cut at the same scale the winners are banked. Set 2026-10-14
+   at the user's call ("lets implement option 1"). The profit rules take a
+   5-7% move in the option; the loss side was the account rule above, 1% of
+   the account, and the model's invalidation, which on a $500 contract is a
+   40-50% move. The honest ledger then read: 23 trades, winners average +$43,
+   losers average -$120 — a ratio that needs a 74% win rate to break even.
+   An OPTION is now sold once its bid is HARD_LOSS_PCT below the entry price,
+   so a loss is $40-60 on one contract, the size of a typical win. Shares are
+   not held to this: 10% of a stock is a different kind of move, and their
+   stop is the idea's own level. Entry spreads are capped in autotrade so a
+   position is not born halfway to this stop. */
+export const HARD_LOSS_PCT = { OPTION: 10, SHARES: null };
 /* Playbooks that open and close inside one session: the same-day target, the
    live-price target reference, and no thesis-reversed rule. "contrarian" (the
    fade, app/api/fadeLib.js) is one of them, and it is BUILT against the
@@ -219,6 +231,10 @@ export function decideProfitExit(cfg, {
      once a minute, so a fast move can overshoot it. */
   if (gainUsd != null && gainUsd <= -cfg.maxLossUsd) {
     exit = { tag: "max_loss", detail: `Down $${Math.abs(gainUsd).toFixed(0)} at the bid — at the $${cfg.maxLossUsd.toFixed(0)} most one trade may lose (${MAX_LOSS_PCT}% of the account)` };
+  }
+  const lossBar = HARD_LOSS_PCT[vehicle] ?? null;
+  if (!exit && lossBar != null && gainPct != null && gainPct <= -lossBar) {
+    exit = { tag: "premium_stop", detail: `Down ${Math.abs(gainPct).toFixed(1)}% at the bid ($${entryPremium} to $${markNow}${gainUsd != null ? `, $${Math.abs(gainUsd).toFixed(0)}` : ""}) — past the ${lossBar}% stop on the option itself, cutting it at the size of a typical win` };
   }
   /* A closeByEod position is a short-dated contract that decays ~25% of its
      price a day. The end-of-day dollar bar only ever banks GAINS, so a loser
