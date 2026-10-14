@@ -203,6 +203,17 @@ test("RULE: triggered ideas are split between buying at the break and waiting fo
   assert.equal(entry.confirmedBreak({ bars: [], trigger: 99.9, direction: "below" }), false, "no bars, no confirmation");
 });
 
+test("RULE: an idea from an earlier session never trades; an idea that reached its target is finished; unfilled orders do not count as entries — 2026-10-14 review", () => {
+  const now = Date.parse("2026-10-14T18:00:00Z");
+  assert.equal(entry.fromEarlierSession("2026-10-13T20:46:50Z", now), true, "the 10-13 INTC fade placed all day on 10-14");
+  assert.equal(entry.fromEarlierSession("2026-10-14T13:31:00Z", now), false);
+  assert.equal(entry.fromEarlierSession("2026-10-14T02:00:00Z", now), true, "22:00 ET on 10-13 is the earlier session");
+  assert.deepEqual([...entry.PLAYED_OUT_EXITS].sort(), ["take_profit", "target"]);
+  assert.equal(entry.countsAsEntry({ exitReasonTag: "unfilled" }), false);
+  assert.equal(entry.countsAsEntry({ exitReasonTag: "premium_stop" }), true);
+  assert.equal(entry.countsAsEntry({ status: "open" }), true);
+});
+
 test("RULE: a setup is void when price is through its invalidation or already at its target — hard, in learning mode too", () => {
   assert.match(entry.setupVoid({ dir: -1, entry: 700, target: 705, invalidation: 710 }), /target/, "the SPY put loop of 2026-10-14");
   assert.match(entry.setupVoid({ dir: 1, entry: 99, target: 110, invalidation: 100 }), /invalidation/);

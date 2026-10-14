@@ -14,6 +14,7 @@ import {
   MAX_SPREAD_SHARE_OF_LOSS, MAX_SPREAD_PCT_OF_PREMIUM, LAST_FLAT_BY_CLOSE_ENTRY_MIN, REENTRY_COOLDOWN_MIN,
   MAX_ENTRIES_PER_SYMBOL_DAY, RISK_PER_TRADE_PCT as INTRADAY_RISK_PCT, isWatchOnly, entriesAllowed,
   learningMode, lateEntryRefused, LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY, setupVoid, entryArm, confirmedBreak, CONFIRM_BARS,
+  fromEarlierSession, PLAYED_OUT_EXITS, countsAsEntry, etDate,
 } from "../entryRules";
 import { optionStopPct, profileFor } from "../../swingLib";
 import { extremeRead, fadePlan, fadeEnabled, EXTREME_PCT, FADE_SIDES } from "../../fadeLib";
@@ -755,11 +756,11 @@ async function run(req) {
        allowed through, since one broker hiccup should not halt all trading. */
     const reserved = isPaperSandbox() ? await reservedQuantities() : null; // a sandbox-only defect
 
-    // Conditional ideas (have a triggerPrice) get a fresh quote right now,
-    // independent of batch age — see the file header for why. Fetched once
-    // per unique symbol, not per idea.
+    // Every directional idea gets a fresh quote right now, fetched once per
+    // symbol. It used to be only the ones with a trigger, so a fade (no
+    // trigger) was judged and priced on the stock price it was written at.
     const conditionalSyms = [...new Set(
-      batch.filter((i) => ["CALL", "PUT", "BUY", "SELL"].includes(i.action) && i.triggerPrice != null && i.triggerDirection).map((i) => i.symbol)
+      batch.filter((i) => ["CALL", "PUT", "BUY", "SELL"].includes(i.action)).map((i) => i.symbol)
     )];
     const quoteBySym = Object.fromEntries(await Promise.all(conditionalSyms.map(async (s) => [s, await dayQuote(s)])));
     const liveBySym = Object.fromEntries(Object.entries(quoteBySym).map(([s, q]) => [s, q.last]));
@@ -776,6 +777,8 @@ async function run(req) {
       tag.learningOverrides = overrides;
       const soft = (rule, reason) => { if (!LEARN) return false; overrides.push({ rule, reason }); return true; };
       if (!["CALL", "PUT", "BUY", "SELL"].includes(rawIdea.action)) { results.push({ ...tag, placed: false, reason: "WAIT — nothing to trade." }); continue; }
+      // Hard, in learning mode too (entryRules.fromEarlierSession).
+      if (fromEarlierSession(rawIdea.createdAt)) { results.push({ ...tag, placed: false, reason: `Written in an earlier session (${etDate(rawIdea.createdAt)}) — its prices and levels are not today's.` }); continue; }
       if (Number(rawIdea.conviction) < minConviction) {
         const why = `Conviction ${rawIdea.conviction} below the ${minConviction} bar.`;
         if (!soft("conviction", why)) { results.push({ ...tag, placed: false, reason: why }); continue; }
@@ -874,7 +877,7 @@ async function run(req) {
         /* The entry-confirmation test (entryRules.entryArm): the "confirm" arm
            also waits for CONFIRM_BARS completed one-minute closes beyond the
            trigger. Not a refusal; the idea is re-checked every minute. */
-        tag.entryStyle = entryArm(idea.id);
+        tag.entryStyle = entryArm(`${idea.symbol}|${idea.action}|${etDate(Date.now())}`);
         if (tag.entryStyle === "confirm") {
           const bars = await minuteBars(idea.symbol);
           if (!confirmedBreak({ bars, trigger: effectiveTrigger, direction: idea.triggerDirection, nowMinute: etMinuteStamp() })) {
@@ -901,16 +904,6 @@ async function run(req) {
         // Trade off the live price, not the stale one from generation time —
         // that's what actually crossed the trigger just now.
         idea = { ...idea, entryPrice: live };
-        // The contract's own premium drifts too over a multi-hour gap
-        // between checks — re-quote it rather than submit a limit order at
-        // whatever it cost when the idea was first generated.
-        if (idea.vehicle === "OPTION" && idea.leg?.occ) {
-          const legQuote = await tradier(`/markets/quotes?symbols=${encodeURIComponent(idea.leg.occ)}`).catch(() => null);
-          const q = asArray(legQuote?.quotes?.quote)?.[0];
-          const bid = Number(q?.bid), ask = Number(q?.ask);
-          const mid = bid >= 0 && ask > 0 ? (bid + ask) / 2 : (Number(q?.last) || null);
-          if (mid > 0) idea = { ...idea, leg: { ...idea.leg, bid, ask, mid } };
-        }
       } else {
         // No trigger to re-check live — this is already a "buy now" idea, so
         // staleness is about THIS idea's own age, not a shared batch's.
@@ -919,6 +912,25 @@ async function run(req) {
           const why = `This idea is ${ageMin.toFixed(0)} min old — too stale to trade on without a live re-check. Refresh Ideas first.`;
           if (!soft("stale", why)) { results.push({ ...tag, placed: false, reason: why }); continue; }
         }
+        // Judged and sized at the live price too (2026-10-14: fades rested all
+        // afternoon at the option price, target and stock price they were
+        // written at).
+        const live = liveBySym[idea.symbol];
+        if (live == null) { results.push({ ...tag, placed: false, reason: "Couldn't get a live quote for this idea." }); continue; }
+        idea = { ...idea, entryPrice: live };
+      }
+      /* Every option is re-quoted before it is judged, sized and priced, not
+         only the triggered ones. NVDA's fade put went in at $4.30 against a
+         $10.00 market on 2026-10-14, was withdrawn unfilled five minutes later,
+         and was placed again, all afternoon; it was also sized for 7
+         contracts on that price, about $7,000 at the real one. */
+      if (idea.vehicle === "OPTION" && idea.leg?.occ) {
+        const legQuote = await tradier(`/markets/quotes?symbols=${encodeURIComponent(idea.leg.occ)}`).catch(() => null);
+        const q = asArray(legQuote?.quotes?.quote)?.[0];
+        const bid = Number(q?.bid), ask = Number(q?.ask);
+        const mid = bid >= 0 && ask > 0 ? (bid + ask) / 2 : (Number(q?.last) || null);
+        if (mid > 0) idea = { ...idea, leg: { ...idea.leg, bid, ask, mid } };
+        else { results.push({ ...tag, placed: false, reason: `Couldn't get a live quote for ${idea.leg.occ}.` }); continue; }
       }
 
       /* Reward:risk, measured against the price we are ACTUALLY paying.
@@ -964,6 +976,10 @@ async function run(req) {
         const consumed = listJournal().find((r) =>
           // "parked": acted on in the sandbox before practice moved off it.
           r.ideaId && r.ideaId === idea.id && (r.status === "closed" || r.status === "parked") && r.entryFillPrice != null);
+        if (consumed && PLAYED_OUT_EXITS.has(consumed.exitReasonTag)) {
+          results.push({ ...tag, placed: false, reason: `Idea ${idea.id} already reached its goal (${consumed.exitReasonTag}, P&L ${consumed.pnl == null ? "unbooked" : `$${Number(consumed.pnl).toFixed(0)}`}) — the move it was for has happened.` });
+          continue;
+        }
         if (consumed) {
           const why = `Idea ${idea.id} already carried a ${idea.symbol} position to a close on ${String(consumed.exitAt ?? consumed.parkedAt).slice(0, 16)} (${consumed.exitReasonTag ?? "exit"}, P&L ${consumed.pnl == null ? "unbooked" : `$${Number(consumed.pnl).toFixed(0)}`}) — a played-out thesis is consumed, not re-tradeable.`;
           if (!soft("consumed", why)) { results.push({ ...tag, placed: false, reason: why }); continue; }
@@ -978,7 +994,7 @@ async function run(req) {
       {
         const today = new Date().toDateString();
         const baseline = readBaseline();
-        const todayCount = listJournal().filter((r) => r.symbol === idea.symbol && r.createdAt && new Date(r.createdAt).toDateString() === today && !isLegacy(r, baseline)).length;
+        const todayCount = listJournal().filter((r) => r.symbol === idea.symbol && r.createdAt && new Date(r.createdAt).toDateString() === today && !isLegacy(r, baseline) && countsAsEntry(r)).length;
         // Learning mode: the 4/day cap is recorded; 8/day is the hard runaway guard.
         if (todayCount >= (LEARN ? LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY : MAX_ENTRIES_PER_SYMBOL_DAY)) {
           results.push({ ...tag, placed: false, reason: `${idea.symbol} already has ${todayCount} entries today — at the ${LEARN ? LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY : MAX_ENTRIES_PER_SYMBOL_DAY}/symbol/day cap, so this is churn rather than a new position.` });

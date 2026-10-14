@@ -51,6 +51,25 @@ export const learningMode = (env = process.env) => env.LEARNING_MODE !== "false"
    target exit a minute later for -$13, and bought again (-$15), a loop that
    only the reward:risk refusal had been hiding. Returns a reason, or null.
    dir: +1 for CALL/BUY, -1 for PUT/SELL. */
+/* An idea from an earlier session is not a trade today, in or out of
+   learning mode. Learning mode had made staleness a recorded override, and on
+   2026-10-14 the 10-13 fades of NVDA, INTC, AVGO and ORCL were placed all
+   day at the previous afternoon's stock price, target and option price. The
+   ET calendar date decides. */
+export const etDate = (t) => new Date(t).toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+export const fromEarlierSession = (createdAt, now = Date.now()) => Boolean(createdAt) && etDate(createdAt) < etDate(now);
+
+/* An idea that carried a position to its TARGET (or the +50% profit take) is
+   finished; buying it again is buying a move that has already happened. Six
+   SPY round trips on 2026-10-14 did exactly that around its $768 target. An
+   idea closed at a stop may still be retried in learning mode. */
+export const PLAYED_OUT_EXITS = new Set(["target", "take_profit"]);
+
+/* Entries that count toward the per-stock daily cap: an order that never
+   filled tested nothing. INTC had 7 entries on 2026-10-14, every one a
+   stale-priced order withdrawn unfilled. */
+export const countsAsEntry = (row) => !["unfilled", "orphaned"].includes(row?.exitReasonTag);
+
 export function setupVoid({ dir, entry, target, invalidation }) {
   const e = Number(entry), t = Number(target), v = Number(invalidation);
   if (e > 0 && v > 0 && (dir > 0 ? e <= v : e >= v)) return `Live price $${e} is already ${dir > 0 ? "at or below" : "at or above"} the $${v} invalidation — the setup is void, not cheap.`;
@@ -76,6 +95,9 @@ export const LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY = 8;  // hard runaway guard
    ENTRY_CONFIRM=all puts every idea in "confirm", =off every idea in
    "immediate"; the default is the split. */
 export const CONFIRM_BARS = 2;
+/* Pass a stable key for the setup, not the row id: a refresh every 30
+   minutes writes a new row for the same setup, and a per-row split flipped a
+   setup between the arms. The route keys it by symbol, action and ET date. */
 export function entryArm(ideaId, env = process.env) {
   const mode = env.ENTRY_CONFIRM || "ab";
   if (mode === "off") return "immediate";
