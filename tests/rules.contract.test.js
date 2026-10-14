@@ -218,6 +218,24 @@ test("RULE: an idea from an earlier session never trades; an idea that reached i
   assert.equal(entry.countsAsEntry({ status: "open" }), true);
 });
 
+/* 2026-10-14 day replay; the owner: "sure, lets do that and test". */
+test("RULE: one fade per stock per day, and no flipping sides on a stock within 30 minutes — 2026-10-14", () => {
+  assert.equal(entry.FADES_PER_SYMBOL_DAY, 1);
+  assert.equal(entry.FLIP_WAIT_MIN, 30);
+  const now = Date.parse("2026-10-14T13:50:00Z"); // 09:50 ET
+  const at = (min) => new Date(now - min * 60000).toISOString();
+  const fadePut = { strategy: "contrarian", optionType: "put", entryAt: at(17) };   // GOOGL fade, 09:33
+  // The second GOOGL fade of the morning is refused; a same-day or swing idea is not.
+  assert.match(entry.fadeLimitReached({ strategy: "contrarian", rows: [fadePut] }), /one fade per stock/);
+  assert.equal(entry.fadeLimitReached({ strategy: "intraday", rows: [fadePut] }), null, "GOOGL can still be bought by other playbooks");
+  assert.equal(entry.fadeLimitReached({ strategy: "contrarian", rows: [] }), null);
+  // A call 17 minutes after a put: refused. The same side: allowed. After 30 minutes: allowed.
+  assert.match(entry.flipTooSoon({ action: "CALL", rows: [fadePut], now }), /other side/);
+  assert.equal(entry.flipTooSoon({ action: "PUT", rows: [fadePut], now }), null, "re-entry on the same side is not limited here");
+  assert.equal(entry.flipTooSoon({ action: "CALL", rows: [{ ...fadePut, entryAt: at(31) }], now }), null, "a real reversal later in the day can still be traded");
+  assert.match(entry.flipTooSoon({ action: "PUT", rows: [{ optionType: "call", entryAt: at(5) }], now }), /5 min ago/);
+});
+
 test("RULE: a setup is void when price is through its invalidation or already at its target — hard, in learning mode too", () => {
   assert.match(entry.setupVoid({ dir: -1, entry: 700, target: 705, invalidation: 710 }), /target/, "the SPY put loop of 2026-10-14");
   assert.match(entry.setupVoid({ dir: 1, entry: 99, target: 110, invalidation: 100 }), /invalidation/);

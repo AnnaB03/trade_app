@@ -40,7 +40,10 @@ def account_size():
     return 10000.0
 
 
-TARGET_PCT, MAX_LOSS = 7.0, account_size() * 0.02  # 2% since 2026-10-14 (entryRules.RISK_PER_TRADE_PCT)
+# The live exits since 2026-10-14: +50% profit take, 20% option stop, 2% max loss
+# (exitRules.PROFIT_TAKE_PCT / HARD_LOSS_PCT, entryRules.RISK_PER_TRADE_PCT); also the
+# idea's target and invalidation, and flat at 15:45.
+TARGET_PCT, STOP_PCT, MAX_LOSS = 50.0, 20.0, account_size() * 0.02
 
 
 def token():
@@ -106,7 +109,9 @@ def replay(r):
         last_pnl = pnl
         why = None
         if est_bid >= ask * (1 + TARGET_PCT / 100):
-            why = "quick_target"
+            why = "take_profit"
+        elif est_bid <= ask * (1 - STOP_PCT / 100):
+            why = "stop"
         elif (est_bid - ask) * 100 * n <= -MAX_LOSS:
             why = "max_loss"
         elif ustock is not None and r.get("invalidation") is not None and (ustock >= r["invalidation"] if put else ustock <= r["invalidation"]):
@@ -122,12 +127,13 @@ def replay(r):
 rows = json.load(open(os.path.join(ROOT, "data", "shadow.json"))) if os.path.exists(os.path.join(ROOT, "data", "shadow.json")) else []
 want = sys.argv[1] if len(sys.argv) > 1 else None
 tot = wins = n = 0
-print("WATCH-ONLY trades (recorded, never placed) — estimated outcomes")
+print("RECORDED, NOT PLACED (watch-only, or blocked by a rule) — estimated outcomes")
 for r in rows:
     day, start, pnl, why, when = replay(r)
     if want and day != want:
         continue
-    head = f"  {day} {start}  {r['symbol']:5} {r['action']:4} x{r.get('contracts') or 1} {r.get('occ') or '':22} in @{r.get('optionAsk')}"
+    label = f"blocked: {r['blockedBy']}" if r.get("blockedBy") else (r.get("playbook") or "")
+    head = f"  {day} {start}  {r['symbol']:5} {r['action']:4} x{r.get('contracts') or 1} {r.get('occ') or '':22} in @{r.get('optionAsk')}  [{label}]"
     if pnl is None:
         print(f"{head}  -> {why}")
         continue

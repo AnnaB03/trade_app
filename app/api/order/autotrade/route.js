@@ -14,7 +14,7 @@ import {
   MAX_SPREAD_SHARE_OF_LOSS, MAX_SPREAD_PCT_OF_PREMIUM, LAST_FLAT_BY_CLOSE_ENTRY_MIN, REENTRY_COOLDOWN_MIN,
   MAX_ENTRIES_PER_SYMBOL_DAY, RISK_PER_TRADE_PCT as INTRADAY_RISK_PCT, isWatchOnly, entriesAllowed,
   learningMode, lateEntryRefused, LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY, setupVoid, entryArm, confirmedBreak, CONFIRM_BARS,
-  fromEarlierSession, PLAYED_OUT_EXITS, countsAsEntry, etDate,
+  fromEarlierSession, PLAYED_OUT_EXITS, countsAsEntry, etDate, fadeLimitReached, flipTooSoon,
 } from "../entryRules";
 import { optionStopPct, profileFor } from "../../swingLib";
 import { extremeRead, fadePlan, fadeEnabled, EXTREME_PCT, FADE_SIDES } from "../../fadeLib";
@@ -1001,6 +1001,22 @@ async function run(req) {
           continue;
         }
         if (todayCount >= MAX_ENTRIES_PER_SYMBOL_DAY) soft("daily_cap", `${idea.symbol} already has ${todayCount} entries today (the ${MAX_ENTRIES_PER_SYMBOL_DAY}/day cap).`);
+        /* One fade per stock per day, and no flipping sides within 30 minutes
+           (entryRules.js). Hard, but what they block is recorded to the
+           shadow book so each rule is scored. */
+        const todayRows = listJournal().filter((r) => r.symbol === idea.symbol && r.createdAt && new Date(r.createdAt).toDateString() === today && !isLegacy(r, baseline) && countsAsEntry(r));
+        const blocked = [["fade_once", fadeLimitReached({ strategy: idea.strategy, rows: todayRows })], ["flip_30min", flipTooSoon({ action: idea.action, rows: todayRows })]].find(([, why]) => why);
+        if (blocked) {
+          const [rule, why] = blocked;
+          const row = dryRun || idea.vehicle !== "OPTION" ? null : recordShadowEntry({
+            playbook: idea.strategy || "swing", blockedBy: rule, ideaId: idea.id, symbol: idea.symbol, action: idea.action,
+            occ: idea.leg?.occ ?? null, strike: idea.leg?.strike ?? null, expiration: idea.expiration ?? null,
+            contracts: Math.max(1, Number(idea.sizing?.contracts) || 1), optionBid: idea.leg?.bid ?? null, optionAsk: idea.leg?.ask ?? null, delta: idea.leg?.delta ?? null,
+            underlying: idea.entryPrice ?? null, invalidation: idea.invalidation ?? null, target: idea.target ?? null, catalyst: idea.catalyst ?? null,
+          });
+          results.push({ ...tag, placed: false, blockedBy: rule, recorded: Boolean(row), reason: why });
+          continue;
+        }
       }
 
       /* Cooldown after an exit on this symbol. Without it, taking profit frees

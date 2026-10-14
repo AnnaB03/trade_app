@@ -34,6 +34,7 @@ contract or trade."* On unless `LEARNING_MODE=false` (`entryRules.learningMode`)
   - no usable stop;
   - an idea from an earlier session, or one that already reached its target;
   - same-day contracts after **15:30**;
+  - a second fade of the same stock in a day, or buying the other side of a stock within 30 minutes of the last entry (blocked trades go to the shadow book with `blockedBy`);
   - at most **8** entries per stock per day.
 
 With learning mode off, the table below applies as written.
@@ -49,6 +50,7 @@ With learning mode off, the table below applies as written.
 | Entries per stock per day | 4, then a 45-minute wait after an exit | `entryRules` | 2026-10-13 |
 | Idea minimums | conviction 2, reward:risk 1.5 | `entryRules` | — |
 | Same-day contracts opened until | 15:00 ET | `entryRules.lateEntryRefused` | 2026-10-08 |
+| Fades / flips | one fade per stock per day; no opposite-side entry on a stock within 30 minutes. From the 10-14 replay: +$6,454 / +$3,065 at 3% worse fills, against +$5,274 / −$2,874 without | `entryRules.fadeLimitReached`, `flipTooSoon` | 2026-10-14 |
 | Entry test | triggered ideas split by id: half buy at the break, half wait for 2 completed 1-minute closes beyond it (`ENTRY_CONFIRM=all/off`) | `entryRules.entryArm`, `confirmedBreak` | 2026-10-14 |
 | Contracts per option trade | 2% of the account / loss at the stop that fires first | `entryRules.sizeOptionEntry` | 2026-10-14 |
 | Option stop | from its stock's p90 30-minute adverse move, **20–35%; else 20%** (was 8–35%, else 10%: replayed on 31 trades, 10% netted −$1,502 against −$621 at 20% for the same $ risk) | `swingLib.optionStopPct`, `exitRules.HARD_LOSS_PCT` | 2026-10-14 |

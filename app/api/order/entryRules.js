@@ -73,6 +73,33 @@ export const PLAYED_OUT_EXITS = new Set(["target", "take_profit"]);
    stale-priced order withdrawn unfilled. */
 export const countsAsEntry = (row) => !["unfilled", "orphaned"].includes(row?.exitReasonTag);
 
+/* ---------- Two rules from the 2026-10-14 day replay ----------
+   Replaying the day under the new rules, three GOOGL fades in 13 minutes and
+   GOOGL calls bought minutes after GOOGL puts made seven losers by 10:28
+   (-$2,445), within $55 of the daily halt. With 3% worse fills the day was
+   halted there and every later winner was missed (-$2,874). With both rules
+   below: +$6,454 at replay fills, +$3,065 at 3% worse. The owner: "sure, lets
+   do that and test". A trade either rule blocks is written to the shadow book
+   (blockedBy), so each rule is scored on what it stopped.
+   rows: today's journal rows for the symbol that count as entries. */
+export const FADES_PER_SYMBOL_DAY = 1;
+export const FLIP_WAIT_MIN = 30;
+export const isFade = (strategy) => strategy === "contrarian" || strategy === "fade_scan";
+const rowDir = (r) => (r.optionType === "call" || (!r.optionType && r.side === "buy") ? 1 : r.optionType === "put" || (!r.optionType && r.side === "sell") ? -1 : 0);
+export function fadeLimitReached({ strategy, rows }) {
+  if (!isFade(strategy)) return null;
+  const n = (rows || []).filter((r) => isFade(r.strategy)).length;
+  return n >= FADES_PER_SYMBOL_DAY ? `Already faded this stock today (${n}); one fade per stock per day.` : null;
+}
+export function flipTooSoon({ action, rows, now = Date.now(), waitMin = FLIP_WAIT_MIN }) {
+  const dir = action === "CALL" || action === "BUY" ? 1 : -1;
+  const opposite = (rows || []).filter((r) => rowDir(r) === -dir && r.entryAt && now - Date.parse(r.entryAt) < waitMin * 60000)
+    .sort((a, b) => Date.parse(b.entryAt) - Date.parse(a.entryAt))[0];
+  if (!opposite) return null;
+  const mins = Math.round((now - Date.parse(opposite.entryAt)) / 60000);
+  return `Bought the other side of this stock ${mins} min ago (${opposite.optionType ?? opposite.side}); no flipping sides within ${waitMin} minutes.`;
+}
+
 export function setupVoid({ dir, entry, target, invalidation }) {
   const e = Number(entry), t = Number(target), v = Number(invalidation);
   if (e > 0 && v > 0 && (dir > 0 ? e <= v : e >= v)) return `Live price $${e} is already ${dir > 0 ? "at or below" : "at or above"} the $${v} invalidation — the setup is void, not cheap.`;

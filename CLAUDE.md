@@ -21,6 +21,7 @@ learn from every single contract or trade."
   - no usable stop;
   - an idea from an earlier session, or one that already reached its target;
   - same-day contracts after 15:30;
+  - a second fade of a stock in a day, or the other side of a stock within 30 minutes;
   - more than 8 entries per stock per day.
 - When nothing is trading, that is the bug. Print every idea's refusal reason and fix the cause.
 - Every agreed rule is in `RULES.md` and pinned by `tests/rules.contract.test.js`. Never push
