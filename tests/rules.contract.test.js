@@ -94,16 +94,19 @@ const hoodLeg = { bid: 3.65, ask: 3.75, delta: -0.4381 };
 const qqqProfile = { up: { p90: 0.30 }, down: { p90: 0.28 } };
 
 test("RULE: contracts come from the stop that fires FIRST, inside 1% of the account — 2026-10-14, 'why only 1 option for HOOD'", () => {
-  // Flat 10% option stop: $37.50 + $10 spread = $47.50 a contract -> 5.
+  // Flat 20% option stop (10% until 2026-10-14): $75 + $10 spread = $85 a contract -> 2.
   const flat = entry.sizeOptionEntry({ accountSize: ACCOUNT, leg: hoodLeg, entryPrice: 104.82, invalidation: 107.5, action: "PUT", strategy: undefined });
   assert.equal(flat.ok, true);
-  assert.equal(flat.stopPct, 10);
-  assert.equal(flat.contracts, 5);
+  assert.equal(flat.stopPct, 20);
+  assert.equal(flat.contracts, 2);
   assert.ok(flat.riskAtStop <= 250, `risk ${flat.riskAtStop} must stay inside $250`);
 });
 
-test("RULE: each option's stop comes from its own stock's swings, 8% to 35% — 2026-10-14, 'not all contracts work the same way'", () => {
-  assert.equal(swing.STOP_FLOOR_PCT, 8);
+/* Floor 8 -> 20 and the flat stop 10 -> 20 on 2026-10-14, the owner: "lets not
+   have the stop losses this conservative, check the stocks that were sold too
+   early and adjust the stop loss". Replay in exitRules.HARD_LOSS_PCT. */
+test("RULE: each option's stop comes from its own stock's swings, 20% to 35% — 2026-10-14, 'not all contracts work the same way', 'not this conservative'", () => {
+  assert.equal(swing.STOP_FLOOR_PCT, 20);
   assert.equal(swing.STOP_CAP_PCT, 35);
   assert.equal(swing.STOP_PCTILE, "p90");
   const qqq = entry.sizeOptionEntry({ accountSize: ACCOUNT, leg: { bid: 5.21, ask: 5.25, delta: -0.48 }, entryPrice: 736, invalidation: 740.6, action: "PUT", profile: qqqProfile });
@@ -179,6 +182,27 @@ test("RULE: learning mode keeps the safety core — same-day entries end at 15:3
   assert.equal(sizing.OPTION_HARD_PCT, 0.15);
 });
 
+/* The entry-confirmation test, 2026-10-14. The owner, on "wait for a 2-3
+   minute close beyond the level before buying": "lets test that". */
+test("RULE: triggered ideas are split between buying at the break and waiting for 2 one-minute closes beyond it — 2026-10-14, 'lets test that'", () => {
+  assert.equal(entry.CONFIRM_BARS, 2);
+  const arms = new Set(Array.from({ length: 40 }, (_, i) => entry.entryArm(`idea-${i}`, {})));
+  assert.deepEqual([...arms].sort(), ["confirm", "immediate"], "both arms are used");
+  assert.equal(entry.entryArm("x", { ENTRY_CONFIRM: "all" }), "confirm");
+  assert.equal(entry.entryArm("x", { ENTRY_CONFIRM: "off" }), "immediate");
+  assert.equal(entry.entryArm("same-id", {}), entry.entryArm("same-id", {}), "an idea stays in its arm");
+  const bars = [
+    { time: "2026-10-14T14:40:00", close: 100.1 },
+    { time: "2026-10-14T14:41:00", close: 99.8 },
+    { time: "2026-10-14T14:42:00", close: 99.7 },
+    { time: "2026-10-14T14:43:00", close: 100.4 }, // still forming at 14:43
+  ];
+  assert.equal(entry.confirmedBreak({ bars, trigger: 99.9, direction: "below", nowMinute: "2026-10-14T14:43" }), true, "two completed closes under");
+  assert.equal(entry.confirmedBreak({ bars, trigger: 99.9, direction: "below", nowMinute: "2026-10-14T14:44" }), false, "the last completed close is back above");
+  assert.equal(entry.confirmedBreak({ bars: bars.slice(0, 2), trigger: 99.9, direction: "below", nowMinute: "2026-10-14T14:42" }), false, "only one completed close under");
+  assert.equal(entry.confirmedBreak({ bars: [], trigger: 99.9, direction: "below" }), false, "no bars, no confirmation");
+});
+
 test("RULE: a setup is void when price is through its invalidation or already at its target — hard, in learning mode too", () => {
   assert.match(entry.setupVoid({ dir: -1, entry: 700, target: 705, invalidation: 710 }), /target/, "the SPY put loop of 2026-10-14");
   assert.match(entry.setupVoid({ dir: 1, entry: 99, target: 110, invalidation: 100 }), /invalidation/);
@@ -213,13 +237,14 @@ test("RULE: take profits — trail arms at +5% (options) and sells on a 25% give
   assert.equal(exits.EOD_FLAT_FROM_ET_MIN, 15 * 60 + 45);
 });
 
-test("RULE: an option is sold at its own stop, else at -10%; shares keep the idea's stop — 2026-10-14", () => {
-  assert.deepEqual(exits.HARD_LOSS_PCT, { OPTION: 10, SHARES: null });
+test("RULE: an option is sold at its own stop, else at -20%; shares keep the idea's stop — 2026-10-14", () => {
+  assert.deepEqual(exits.HARD_LOSS_PCT, { OPTION: 20, SHARES: null });
   const cfg = exits.exitConfig(ACCOUNT);
   const base = { vehicle: "OPTION", entryPremium: 5, peakGainPct: 0, peakGainUsd: 0, peakMark: 5 };
-  assert.equal(exits.decideProfitExit(cfg, { ...base, markNow: 4.45, gainPct: -11, gainUsd: -55 }).tag, "premium_stop", "flat 10%");
-  assert.equal(exits.decideProfitExit(cfg, { ...base, markNow: 4.45, gainPct: -11, gainUsd: -55, stopPct: 20 }), null, "its own 20% stop holds it");
-  assert.equal(exits.decideProfitExit(cfg, { ...base, markNow: 3.95, gainPct: -21, gainUsd: -105, stopPct: 20 }).tag, "premium_stop");
+  assert.equal(exits.decideProfitExit(cfg, { ...base, markNow: 4.45, gainPct: -11, gainUsd: -55 }), null, "-11% holds under the flat 20%");
+  assert.equal(exits.decideProfitExit(cfg, { ...base, markNow: 3.95, gainPct: -21, gainUsd: -105 }).tag, "premium_stop", "flat 20%");
+  assert.equal(exits.decideProfitExit(cfg, { ...base, markNow: 3.95, gainPct: -21, gainUsd: -105, stopPct: 30 }), null, "its own 30% stop holds it");
+  assert.equal(exits.decideProfitExit(cfg, { ...base, markNow: 3.45, gainPct: -31, gainUsd: -155, stopPct: 30 }).tag, "premium_stop");
   assert.equal(exits.decideProfitExit(cfg, { vehicle: "SHARES", entryPremium: 100, markNow: 88, gainPct: -12, gainUsd: -48, peakGainPct: 0, peakGainUsd: 0, peakMark: 100 }), null);
 });
 

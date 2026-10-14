@@ -13,7 +13,7 @@ import {
   payPrice, sizeOptionEntry, SAME_DAY, MIN_CONVICTION, MIN_REWARD_RISK, MAX_SYMBOL_EXPOSURE_PCT,
   MAX_SPREAD_SHARE_OF_LOSS, MAX_SPREAD_PCT_OF_PREMIUM, LAST_FLAT_BY_CLOSE_ENTRY_MIN, REENTRY_COOLDOWN_MIN,
   MAX_ENTRIES_PER_SYMBOL_DAY, RISK_PER_TRADE_PCT as INTRADAY_RISK_PCT, isWatchOnly, entriesAllowed,
-  learningMode, lateEntryRefused, LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY, setupVoid,
+  learningMode, lateEntryRefused, LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY, setupVoid, entryArm, confirmedBreak, CONFIRM_BARS,
 } from "../entryRules";
 import { optionStopPct, profileFor } from "../../swingLib";
 import { extremeRead, fadePlan, fadeEnabled, EXTREME_PCT, FADE_SIDES } from "../../fadeLib";
@@ -147,6 +147,19 @@ const DIRECTION_SIGN = { CALL: 1, BUY: 1, PUT: -1, SELL: -1 };
 const FADE_LIVE = process.env.FADE_LIVE === "true";
 const watchOnly = (strategy) => isWatchOnly(strategy); // entryRules.js; nothing is watch-only in learning mode
 const LEARN = learningMode(); // entryRules.js
+// "YYYY-MM-DDTHH:MM" in New York time, the clock Tradier's timesales use.
+const etMinuteStamp = () => {
+  const p = Object.fromEntries(new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(new Date()).map((x) => [x.type, x.value]));
+  return `${p.year}-${p.month}-${p.day}T${p.hour === "24" ? "00" : p.hour}:${p.minute}`;
+};
+// Today's one-minute bars for the entry-confirmation test; [] on any failure.
+async function minuteBars(symbol) {
+  try {
+    const day = etMinuteStamp().slice(0, 10);
+    const d = await tradier(`/markets/timesales?symbol=${encodeURIComponent(symbol)}&interval=1min&start=${day}%2009:30&session_filter=open`);
+    return asArray(d?.series?.data);
+  } catch { return []; }
+}
 const STRICT_TRIGGERS = process.env.LOOSE_TRIGGERS !== "true";
 const etNowMinutes = () => {
   const [h, m] = new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour12: false, hour: "2-digit", minute: "2-digit" }).split(":").map(Number);
@@ -479,7 +492,7 @@ async function placeOption(idea, { dryRun, openOccs }) {
       expiration: idea.expiration, side: "buy", quantity: contractQty, limitPrice: Number(vet.computed.price), order: orderResult,
       closeByEod: Boolean(idea.flatByClose),
       stopPct: idea.stopPct ?? null,
-      learningOverrides: idea.learningOverrides ?? null,
+      learningOverrides: idea.learningOverrides ?? null, entryStyle: idea.entryStyle ?? null,
     });
   } catch (e) {
     console.error("Autotrade journal write failed (order was still placed):", e);
@@ -524,7 +537,7 @@ async function placeShares(idea, { dryRun }) {
     journalOpen({
       ideaId: idea.id, thesis: null, vehicle: "SHARES", symbol: idea.symbol,
       side: vet.computed.side, quantity: vet.computed.quantity, limitPrice: vet.computed.price, order: orderResult,
-      learningOverrides: idea.learningOverrides ?? null,
+      learningOverrides: idea.learningOverrides ?? null, entryStyle: idea.entryStyle ?? null,
     });
   } catch (e) {
     console.error("Autotrade journal write failed (order was still placed):", e);
@@ -858,6 +871,17 @@ async function run(req) {
         }
         if (skipThisIdea) continue;
         if (!nowTriggered) { results.push({ ...tag, placed: false, reason: `Not triggered — live $${live} vs needs to go ${idea.triggerDirection} $${effectiveTrigger}${effectiveTrigger !== idea.triggerPrice ? ` (easiest of recent refreshes; latest asked for $${idea.triggerPrice})` : ""}.` }); continue; }
+        /* The entry-confirmation test (entryRules.entryArm): the "confirm" arm
+           also waits for CONFIRM_BARS completed one-minute closes beyond the
+           trigger. Not a refusal; the idea is re-checked every minute. */
+        tag.entryStyle = entryArm(idea.id);
+        if (tag.entryStyle === "confirm") {
+          const bars = await minuteBars(idea.symbol);
+          if (!confirmedBreak({ bars, trigger: effectiveTrigger, direction: idea.triggerDirection, nowMinute: etMinuteStamp() })) {
+            results.push({ ...tag, placed: false, waitingConfirm: true, reason: `Triggered ($${live} through $${effectiveTrigger}); the confirm arm of the entry test waits for ${CONFIRM_BARS} one-minute closes beyond it.` });
+            continue;
+          }
+        }
         if (crossedAt != null) tag.triggeredIntraday = `crossed $${effectiveTrigger} intraday (${idea.triggerDirection === "above" ? "high" : "low"} $${crossedAt} since the idea was written) though it is $${live} now`;
         /* Stand down at the extreme. A breakout bought at the top of the day's
            range (or a breakdown at the bottom) has to keep running with no
@@ -1139,6 +1163,7 @@ async function run(req) {
       // Written on the journal row (journalOpen), so the edge report can split
       // results by which rules were overridden.
       idea.learningOverrides = overrides.length ? overrides : null;
+      idea.entryStyle = tag.entryStyle ?? (hasTrigger ? "immediate" : "no_trigger");
       let r;
       if (idea.vehicle === "OPTION") r = await placeOption(idea, { dryRun, openOccs });
       else if (idea.vehicle === "SHARES") r = await placeShares(idea, { dryRun });

@@ -105,7 +105,17 @@ export const MAX_LOSS_PCT = 1; // % of the account one trade may lose before it 
    not held to this: 10% of a stock is a different kind of move, and their
    stop is the idea's own level. Entry spreads are capped in autotrade so a
    position is not born halfway to this stop. */
-export const HARD_LOSS_PCT = { OPTION: 10, SHARES: null };
+/* 10 -> 20 on 2026-10-14, the owner: "lets not have the stop losses this
+   conservative, check the stocks that were sold too early and adjust the
+   stop loss". Replayed on the 31 closed option trades since 10-07 that have
+   1-minute option bars, each re-sized to the same $ risk at its stop, with
+   the 1% max-loss sale kept: 10% nets -$1,502; 15% -$612; 20% -$621; 25%
+   -$663; 30%+ -$686. Both halves agree (before 10-14: -$407 -> -$180;
+   10-14: -$1,095 -> -$442). A 10% stop sits inside an option's normal
+   minute-to-minute noise: AVGO 10/13, GOOGL and QQQ 10/14 were sold at
+   -$170 to -$228 and then came back to break even or better. The wider
+   stop buys fewer contracts, so the dollars at risk are unchanged. */
+export const HARD_LOSS_PCT = { OPTION: 20, SHARES: null };
 /* Playbooks that open and close inside one session: the same-day target, the
    live-price target reference, and no thesis-reversed rule. "contrarian" (the
    fade, app/api/fadeLib.js) is one of them, and it is BUILT against the

@@ -82,10 +82,10 @@ test("max loss: 1% of the account at the bid closes a multi-day position whateve
   // rule is reported first when it is the larger loss.
   const f = figures({ entry: 2.00, peak: 2.00, mark: 0.91, qty: 4 }); // -$436
   assert.equal(decideProfitExit(CFG, f).tag, "max_loss");
-  // Inside the dollar line but 12% down: since 2026-10-14 the option stop takes it.
-  assert.equal(decideProfitExit(CFG, figures({ entry: 2.00, peak: 2.00, mark: 1.76, qty: 4 })).tag, "premium_stop"); // -12%, -$96
-  // Inside both: holds.
-  assert.equal(decideProfitExit(CFG, figures({ entry: 2.00, peak: 2.00, mark: 1.84, qty: 4 })), null); // -8%, -$64
+  // Inside the dollar line but 22% down: the option stop (20% since 2026-10-14) takes it.
+  assert.equal(decideProfitExit(CFG, figures({ entry: 2.00, peak: 2.00, mark: 1.56, qty: 1 })).tag, "premium_stop"); // -22%, -$44
+  // Inside both: holds. 12% down was sold under the old 10% stop.
+  assert.equal(decideProfitExit(CFG, figures({ entry: 2.00, peak: 2.00, mark: 1.76, qty: 1 })), null); // -12%, -$24
 });
 
 test("a tiny option position is cut on percentage even though the dollars never reach the account rule", () => {
@@ -217,13 +217,13 @@ test("direction and held quantity read the row the way the order path does", () 
 });
 
 
-test("premium stop: an option is cut at -10% of its entry price, the size of a typical win", () => {
+test("premium stop: an option is cut at -20% of its entry price (10% until 2026-10-14)", () => {
   const cfg = exitConfig(25000);
   const base = { vehicle: "OPTION", entryPremium: 5.52, peakGainPct: 0, peakGainUsd: 0, peakMark: 5.52 };
-  assert.equal(HARD_LOSS_PCT.OPTION, 10);
-  const cut = decideProfitExit(cfg, { ...base, markNow: 4.95, gainPct: -10.3, gainUsd: -57 });
+  assert.equal(HARD_LOSS_PCT.OPTION, 20);
+  const cut = decideProfitExit(cfg, { ...base, markNow: 4.40, gainPct: -20.3, gainUsd: -112 });
   assert.equal(cut?.tag, "premium_stop");
-  assert.equal(decideProfitExit(cfg, { ...base, markNow: 5.05, gainPct: -8.5, gainUsd: -47 }), null, "inside the stop, nothing fires");
+  assert.equal(decideProfitExit(cfg, { ...base, markNow: 4.95, gainPct: -10.3, gainUsd: -57 }), null, "inside the stop, nothing fires");
   // The account rule still wins when it is the larger loss, as on a multi-contract position.
   const big = decideProfitExit(cfg, { ...base, markNow: 4.95, gainPct: -10.3, gainUsd: -456 });
   assert.equal(big?.tag, "max_loss");

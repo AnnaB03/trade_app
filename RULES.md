@@ -48,8 +48,9 @@ With learning mode off, the table below applies as written.
 | Entries per stock per day | 4, then a 45-minute wait after an exit | `entryRules` | 2026-10-13 |
 | Idea minimums | conviction 2, reward:risk 1.5 | `entryRules` | — |
 | Same-day contracts opened until | 15:00 ET | `entryRules.lateEntryRefused` | 2026-10-08 |
+| Entry test | triggered ideas split by id: half buy at the break, half wait for 2 completed 1-minute closes beyond it (`ENTRY_CONFIRM=all/off`) | `entryRules.entryArm`, `confirmedBreak` | 2026-10-14 |
 | Contracts per option trade | 1% of the account / loss at the stop that fires first | `entryRules.sizeOptionEntry` | 2026-10-14 |
-| Option stop | from its stock's p90 30-minute adverse move, 8–35%; else 10% | `swingLib.optionStopPct`, `exitRules.HARD_LOSS_PCT` | 2026-10-14 |
+| Option stop | from its stock's p90 30-minute adverse move, **20–35%; else 20%** (was 8–35%, else 10%: replayed on 31 trades, 10% netted −$1,502 against −$621 at 20% for the same $ risk) | `swingLib.optionStopPct`, `exitRules.HARD_LOSS_PCT` | 2026-10-14 |
 | Spread at entry | at most 6% of the premium and 40% of the loss limit | `entryRules` | 2026-10-12/14 |
 | Selection | no calls in an uptrend, no puts in a transitioning tape, no calls after 14:00, no FDA | `selectionLib` | 2026-10-13 |
 | Watch-only (record, never trade) | the fade, the fade scan | `entryRules.isWatchOnly` | 2026-10-14 |

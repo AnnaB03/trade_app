@@ -56,7 +56,7 @@ export function planGrade(entry, underlyingPriceAtClose) {
 // invalidation, target, conviction, catalyst, regime, the spot price the
 // idea was generated against) is pulled automatically when ideaId is given;
 // a manual (non-idea) open supplies its own short `thesis` instead.
-export function journalOpen({ ideaId, thesis, vehicle, symbol, occ, strike, optionType, expiration, side, quantity, limitPrice, order, closeByEod, stopPct, learningOverrides }) {
+export function journalOpen({ ideaId, thesis, vehicle, symbol, occ, strike, optionType, expiration, side, quantity, limitPrice, order, closeByEod, stopPct, learningOverrides, entryStyle }) {
   const idea = ideaId ? listIdeas().find((i) => i.id === ideaId) : null;
   return appendJournalEntry({
     ideaId: idea?.id ?? null,
@@ -81,6 +81,8 @@ export function journalOpen({ ideaId, thesis, vehicle, symbol, occ, strike, opti
     regimeTrend: idea?.regimeTrend ?? null,
     // Learning mode: the soft entry rules this trade was taken over (entryRules.js).
     learningOverrides: learningOverrides ?? null,
+    // The entry-confirmation test: "confirm", "immediate" or "no_trigger" (entryRules.entryArm).
+    entryStyle: entryStyle ?? null,
     entryPriceAtIdea: idea?.entryPrice ?? null,
     ideaAction: idea?.action ?? null,
     // A short-dated fallback contract decays ~25% of its price a day, so it is

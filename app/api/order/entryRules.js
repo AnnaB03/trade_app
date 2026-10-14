@@ -64,6 +64,36 @@ export const SOFT_RULES = Object.freeze([
 export const LEARNING_LAST_ENTRY_MIN = 15 * 60 + 30;   // ET; hard, same-day contracts
 export const LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY = 8;  // hard runaway guard
 
+/* ---------- The entry-confirmation test (2026-10-14) ----------
+   Of 19 losing option trades since 10-07, 17 never showed more than +3% on
+   the option: the entry fired the minute a level broke, at the end of a
+   small move, paid the ask, and the stock pulled back. The owner: "lets
+   test that". So triggered ideas are split in two, by idea id:
+     "immediate": buy when the live price is through the trigger (as before);
+     "confirm":   also wait for the last CONFIRM_BARS COMPLETED one-minute
+                  bars to close beyond the trigger.
+   Every journal row carries its entryStyle, and /api/edge splits by it.
+   ENTRY_CONFIRM=all puts every idea in "confirm", =off every idea in
+   "immediate"; the default is the split. */
+export const CONFIRM_BARS = 2;
+export function entryArm(ideaId, env = process.env) {
+  const mode = env.ENTRY_CONFIRM || "ab";
+  if (mode === "off") return "immediate";
+  if (mode === "all") return "confirm";
+  let h = 0;
+  for (const c of String(ideaId ?? "")) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return h % 2 === 0 ? "confirm" : "immediate";
+}
+/* bars: one-minute bars [{ time: "YYYY-MM-DDTHH:MM:SS", close }], oldest
+   first. nowMinute: "YYYY-MM-DDTHH:MM" in the same clock; the bar for that
+   minute is still forming and does not count. */
+export function confirmedBreak({ bars, trigger, direction, nowMinute, n = CONFIRM_BARS }) {
+  const done = (bars || []).filter((b) => b && Number.isFinite(Number(b.close)) && (!nowMinute || String(b.time).slice(0, 16) < nowMinute));
+  if (done.length < n) return false;
+  const t = Number(trigger);
+  return done.slice(-n).every((b) => (direction === "above" ? Number(b.close) > t : Number(b.close) < t));
+}
+
 /* The limit price for a buy: the ASK. Decided 2026-10-14 after a day at the
    mid: the one order that filled (GOOGL fade, -$238) filled only as the trade
    turned, and the puts that were right never filled. ENTRY_AT_MID=true goes

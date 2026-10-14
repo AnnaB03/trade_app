@@ -30,11 +30,13 @@ test("profileFromBars: the move up and down within the window, per entry", () =>
 test("optionStopPct: the stock's adverse move expressed in the option's price", () => {
   // QQQ 10/19 $736 put on 2026-10-14: price 736, delta 0.48, premium 5.25.
   const qqq = { up: { p80: 0.21, p90: 0.29, p95: 0.38 }, down: { p80: 0.2, p90: 0.27, p95: 0.35 } };
-  const stop = swing.optionStopPct({ optionType: "put", profile: qqq, price: 736, delta: -0.48, premium: 5.25 });
+  // floor: 8 shows the raw arithmetic; the live floor is 20% (2026-10-14).
+  const stop = swing.optionStopPct({ optionType: "put", profile: qqq, price: 736, delta: -0.48, premium: 5.25, floor: 8 });
   assert.equal(stop, 19.5, "0.48 x 0.29% x 736 / 5.25");
   assert.ok(stop > 13.9, "outside the 13.9% dip that the flat 10% stop sold");
   // A call reads the DOWN side.
-  assert.equal(swing.optionStopPct({ optionType: "call", profile: qqq, price: 736, delta: 0.48, premium: 5.25 }), 18.2);
+  assert.equal(swing.optionStopPct({ optionType: "call", profile: qqq, price: 736, delta: 0.48, premium: 5.25, floor: 8 }), 18.2);
+  assert.equal(swing.optionStopPct({ optionType: "call", profile: qqq, price: 736, delta: 0.48, premium: 5.25 }), 20, "floored at 20%");
 });
 
 test("optionStopPct: floored, capped, and absent without a profile", () => {

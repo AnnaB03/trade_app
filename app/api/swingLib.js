@@ -27,7 +27,7 @@ export const SWING_KEY = "swing_profile";
 export const SWING_WINDOW_MIN = 30;
 export const SWING_DAYS = 15;
 export const STOP_PCTILE = "p90";
-export const STOP_FLOOR_PCT = 8;
+export const STOP_FLOOR_PCT = 20; // 8 -> 20 on 2026-10-14; see exitRules.HARD_LOSS_PCT for the replay
 export const STOP_CAP_PCT = 35;
 const MAX_AGE_MS = 20 * 3600000;
 
