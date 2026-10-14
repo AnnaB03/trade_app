@@ -31,6 +31,7 @@ const swing = await import("../app/api/swingLib.js");
 const sizing = await import("../app/api/sizingLib.js");
 const sim = await import("../app/api/simBroker.js");
 const accountLib = await import("../app/api/accountLib.js");
+const edge = await import("../app/api/edgeLib.js");
 after(() => { store._closeForTests(); fs.rmSync(tmp, { recursive: true, force: true }); });
 
 const ACCOUNT = 25000;
@@ -221,4 +222,25 @@ test("RULE: nothing fills while the market is closed (no clock = closed)", async
 test("RULE: ideas come from Opus — 2026-10-13, Sonnet answered WAIT to nearly everything", () => {
   const src = fs.readFileSync(path.join(process.cwd(), "app/api/suggestions/route.js"), "utf8");
   assert.match(src, /model: process\.env\.SUGGESTIONS_MODEL \|\| "claude-opus-5"/);
+});
+
+
+/* ---------- 9. A losing record trades smaller, never stops ---------- */
+
+test("RULE: the edge throttle — a losing recent record cuts size to 1/2 or 1/4, never to zero — 2026-10-14, 'find a better solution'", () => {
+  assert.equal(edge.edgeRiskMultiplier({ n: 11, needed: 20 }).mult, 1, "not enough trades to judge: full size");
+  assert.equal(edge.edgeRiskMultiplier({ n: 20, expectancyR: 0.1 }).mult, 1);
+  assert.equal(edge.edgeRiskMultiplier({ n: 20, expectancyR: -0.08 }).mult, 0.5, "the swing record that afternoon");
+  assert.equal(edge.edgeRiskMultiplier({ n: 20, expectancyR: -0.6 }).mult, 0.25);
+  for (const e of [-0.01, -0.3, -5]) assert.ok(edge.edgeRiskMultiplier({ n: 20, expectancyR: e }).mult > 0, "never zero: a stopped playbook could never prove itself again");
+  // And the size really follows it.
+  const leg = { bid: 3.65, ask: 3.75, delta: -0.4381 };
+  const full = entry.sizeOptionEntry({ accountSize: ACCOUNT, leg, entryPrice: 104.82, invalidation: 107.5, action: "PUT" });
+  const half = entry.sizeOptionEntry({ accountSize: ACCOUNT, leg, entryPrice: 104.82, invalidation: 107.5, action: "PUT", riskMult: 0.5 });
+  assert.ok(half.contracts < full.contracts && half.riskAtStop <= 125 + 1, `half ${half.contracts}/${half.riskAtStop} vs full ${full.contracts}`);
+});
+
+test("RULE: same-day ideas are asked for 1.8x reward to risk at the trigger — 2026-10-14", () => {
+  const src = fs.readFileSync(path.join(process.cwd(), "app/api/suggestions/route.js"), "utf8");
+  assert.match(src, /Reward at least 1\.8x risk MEASURED FROM THE TRIGGER PRICE/);
 });

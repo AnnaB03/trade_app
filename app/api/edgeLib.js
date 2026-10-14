@@ -104,3 +104,28 @@ export function playbookVerdicts(trades, { rUsd, lastN = 20, minN = 20 } = {}) {
 }
 
 export const playbookOf = PLAYBOOK;
+
+/* ---------- The edge throttle ----------
+   Replaces the edge GATE's hard stop, 2026-10-14 (the owner: "find a better
+   solution"). The gate stopped a playbook once its last 20 closed trades lost
+   money — and then it could never come back: with no new trades, the last 20
+   never change, so a stopped playbook stayed stopped for good. It tripped that
+   afternoon on 20 trades made mostly under rules since replaced, and refused
+   four puts that had passed every other check.
+
+   A trader in a drawdown trades smaller and keeps measuring. So the recent
+   record now sets the SIZE, never zero:
+     not enough trades to judge, or expectancy >= 0   -> full risk
+     expectancy between 0 and -0.25R a trade          -> half risk
+     expectancy below -0.25R a trade                  -> quarter risk
+   The daily loss limit (riskLib) is still the hard stop. */
+export const THROTTLE_HALF_BELOW_R = 0;
+export const THROTTLE_QUARTER_BELOW_R = -0.25;
+
+export function edgeRiskMultiplier(verdict) {
+  if (!verdict || verdict.n == null || (verdict.needed != null && verdict.n < verdict.needed)) return { mult: 1, label: "full size — not enough trades yet to judge" };
+  const e = Number(verdict.expectancyR);
+  if (!Number.isFinite(e) || e >= THROTTLE_HALF_BELOW_R) return { mult: 1, label: "full size" };
+  if (e >= THROTTLE_QUARTER_BELOW_R) return { mult: 0.5, label: `half size — last ${verdict.n} trades ${e.toFixed(2)}R each` };
+  return { mult: 0.25, label: `quarter size — last ${verdict.n} trades ${e.toFixed(2)}R each` };
+}

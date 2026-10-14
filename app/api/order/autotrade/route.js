@@ -22,7 +22,7 @@ import { markActivity } from "../../activityLib";
 import { recordShadowEntry } from "../../shadowLib";
 import { tradingHalt } from "../../riskLib";
 import { accountSize } from "../../accountLib";
-import { closedTrades, playbookVerdicts } from "../../edgeLib";
+import { closedTrades, playbookVerdicts, edgeRiskMultiplier } from "../../edgeLib";
 import { fetchTape, ATR_USED_MAX_PCT } from "../../tapeLib";
 import { notifyBought } from "../../notifyLib";
 import { buildOptionStopEstimate } from "../../../lib/orders";
@@ -492,7 +492,8 @@ async function placeShares(idea, { dryRun }) {
   // A share buy pays the ask too; the idea's price is the last trade.
   const entry = (idea.action !== "SELL" && !dryRun ? await liveAsk(idea.symbol) : null) ?? Number(idea.entryPrice);
   if (!(entry > 0)) return { placed: false, reason: "No entry price on this idea." };
-  const sized = idea.sizing?.vehicle === "SHARES" ? idea.sizing.shares : null;
+  // The edge throttle scales shares the same way it scales contracts.
+  const sized = idea.sizing?.vehicle === "SHARES" ? idea.sizing.shares * (Number(idea.__riskMult) || 1) : null;
   // Sandbox needs whole shares — fractional sizing (fine on real Robinhood)
   // rounds up to 1 rather than being skipped, so a cheap, well-sized idea
   // still gets a real paper fill instead of silently doing nothing. No
@@ -754,7 +755,11 @@ async function run(req) {
       if (Number(rawIdea.conviction) < minConviction) { results.push({ ...tag, placed: false, reason: `Conviction ${rawIdea.conviction} below the ${minConviction} bar.` }); continue; }
       if (verdicts) {
         const pb = rawIdea.strategy === "intraday" ? "intraday" : rawIdea.strategy === "contrarian" ? "contrarian" : "swing";
-        if (verdicts[pb] && !verdicts[pb].ok) { results.push({ ...tag, placed: false, reason: `Edge gate — the ${pb} playbook has ${verdicts[pb].reason}. Fix the playbook, or set EDGE_GATE=false to trade it anyway.` }); continue; }
+        // The edge THROTTLE (edgeLib.edgeRiskMultiplier): a losing recent record
+        // cuts the size, never to zero. It used to refuse the trade outright.
+        const th = edgeRiskMultiplier(verdicts[pb]);
+        rawIdea.__riskMult = th.mult;
+        if (th.mult < 1) tag.edgeThrottle = th.label;
       }
       /* Selection (selectionLib.js): which ideas are taken as written. The fade
          playbook is exempt — it is the other side of exactly these refusals. */
@@ -1025,6 +1030,7 @@ async function run(req) {
         const sz = sizeOptionEntry({
           accountSize: ACCOUNT_SIZE, leg: idea.leg, entryPrice: idea.entryPrice, invalidation: idea.invalidation,
           action: idea.action, strategy: idea.strategy, profile: profileFor(idea.symbol),
+          riskMult: rawIdea.__riskMult ?? 1,
         });
         idea.stopPct = sz.stopPct;
         if (!sz.ok) { results.push({ ...tag, placed: false, reason: sz.reason }); continue; }

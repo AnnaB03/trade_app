@@ -40,8 +40,9 @@ export function payPrice(leg, { atMid = process.env.ENTRY_AT_MID === "true" } = 
    out. Contracts = the 1% budget / that risk, never more than the 15%
    position cap, at least one — except a same-day trade is refused when one
    contract would risk more than 1.5x the budget. Then the spread checks. */
-export function sizeOptionEntry({ accountSize, leg, entryPrice, invalidation, action, strategy, profile = null, atMid }) {
-  const budget = (accountSize * RISK_PER_TRADE_PCT) / 100;
+export function sizeOptionEntry({ accountSize, leg, entryPrice, invalidation, action, strategy, profile = null, atMid, riskMult = 1 }) {
+  // riskMult: the edge throttle (edgeLib) — 1, 0.5 or 0.25 of the 1% budget.
+  const budget = (accountSize * RISK_PER_TRADE_PCT * Math.max(0, Math.min(1, Number(riskMult) || 1))) / 100;
   const delta = Math.abs(Number(leg?.delta)) || 0.6;
   const spread = Math.max(0, (Number(leg?.ask) || 0) - (Number(leg?.bid) || 0));
   const premium = Number(payPrice(leg, { atMid })) || 0;

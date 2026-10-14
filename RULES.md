@@ -31,3 +31,5 @@ when any test fails.
 | Account | margin: proceeds reusable at once; 3 day trades per 5 days under $25K equity | `simBroker` | 2026-10-13 |
 | Broker rules | limit orders only, no shorting, no option writing, $0.35 a contract each way | `simBroker` | 2026-10-07 |
 | Idea model | Opus | `suggestions/route.js` | 2026-10-13 |
+| A losing recent record | trades at 1/2 size (0 to −0.25R a trade) or 1/4 (worse), never stops | `edgeLib.edgeRiskMultiplier` | 2026-10-14 |
+| Same-day ideas are asked for | 1.8× reward to risk at the trigger | `suggestions/route.js` prompt | 2026-10-14 |
