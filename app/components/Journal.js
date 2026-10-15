@@ -429,7 +429,9 @@ function PositionsPanel() {
             <th style={{ textAlign: "left" }}>Symbol</th><th>Qty</th><th>Cost basis</th><th>Sell price now</th><th>Gain / loss</th><th style={{ textAlign: "left" }}>Sells automatically at</th><th></th>
           </tr></thead>
           <tbody>
-            {positions.map((p) => {
+            {/* Soonest expiry first (2026-10-15, the owner): what expires today is on
+                top. Shares, which never expire, go last; ties by symbol. */}
+            {[...positions].sort((a, b) => String(a.expiration || "9999").localeCompare(String(b.expiration || "9999")) || String(a.underlying).localeCompare(String(b.underlying))).map((p) => {
               const isOpen = openSym === p.symbol;
               return (
                 <Fragment key={p.symbol}>
