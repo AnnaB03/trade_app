@@ -33,6 +33,24 @@ async function underlyingQuote(symbol) {
    while the row kept the dead order id and never booked the +$300. The
    reconcile retry pass books a close from whatever order id the row carries,
    so re-pointing the id is enough. Returns true if a row was re-linked. */
+// Cancels every working sell for one option contract (occ) or one stock (symbol).
+async function cancelWorkingSells({ occ, symbol }) {
+  if (!occ && !symbol) return [];
+  const cancelled = [];
+  try {
+    const acct = await accountId();
+    const d = await tradeFetch(`/accounts/${acct}/orders`);
+    for (const o of asArray(d?.orders?.order)) {
+      const legs = asArray(o.leg).length ? asArray(o.leg) : [o];
+      const working = legs.some((l) => ["open", "pending", "partially_filled"].includes(l.status ?? o.status) && /^sell/.test(String(l.side ?? o.side))
+        && (occ ? (l.option_symbol ?? o.option_symbol) === occ : !(l.option_symbol ?? o.option_symbol) && (l.symbol ?? o.symbol) === symbol));
+      if (!working) continue;
+      try { await tradeFetch(`/accounts/${acct}/orders/${o.id}`, { method: "DELETE" }); cancelled.push(o.id); } catch {}
+    }
+  } catch (e) { console.error("cancelWorkingSells failed:", e); }
+  return cancelled;
+}
+
 function relinkCancelledClose(matchFn, newOrderId) {
   if (!newOrderId) return false;
   const stale = listJournal().find((r) => r.status === "closed" && r.exitOrderId && r.exitFillPrice == null && matchFn(r));
@@ -47,6 +65,13 @@ export async function POST(req) {
   try {
     const isEquity = Boolean(body?.equity);
     const closing = body?.closing === true;
+    /* A close REPLACES any sell already working on the same contract
+       (2026-10-15). The owner sold AMZN 11/6 $250c at $13.50, above the
+       $13.35 bid; it rested, and a second sell at the bid was refused ("2
+       committed to other working sell orders") with no way to cancel the
+       first. The journal row is re-linked to the new order below
+       (relinkCancelledClose). */
+    if (closing) await cancelWorkingSells(isEquity ? { symbol: String(body.symbol || "").toUpperCase() } : { occ: body.legs?.[0]?.occ });
     const vet = isEquity ? await vetEquityOrder(body, { preview: false }) : await vetOrder(body, { preview: false });
     if (vet.error) {
       return NextResponse.json(
