@@ -443,6 +443,9 @@ function PositionsPanel() {
                     <td>{p.last != null ? "$" + Number(p.last).toFixed(2) : "—"}</td>
                     <td className={p.unrealizedPnl == null ? "muted" : p.unrealizedPnl >= 0 ? "up" : "down"} style={{ fontWeight: 600 }}>
                       {usd(p.unrealizedPnl)}
+                      {p.unrealizedPnl != null && p.costBasis > 0 && (
+                        <span style={{ fontWeight: 400, marginLeft: 6 }}>({p.unrealizedPnl >= 0 ? "+" : "−"}{Math.abs((p.unrealizedPnl / p.costBasis) * 100).toFixed(1)}%)</span>
+                      )}
                     </td>
                     <td style={{ textAlign: "left" }}><ExitPlanCell plan={p.journal?.exitPlan} symbol={p.underlying} /></td>
                     <td><button className="chip" onClick={() => setOpenSym(isOpen ? null : p.symbol)}>{isOpen ? "hide" : "close…"}</button></td>
