@@ -95,3 +95,10 @@ test("no fades in the first half hour, when the day's range is still forming", (
   assert.ok(fade.fadePlan({ ...args, etMinutes: 10 * 60 }), "allowed from 10:00 ET");
   assert.ok(fade.fadePlan(args), "no clock given, no time rule — the callers pass one");
 });
+
+test("only fade CALLS are taken: fading puts in a transitioning tape won 4 of 4, fading calls lost 4 of 4 — 2026-10-15", async () => {
+  const f = await import("../app/api/fadeLib.js");
+  assert.equal(f.fadeActionAllowed("CALL"), true);
+  assert.equal(f.fadeActionAllowed("PUT"), false);
+  assert.equal(f.fadeActionAllowed("PUT", new Set(["CALL", "PUT"])), true, "FADE_ACTIONS=CALL,PUT restores both");
+});

@@ -12,7 +12,7 @@ learn from every single contract or trade."
 - The safety core still refuses:
   - paper only;
   - the regular session only;
-  - the daily loss halt (10%, $2,500);
+  - (the daily loss halt is off since 2026-10-15, `DAILY_LOSS_LIMIT_PCT=0`, at the owner's call; default 10%);
   - the option stop (20% minimum, judged at the mid; no dollar cap on options), and the $500 cap for shares;
   - the 15% position, 20% per-symbol and total-capital caps;
   - the idea's trigger has not fired;

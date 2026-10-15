@@ -25,7 +25,7 @@ contract or trade."* On unless `LEARNING_MODE=false` (`entryRules.learningMode`)
 - **The safety core still refuses:**
   - paper only;
   - the regular session only;
-  - the 10% daily loss halt ($2,500);
+  - (the daily loss halt is off since 2026-10-15: `DAILY_LOSS_LIMIT_PCT=0`; the default is 10%);
   - the 20% option stop (judged at the mid), and the $500 cap for shares;
   - the 15% / 20% / total caps;
   - the idea's own trigger must fire;
@@ -43,7 +43,7 @@ With learning mode off, the table below applies as written.
 | Rule | Value | Where | Since |
 |---|---|---|---|
 | Risk per trade | **sized to lose 2% of the account ($500) at its stop**; options are sold by the 20% stop (judged at the mid) or the idea's level, with **no dollar cap** since 2026-10-15 (MU $3,040 contract cut at −16% by the cap, worth +$1,050 an hour later); shares keep the $500 cap, their only loss limit | `entryRules.RISK_PER_TRADE_PCT`, `exitRules.MAX_LOSS_PCT` | 2026-10-15 |
-| Daily loss limit | **10% of the account ($2,500)**; 5% from 2026-10-13 | `riskLib.DAILY_LOSS_LIMIT_PCT` | 2026-10-14 |
+| Daily loss limit | **off since 2026-10-15** (`DAILY_LOSS_LIMIT_PCT=0`, the owner: "remove that stop at the daily loss limit for now since we are still learning"); the code default is 10% ($2,500); 5% from 2026-10-13 | `riskLib.DAILY_LOSS_LIMIT_PCT` | 2026-10-15 |
 | Buys are priced at | the ask (`ENTRY_AT_MID=true` for the mid) | `entryRules.payPrice` | 2026-10-14 |
 | New positions only in | the regular session | `entryRules.entriesAllowed` | 2026-10-13 |
 | Position cap | 15% of the account | `sizingLib.OPTION_HARD_PCT` | 2026-10-06 |
@@ -51,6 +51,7 @@ With learning mode off, the table below applies as written.
 | Entries per stock per day | 4, then a 45-minute wait after an exit | `entryRules` | 2026-10-13 |
 | Idea minimums | conviction 2, reward:risk 1.5 | `entryRules` | — |
 | Same-day contracts opened until | 15:00 ET | `entryRules.lateEntryRefused` | 2026-10-08 |
+| Fade sides | **fade calls only** (fading put ideas in a transitioning tape: 4 for 4, +$887); fade puts and the fade scan off (0 for 4, −$1,235). `FADE_ACTIONS=CALL,PUT` restores both | `fadeLib.FADE_ACTIONS` | 2026-10-15 |
 | Fades / flips / re-buys | one fade per stock per day; no opposite-side entry on a stock within 30 minutes; **no same-side re-buy within 30 minutes of any sale of it**, except after a stop or max-loss sale while the stock is still on the right side of the idea's level (2026-10-15: 11 such re-buys had lost $444; MU's blocked re-buy would have made about +$1,000). From the 10-14 replay: +$6,454 / +$3,065 at 3% worse fills, against +$5,274 / −$2,874 without | `entryRules.fadeLimitReached`, `flipTooSoon` | 2026-10-14 |
 | News playbook | the risk & market agent may propose up to 3 same-day ideas per report; the server checks the levels (right sides, 1.5:1 from the trigger, within 3% of the price) and picks a 1–4 day contract itself; traded live as strategy `news` under every rule above, shown in their own Ideas section; none after 15:00 ET | `newsIdeasLib`, `contractLib` | 2026-10-14 |
 | Entry test | triggered ideas split by id: half buy at the break, half wait for 2 completed 1-minute closes beyond it (`ENTRY_CONFIRM=all/off`) | `entryRules.entryArm`, `confirmedBreak` | 2026-10-14 |

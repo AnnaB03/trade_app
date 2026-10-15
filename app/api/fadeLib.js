@@ -42,6 +42,16 @@ export function extremeRead({ action, price, low, high, threshold = EXTREME_PCT 
   return { pos, atExtreme, side: bullish ? "long" : "short" };
 }
 
+/* Which fade trades are taken: CALLS only since 2026-10-15, the owner: "lets
+   try turning off the fade puts and keep the fade calls". The record:
+     fading a PUT idea in a transitioning tape (buys a call)    4 for 4, +$887
+     fading a CALL idea in an uptrend (buys a put)              0 for 2, -$324
+     fading a CALL breakout at the day's high (buys a put)      0 for 2, -$911
+   Buying weakness has worked and selling strength has not, as with the
+   model's own ideas the week before. FADE_ACTIONS=CALL,PUT restores both. */
+export const FADE_ACTIONS = new Set(String(process.env.FADE_ACTIONS || "CALL").toUpperCase().split(",").map((s) => s.trim()).filter(Boolean));
+export const fadeActionAllowed = (action, allowed = FADE_ACTIONS) => allowed.has(String(action).toUpperCase());
+
 export const fadeEnabled = (side) => FADE_SIDES === "both" || (FADE_SIDES === "long" && side === "long");
 
 /* The plan for the opposite side: the levels, in the UNDERLYING's price.

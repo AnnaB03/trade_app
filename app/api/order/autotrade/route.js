@@ -17,7 +17,7 @@ import {
   fromEarlierSession, PLAYED_OUT_EXITS, countsAsEntry, etDate, fadeLimitReached, flipTooSoon, rebuyTooSoon,
 } from "../entryRules";
 import { optionStopPct, profileFor } from "../../swingLib";
-import { extremeRead, fadePlan, fadeEnabled, EXTREME_PCT, FADE_SIDES } from "../../fadeLib";
+import { extremeRead, fadePlan, fadeEnabled, EXTREME_PCT, FADE_SIDES, fadeActionAllowed } from "../../fadeLib";
 import { appendIdea } from "../../store";
 import { selectionVerdict } from "../../selectionLib";
 import { markActivity } from "../../activityLib";
@@ -588,6 +588,7 @@ async function deriveFades(now = Date.now()) {
       const plan = fadePlan({ action: base.action, price: q.last, low: q.low, high: q.high, etMinutes: em })
         || (sv.fade ? fadePlan({ action: base.action, price: q.last, low: q.low, high: q.high, force: true, etMinutes: em }) : null);
       if (!plan) continue;
+      if (!fadeActionAllowed(plan.action)) continue; // fade calls only (fadeLib.FADE_ACTIONS)
       plan.why = sv.fade ? `a ${base.action} in a ${base.regimeTrend} tape` : `a ${base.action} at ${plan.rangePos}% of the day's range`;
       const alt = await fadeContract(base.symbol, plan.optionType, q.last);
       if (!alt) continue;
@@ -676,7 +677,8 @@ async function run(req) {
     // multi-day AI ideas (no strategy tag) and the intraday ones.
     const asked = params.get("playbook");
     const playbook = ["intraday", "contrarian", "fade_scan", "news"].includes(asked) ? asked : null;
-    const derived = playbook === "contrarian" ? await deriveFades() : playbook === "fade_scan" ? await deriveScanFades() : [];
+    // The fade scan only ever buys puts at the day's high, so it is off while fade puts are (fadeLib.FADE_ACTIONS).
+    const derived = playbook === "contrarian" ? await deriveFades() : playbook === "fade_scan" && fadeActionAllowed("PUT") ? await deriveScanFades() : [];
     const all = listIdeas().filter((i) => (playbook ? i.strategy === playbook : !i.strategy));
     const batch = latestPerSymbol(all);
     /* An empty playbook is not an error: the fade only has ideas while a
@@ -755,6 +757,11 @@ async function run(req) {
       tag.learningOverrides = overrides;
       const soft = (rule, reason) => { if (!LEARN) return false; overrides.push({ rule, reason }); return true; };
       if (!["CALL", "PUT", "BUY", "SELL"].includes(rawIdea.action)) { results.push({ ...tag, placed: false, reason: "WAIT — nothing to trade." }); continue; }
+      // Fade puts are off (fadeLib.FADE_ACTIONS); this also stops fade-put ideas already in the ledger.
+      if ((rawIdea.strategy === "contrarian" || rawIdea.strategy === "fade_scan") && !fadeActionAllowed(rawIdea.action)) {
+        results.push({ ...tag, placed: false, reason: `Fade ${rawIdea.action}s are off: only fade calls are traded (fadeLib.FADE_ACTIONS).` });
+        continue;
+      }
       // Hard, in learning mode too (entryRules.fromEarlierSession).
       if (fromEarlierSession(rawIdea.createdAt)) { results.push({ ...tag, placed: false, reason: `Written in an earlier session (${etDate(rawIdea.createdAt)}) — its prices and levels are not today's.` }); continue; }
       if (Number(rawIdea.conviction) < minConviction) {
