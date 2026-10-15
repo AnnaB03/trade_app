@@ -257,6 +257,17 @@ test("RULE: no re-buying a stock on the same side within 30 minutes of any sale 
   assert.match(entry.rebuyTooSoon({ action: "CALL", rows: [{ ...mu, exitReasonTag: "manual" }], now, livePrice: 886 }), /no re-buying/, "after a manual sale the wait always applies");
 });
 
+test("RULE: never both sides of one stock at once; one position per stock, side and playbook — 2026-10-15", () => {
+  const call = { optionType: "call", occ: "NVDA261016C00220000", strategy: "intraday", entryFillPrice: 1.23 };
+  assert.match(entry.bothSidesOpen({ action: "PUT", openRows: [call] }), /other side/, "the NVDA fade put against the open call");
+  assert.equal(entry.bothSidesOpen({ action: "CALL", openRows: [call] }), null);
+  assert.equal(entry.bothSidesOpen({ action: "PUT", openRows: [] }), null, "once the call is closed, a put is fine");
+  const orcl = { optionType: "call", occ: "ORCL261016C00129000", strategy: "intraday", entryFillPrice: 4.8, expiration: "2026-10-16" };
+  assert.ok(entry.samePlaybookPosition({ action: "CALL", strategy: "intraday", openRows: [orcl] }), "the second ORCL same-day call (switched to Oct 23) is a duplicate");
+  assert.equal(entry.samePlaybookPosition({ action: "CALL", strategy: undefined, openRows: [orcl] }), null, "a swing call may sit beside a same-day call");
+  assert.ok(entry.samePlaybookPosition({ action: "CALL", strategy: undefined, openRows: [{ ...orcl, strategy: "ai" }] }), "swing ideas are journaled as 'ai'");
+});
+
 test("RULE: a setup is void when price is through its invalidation or already at its target — hard, in learning mode too", () => {
   assert.match(entry.setupVoid({ dir: -1, entry: 700, target: 705, invalidation: 710 }), /target/, "the SPY put loop of 2026-10-14");
   assert.match(entry.setupVoid({ dir: 1, entry: 99, target: 110, invalidation: 100 }), /invalidation/);

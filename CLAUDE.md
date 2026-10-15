@@ -21,6 +21,7 @@ learn from every single contract or trade."
   - no usable stop;
   - a spread over 12% of the premium, or over half the loss limit on arrival;
   - an idea from an earlier session, or one that already reached its target;
+  - the other side of a stock already held, or a second position in the same stock, side and playbook;
   - same-day contracts after 15:30;
   - a second fade of a stock in a day, the other side of a stock within 30 minutes, or the same side within 30 minutes of a sale;
   - more than 8 entries per stock per day.

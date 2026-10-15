@@ -14,7 +14,7 @@ import {
   MAX_SPREAD_SHARE_OF_LOSS, MAX_SPREAD_PCT_OF_PREMIUM, LAST_FLAT_BY_CLOSE_ENTRY_MIN, REENTRY_COOLDOWN_MIN,
   MAX_ENTRIES_PER_SYMBOL_DAY, RISK_PER_TRADE_PCT as INTRADAY_RISK_PCT, isWatchOnly, entriesAllowed,
   learningMode, lateEntryRefused, LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY, setupVoid, entryArm, confirmedBreak, CONFIRM_BARS,
-  fromEarlierSession, PLAYED_OUT_EXITS, countsAsEntry, etDate, fadeLimitReached, flipTooSoon, rebuyTooSoon,
+  fromEarlierSession, PLAYED_OUT_EXITS, countsAsEntry, etDate, fadeLimitReached, flipTooSoon, rebuyTooSoon, bothSidesOpen, samePlaybookPosition,
 } from "../entryRules";
 import { optionStopPct, profileFor } from "../../swingLib";
 import { extremeRead, fadePlan, fadeEnabled, EXTREME_PCT, FADE_SIDES, fadeActionAllowed } from "../../fadeLib";
@@ -1011,10 +1011,17 @@ async function run(req) {
            shadow book so each rule is scored. */
         const todayRows = listJournal().filter((r) => r.symbol === idea.symbol && r.createdAt && new Date(r.createdAt).toDateString() === today && !isLegacy(r, baseline) && countsAsEntry(r));
         const soldRows = listJournal().filter((r) => r.symbol === idea.symbol && r.exitAt && !isLegacy(r, baseline));
+        const openRows = listJournal().filter((r) => r.symbol === idea.symbol && r.status === "open" && r.entryFillPrice != null && !isLegacy(r, baseline));
+        const dupPos = samePlaybookPosition({ action: idea.action, strategy: idea.strategy, openRows });
+        if (dupPos) {
+          results.push({ ...tag, placed: false, reason: `Already holding a ${idea.symbol} ${dupPos.optionType ?? dupPos.side} in this playbook (${dupPos.occ ?? "shares"}): one position per stock, side and playbook.` });
+          continue;
+        }
         const blocked = [
           ["fade_once", fadeLimitReached({ strategy: idea.strategy, rows: todayRows })],
           ["flip_30min", flipTooSoon({ action: idea.action, rows: todayRows })],
           ["rebuy_30min", rebuyTooSoon({ action: idea.action, rows: soldRows, livePrice: liveBySym[idea.symbol] ?? idea.entryPrice })],
+          ["both_sides", bothSidesOpen({ action: idea.action, openRows })],
         ].find(([, why]) => why);
         if (blocked) {
           const [rule, why] = blocked;

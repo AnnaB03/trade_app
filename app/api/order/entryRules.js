@@ -133,6 +133,30 @@ export function rebuyTooSoon({ action, rows, now = Date.now(), waitMin = REBUY_W
   return `Sold this stock on the same side ${mins} min ago (${last.exitReasonTag ?? "exit"}); no re-buying for ${waitMin} minutes after a sale.`;
 }
 
+/* No holding both sides of one stock (2026-10-15, the owner: "ok, lets
+   implement that"). While a stock has an open position on one side, the
+   other side is not bought, however long ago the first was. Since the
+   restart this would have blocked 4 losers (-$1,113: QQQ puts against a fade
+   call, the AMZN and NVDA fade puts against calls) and 2 small winners
+   (+$110). Paired positions mostly cancel and pay two spreads.
+   openRows: today's open journal rows for the symbol. */
+export function bothSidesOpen({ action, openRows }) {
+  const dir = action === "CALL" || action === "BUY" ? 1 : -1;
+  const other = (openRows || []).find((r) => rowDir(r) === -dir);
+  return other ? `Already holding the other side of this stock (${other.optionType ?? other.side} ${other.occ ?? ""}, ${other.strategy ?? "manual"}); not holding both sides at once.` : null;
+}
+
+/* One position per stock, side and playbook, whatever contract it is in
+   (2026-10-15). The duplicate check matched on the expiry, so a contract
+   switched to another expiry (contractLib) slipped past it: ORCL held two
+   same-day calls, Oct 16 $129 and Oct 23 $131. Different playbooks (a swing
+   call and a same-day call) may still both hold a side. */
+export const playbookOf = (strategy) => strategy || "ai";
+export function samePlaybookPosition({ action, strategy, openRows }) {
+  const dir = action === "CALL" || action === "BUY" ? 1 : -1;
+  return (openRows || []).find((r) => rowDir(r) === dir && playbookOf(r.strategy) === playbookOf(strategy)) || null;
+}
+
 export function setupVoid({ dir, entry, target, invalidation }) {
   const e = Number(entry), t = Number(target), v = Number(invalidation);
   if (e > 0 && v > 0 && (dir > 0 ? e <= v : e >= v)) return `Live price $${e} is already ${dir > 0 ? "at or below" : "at or above"} the $${v} invalidation — the setup is void, not cheap.`;
