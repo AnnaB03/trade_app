@@ -40,12 +40,17 @@ const ACCOUNT = 25000;
 
 /* 1% -> 2% on 2026-10-14, the owner choosing "2%, and a 10% daily halt", after
    the 20% option stop had halved the contracts bought for the same $250. */
-test("RULE: one trade may lose at most 2% of the account ($500 at $25K) — 2026-10-08 at 1%, 2% since 2026-10-14", () => {
+/* 2026-10-15, the owner: "Remove the $500 cap" (for options). MU 10/21 $885c
+   cost $3,040, so the cap sold it at -16%, inside its 20% stop. */
+test("RULE: trades are sized to lose 2% of the account ($500) at the stop; the dollar cap sells shares only — 2026-10-14 / 2026-10-15", () => {
   assert.equal(exits.MAX_LOSS_PCT, 2);
   assert.equal(exits.exitConfig(ACCOUNT).maxLossUsd, 500);
   assert.equal(entry.RISK_PER_TRADE_PCT, 2);
-  const f = { vehicle: "OPTION", entryPremium: 2, markNow: 1.37, gainPct: -31.5, gainUsd: -502, peakGainPct: 0, peakGainUsd: 0, peakMark: 2 };
-  assert.equal(exits.decideProfitExit(exits.exitConfig(ACCOUNT), f).tag, "max_loss", "a position down $502 is sold");
+  const opt = { vehicle: "OPTION", entryPremium: 30.4, markNow: 25.05, gainPct: -17.6, gainUsd: -535, peakGainPct: 0, peakGainUsd: 0, peakMark: 30.4, stopPct: 20, profitMode: "target50" };
+  assert.equal(exits.decideProfitExit(exits.exitConfig(ACCOUNT), opt), null, "MU: -$535 but inside its 20% stop — held");
+  assert.equal(exits.decideProfitExit(exits.exitConfig(ACCOUNT), { ...opt, gainPct: -21, lossGainPct: -21, gainUsd: -640, lossGainUsd: -640 }).tag, "premium_stop", "the stop sells it");
+  const shares = { vehicle: "SHARES", entryPremium: 100, markNow: 94.9, gainPct: -5.1, gainUsd: -510, peakGainPct: 0, peakGainUsd: 0, peakMark: 100 };
+  assert.equal(exits.decideProfitExit(exits.exitConfig(ACCOUNT), shares).tag, "max_loss", "shares down $510 are sold");
 });
 
 test("RULE: the day stops at a loss of 10% of the account ($2,500) — the one halt kept on 2026-10-13; 5% until 2026-10-14", () => {
@@ -245,6 +250,11 @@ test("RULE: no re-buying a stock on the same side within 30 minutes of any sale 
   assert.equal(entry.rebuyTooSoon({ action: "CALL", rows: [sold], now }), null, "the other side is the no-flip rule's business");
   assert.equal(entry.rebuyTooSoon({ action: "PUT", rows: [{ ...sold, exitAt: "2026-10-15T13:24:00Z" }], now }), null, "after 30 minutes the side is open again");
   assert.equal(entry.rebuyTooSoon({ action: "PUT", rows: [{ ...sold, entryFillPrice: null }], now }), null, "an order that never filled sold nothing");
+  // Exempt (2026-10-15): a stop or max-loss sale while the stock is still on the right side of the idea's stop level.
+  const mu = { optionType: "call", entryFillPrice: 30.4, exitAt: "2026-10-15T13:54:00Z", exitReasonTag: "max_loss", invalidation: 868 };
+  assert.equal(entry.rebuyTooSoon({ action: "CALL", rows: [mu], now, livePrice: 886 }), null, "MU at $886 against an $868 level: the option's price sold it, the idea may be bought again");
+  assert.match(entry.rebuyTooSoon({ action: "CALL", rows: [mu], now, livePrice: 865 }), /no re-buying/, "through its level: a real stop-out, the wait applies");
+  assert.match(entry.rebuyTooSoon({ action: "CALL", rows: [{ ...mu, exitReasonTag: "manual" }], now, livePrice: 886 }), /no re-buying/, "after a manual sale the wait always applies");
 });
 
 test("RULE: a setup is void when price is through its invalidation or already at its target — hard, in learning mode too", () => {
@@ -312,10 +322,10 @@ test("the journal's 'sells automatically at' column comes from the live exit rul
   assert.deepEqual(plan.profit[1], { kind: "target", underlying: 709, above: false });
   assert.equal(plan.loss.price, 7.47);
   assert.equal(plan.loss.usd, -375);
-  // A bigger position reaches the $500 max-loss sale before its 20% stop.
+  // A bigger position: its stop, not a dollar cap (none on options since 2026-10-15).
   const big = exits.exitPlan({ ...row, entryQuantity: 5, entryFillPrice: 5.3, stopPct: 20 }, { accountSize: ACCOUNT, profitMode: "target50" });
-  assert.equal(big.loss.byMaxLoss, true);
-  assert.equal(big.loss.usd, -500);
+  assert.equal(big.loss.byMaxLoss, undefined);
+  assert.equal(big.loss.usd, -534, "20% of 5 x $530, plus fees");
   assert.equal(exits.exitPlan({ vehicle: "OPTION" }, { accountSize: ACCOUNT }), null, "no entry price, no plan");
   // The target in dollars: delta x the move from the entry price to the target, less fees.
   // GOOGL Nov 6 $345 call, 1 at $16.40, delta 0.6, bought with GOOGL at $348.25, target $356: +$7.75 x 0.6 = +$4.65.
@@ -332,8 +342,9 @@ test("RULE: the stop and the max-loss sale are judged at the option's mid, not t
   const cfg = exits.exitConfig(ACCOUNT);
   // MU 10/21 $885c, 1 at $30.40: the bid at $25.05 is -$535, but the mid (~$27.50) is -$290.
   const mu = { vehicle: "OPTION", entryPremium: 30.4, markNow: 25.05, gainPct: -17.6, gainUsd: -535, peakGainPct: 0, peakGainUsd: 0, peakMark: 30.4, stopPct: 20, profitMode: "target50" };
-  assert.equal(exits.decideProfitExit(cfg, { ...mu, lossGainPct: -9.5, lossGainUsd: -290 }), null, "held: the loss at the mid is inside both limits");
-  assert.equal(exits.decideProfitExit(cfg, { ...mu, lossGainPct: -16.8, lossGainUsd: -510 }).tag, "max_loss", "sold once the mid crosses $500");
+  assert.equal(exits.decideProfitExit(cfg, { ...mu, lossGainPct: -9.5, lossGainUsd: -290 }), null, "held: the loss at the mid is inside the stop");
+  assert.equal(exits.decideProfitExit(cfg, { ...mu, lossGainPct: -19, lossGainUsd: -578 }), null, "no dollar cap on options: -19% at the mid is still held");
+  assert.equal(exits.decideProfitExit(cfg, { ...mu, lossGainPct: -20.5, lossGainUsd: -623 }).tag, "premium_stop", "sold once the mid crosses the 20% stop");
   assert.equal(exits.decideProfitExit(cfg, { ...mu, entryPremium: 5, lossGainPct: -21, lossGainUsd: -105, gainUsd: -130, gainPct: -26 }).tag, "premium_stop");
 });
 

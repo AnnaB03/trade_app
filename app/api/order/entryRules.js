@@ -116,9 +116,17 @@ export function flipTooSoon({ action, rows, now = Date.now(), waitMin = FLIP_WAI
    what it blocks goes to the shadow book. rows: journal rows for the symbol
    (any day) with a filled entry and an exitAt. */
 export const REBUY_WAIT_MIN = 30;
-export function rebuyTooSoon({ action, rows, now = Date.now(), waitMin = REBUY_WAIT_MIN }) {
+/* Exempt (2026-10-15, the owner): a stop or max-loss sale while the stock
+   is still on the right side of the idea's stop level. The option's price
+   sold it, not the thesis: MU was sold at -$536 with the stock $19 from its
+   level, and the blocked re-buy would have made about +$1,000. livePrice: the
+   stock now. */
+export const OPTION_PRICE_EXITS = new Set(["premium_stop", "max_loss", "stop"]);
+export function rebuyTooSoon({ action, rows, now = Date.now(), waitMin = REBUY_WAIT_MIN, livePrice = null }) {
   const dir = action === "CALL" || action === "BUY" ? 1 : -1;
-  const last = (rows || []).filter((r) => r.exitAt && r.entryFillPrice != null && rowDir(r) === dir && now - Date.parse(r.exitAt) >= 0 && now - Date.parse(r.exitAt) < waitMin * 60000)
+  const thesisIntact = (r) => OPTION_PRICE_EXITS.has(r.exitReasonTag) && Number(livePrice) > 0 && Number(r.invalidation) > 0
+    && (dir > 0 ? Number(livePrice) > Number(r.invalidation) : Number(livePrice) < Number(r.invalidation));
+  const last = (rows || []).filter((r) => r.exitAt && r.entryFillPrice != null && rowDir(r) === dir && !thesisIntact(r) && now - Date.parse(r.exitAt) >= 0 && now - Date.parse(r.exitAt) < waitMin * 60000)
     .sort((a, b) => Date.parse(b.exitAt) - Date.parse(a.exitAt))[0];
   if (!last) return null;
   const mins = Math.round((now - Date.parse(last.exitAt)) / 60000);

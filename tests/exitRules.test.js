@@ -81,11 +81,12 @@ test("NVDA 10/07 $232.50c (25 contracts): a peak gain past the tighten bar halve
   assert.equal(decideProfitExit(ref, figures({ entry: 3.05, peak: 6.10, mark: 5.34, qty: 25 })).tag, "trail_stop");
 });
 
-test("max loss: 1% of the account at the bid closes a multi-day position whatever its own levels say", () => {
-  // INTC put, four contracts, -$436: over the $100 line at $10K. The dollar
-  // rule is reported first when it is the larger loss.
-  const f = figures({ entry: 2.00, peak: 2.00, mark: 0.91, qty: 4 }); // -$436
-  assert.equal(decideProfitExit(CFG, f).tag, "max_loss");
+test("max loss: the dollar cap sells SHARES; an option is sold by its stop (the option cap was removed 2026-10-15)", () => {
+  // INTC put, four contracts, -$436: the cap sold it at $10K; now the 20% option stop does.
+  const f = figures({ entry: 2.00, peak: 2.00, mark: 0.91, qty: 4 }); // -$436, -55%
+  assert.equal(decideProfitExit(CFG, f).tag, "premium_stop");
+  // Shares keep the cap: they have no percentage stop.
+  assert.equal(decideProfitExit(CFG, figures({ vehicle: "SHARES", entry: 100, peak: 100, mark: 97.5, qty: 100 })).tag, "max_loss"); // -$250 > $200
   // Inside the dollar line but 22% down: the option stop (20% since 2026-10-14) takes it.
   assert.equal(decideProfitExit(CFG, figures({ entry: 2.00, peak: 2.00, mark: 1.56, qty: 1 })).tag, "premium_stop"); // -22%, -$44
   // Inside both: holds. 12% down was sold under the old 10% stop.
@@ -228,9 +229,9 @@ test("premium stop: an option is cut at -20% of its entry price (10% until 2026-
   const cut = decideProfitExit(cfg, { ...base, markNow: 4.40, gainPct: -20.3, gainUsd: -112 });
   assert.equal(cut?.tag, "premium_stop");
   assert.equal(decideProfitExit(cfg, { ...base, markNow: 4.95, gainPct: -10.3, gainUsd: -57 }), null, "inside the stop, nothing fires");
-  // The account rule still wins when it is the larger loss, as on a multi-contract position.
-  const big = decideProfitExit(cfg, { ...base, markNow: 4.95, gainPct: -10.3, gainUsd: -560 }); // past $500 = 2% of $25K
-  assert.equal(big?.tag, "max_loss");
+  // No dollar cap on options since 2026-10-15: -10% holds even at -$560 on a big position.
+  const big = decideProfitExit(cfg, { ...base, markNow: 4.95, gainPct: -10.3, gainUsd: -560 });
+  assert.equal(big, null);
   // Shares are not held to a percentage of their price.
   assert.equal(decideProfitExit(cfg, { vehicle: "SHARES", entryPremium: 355.73, markNow: 320, gainPct: -10.1, gainUsd: -143, peakGainPct: 0, peakGainUsd: 0, peakMark: 355.73 }), null);
 });

@@ -987,7 +987,7 @@ async function run(req) {
         const blocked = [
           ["fade_once", fadeLimitReached({ strategy: idea.strategy, rows: todayRows })],
           ["flip_30min", flipTooSoon({ action: idea.action, rows: todayRows })],
-          ["rebuy_30min", rebuyTooSoon({ action: idea.action, rows: soldRows })],
+          ["rebuy_30min", rebuyTooSoon({ action: idea.action, rows: soldRows, livePrice: liveBySym[idea.symbol] ?? idea.entryPrice })],
         ].find(([, why]) => why);
         if (blocked) {
           const [rule, why] = blocked;

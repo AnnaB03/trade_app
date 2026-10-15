@@ -13,7 +13,7 @@ learn from every single contract or trade."
   - paper only;
   - the regular session only;
   - the daily loss halt (10%, $2,500);
-  - the 2% max-loss exit ($500) and the option stop (20% minimum);
+  - the option stop (20% minimum, judged at the mid; no dollar cap on options), and the $500 cap for shares;
   - the 15% position, 20% per-symbol and total-capital caps;
   - the idea's trigger has not fired;
   - price is already through the invalidation, or already at the target;

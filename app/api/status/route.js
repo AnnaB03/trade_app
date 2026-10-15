@@ -21,7 +21,7 @@ export async function GET() {
     // agents and the UI can check them against what was agreed (RULES.md).
     rules: {
       learningMode: learningMode(),
-      riskPerTradePct: RISK_PER_TRADE_PCT, maxLossPct: MAX_LOSS_PCT, dailyLossLimitPct: DAILY_LOSS_LIMIT_PCT,
+      riskPerTradePct: RISK_PER_TRADE_PCT, maxLossPct: MAX_LOSS_PCT, maxLossAppliesTo: "shares only (options: the stop)", dailyLossLimitPct: DAILY_LOSS_LIMIT_PCT,
       optionStopPct: { flat: HARD_LOSS_PCT.OPTION, floor: STOP_FLOOR_PCT, cap: STOP_CAP_PCT },
       profitExits: profitExitMode(), profitTakePct: PROFIT_TAKE_PCT,
       entryConfirm: process.env.ENTRY_CONFIRM || "ab", confirmBars: CONFIRM_BARS,

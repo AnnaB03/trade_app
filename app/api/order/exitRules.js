@@ -267,7 +267,15 @@ export function decideProfitExit(cfg, {
      $25.05 and it was sold for -$536 while MU had moved 0.3% (its stop level
      was $19 away); MU then ran $15 higher. The owner: "it looks like the stop
      loss kicked in too early". The sale still happens at the bid. */
-  if (lossGainUsd != null && lossGainUsd <= -cfg.maxLossUsd) {
+  /* OPTIONS: off since 2026-10-15, the owner: "Remove the $500 cap". On a
+     single contract costing over $2,500 the cap sat inside the 20% stop and
+     sold first: MU 10/21 $885c ($3,040) at -16%, worth +$1,050 at the bid an
+     hour later. Of the 4 trades it ever sold, GOOGL and AVGO went at -7%
+     and -8%. An option's loss is now the 20% stop (judged at the mid) or the
+     idea's stop level; sizing still budgets 2% at the stop, and the 15%
+     position cap bounds one stop-out at about $750. SHARES keep the cap:
+     they have no percentage stop, so it is their only loss limit. */
+  if (vehicle !== "OPTION" && lossGainUsd != null && lossGainUsd <= -cfg.maxLossUsd) {
     exit = { tag: "max_loss", detail: `Down $${Math.abs(lossGainUsd).toFixed(0)} at the mid (${gainUsd != null ? `$${Math.abs(gainUsd).toFixed(0)} at the bid` : "no bid"}) — at the $${cfg.maxLossUsd.toFixed(0)} most one trade may lose (${MAX_LOSS_PCT}% of the account)` };
   }
   // The position's own stop (set at entry from its stock's history), else the flat one.
@@ -432,12 +440,8 @@ export function exitPlan(row, { accountSize, profitMode = profitExitMode(), feeP
   if (opt) {
     const pct = Number(row.stopPct) > 0 ? Number(row.stopPct) : HARD_LOSS_PCT.OPTION;
     const atStop = entry * (pct / 100) * mult * qty + fees;
-    if (atStop <= cfg.maxLossUsd) loss = { pct, price: Math.round(entry * (1 - pct / 100) * 100) / 100, usd: -Math.round(atStop), maxLossUsd: cfg.maxLossUsd };
-    else {
-      // The max-loss sale comes first: the price at which the position is down maxLossUsd.
-      const price = entry - (cfg.maxLossUsd - fees) / (mult * qty);
-      loss = { pct: Math.round(((entry - price) / entry) * 1000) / 10, price: Math.round(price * 100) / 100, usd: -Math.round(cfg.maxLossUsd), maxLossUsd: cfg.maxLossUsd, byMaxLoss: true };
-    }
+    // The option stop alone (no dollar cap on options since 2026-10-15).
+    loss = { pct, price: Math.round(entry * (1 - pct / 100) * 100) / 100, usd: -Math.round(atStop) };
   }
   return { profit, loss, invalidation: Number(row.invalidation) > 0 ? Number(row.invalidation) : null, eod: Boolean(row.closeByEod) };
 }
