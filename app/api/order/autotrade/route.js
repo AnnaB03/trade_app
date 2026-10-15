@@ -22,7 +22,7 @@ import { appendIdea } from "../../store";
 import { selectionVerdict } from "../../selectionLib";
 import { markActivity } from "../../activityLib";
 import { recordShadowEntry } from "../../shadowLib";
-import { shortDatedContract } from "../../contractLib";
+import { shortDatedContract, liquidAlternative, spreadPct, SWITCH_SPREAD_PCT } from "../../contractLib";
 import { tradingHalt } from "../../riskLib";
 import { accountSize } from "../../accountLib";
 import { closedTrades, playbookVerdicts, edgeRiskMultiplier } from "../../edgeLib";
@@ -268,6 +268,10 @@ function isDuplicatePosition(idea, openEntry) {
      cannot place spreads, so there is no legitimate multi-strike structure
      this blocks. It does forgo pyramiding into a winner — a real strategy, but
      not one that was ever chosen here. */
+  // The same idea is the same position whatever contract it ended up in: since
+  // 2026-10-15 a wide-spread contract can be switched to a liquid one, so the
+  // open row may name a different strike and expiry than the idea does.
+  if (openEntry.ideaId && idea.id && openEntry.ideaId === idea.id) return true;
   if (idea.vehicle === "OPTION") {
     if (openEntry.vehicle !== "OPTION") return false;
     const wantType = idea.action === "CALL" ? "call" : idea.action === "PUT" ? "put" : null;
@@ -494,7 +498,7 @@ async function placeOption(idea, { dryRun, openOccs }) {
       expiration: idea.expiration, side: "buy", quantity: contractQty, limitPrice: Number(vet.computed.price), order: orderResult,
       closeByEod: Boolean(idea.flatByClose),
       stopPct: idea.stopPct ?? null,
-      learningOverrides: idea.learningOverrides ?? null, entryStyle: idea.entryStyle ?? null,
+      learningOverrides: idea.learningOverrides ?? null, entryStyle: idea.entryStyle ?? null, switchedFrom: idea.switchedFrom ?? null,
       entryUnderlying: Number(idea.entryPrice) || null, entryDelta: idea.leg?.delta != null ? Number(idea.leg.delta) : null,
     });
   } catch (e) {
@@ -916,6 +920,22 @@ async function run(req) {
         const mid = bid >= 0 && ask > 0 ? (bid + ask) / 2 : (Number(q?.last) || null);
         if (mid > 0) idea = { ...idea, leg: { ...idea.leg, bid, ask, mid } };
         else { results.push({ ...tag, placed: false, reason: `Couldn't get a live quote for ${idea.leg.occ}.` }); continue; }
+        /* A wide spread: switch to a liquid contract carrying the same bet
+           (contractLib.liquidAlternative). Never refuses; with nothing
+           better the idea's own contract goes on to the usual checks. */
+        const sp = spreadPct(bid, ask);
+        if (sp != null && sp > SWITCH_SPREAD_PCT) {
+          const alt = await liquidAlternative(idea.symbol, idea.action === "CALL" ? "call" : "put", {
+            targetDelta: idea.leg.delta ?? 0.55, currentSpreadPct: sp, ideaExpiration: idea.expiration,
+            minDte: idea.flatByClose ? 1 : 2, accountSize: ACCOUNT_SIZE,
+          });
+          if (alt) {
+            idea = { ...idea, expiration: alt.expiration, strike: alt.strike,
+              leg: { occ: alt.occ, strike: alt.strike, bid: alt.bid, ask: alt.ask, mid: (alt.bid + alt.ask) / 2, delta: alt.delta },
+              switchedFrom: { occ: rawIdea.leg?.occ ?? null, spreadPct: Math.round(sp * 10) / 10 } };
+            tag.switched = `${idea.switchedFrom.occ} (${idea.switchedFrom.spreadPct}% spread) -> ${alt.occ} (${alt.spreadPct.toFixed(1)}%)`;
+          }
+        }
       }
 
       /* Reward:risk, measured against the price we are ACTUALLY paying.

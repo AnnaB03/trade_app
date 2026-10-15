@@ -58,6 +58,7 @@ With learning mode off, the table below applies as written.
 | Contracts per option trade | 2% of the account / loss at the stop that fires first | `entryRules.sizeOptionEntry` | 2026-10-14 |
 | Loss checks judged at | the option's **mid** (stop and max-loss); sales still at the bid; profit rules at the bid (MU sold −$536 on a bid dip while the stock had moved 0.3%) | `exitRules.decideProfitExit` | 2026-10-15 |
 | Option stop | from its stock's p90 30-minute adverse move, **20–35%; else 20%** (was 8–35%, else 10%: replayed on 31 trades, 10% netted −$1,502 against −$621 at 20% for the same $ risk) | `swingLib.optionStopPct`, `exitRules.HARD_LOSS_PCT` | 2026-10-14 |
+| Contract switch | when the idea's contract is over 6% wide, the tightest contract with the same stock and type, delta within ±0.08, expiry from 3 days shorter (never under 2 days for swing, 1 for same-day) to 7 days longer, and a price inside the 15% cap; never refuses (MU's 15.8% $885c → Oct 19 $900c at 1.4%). The same idea counts as a duplicate whatever contract it is in | `contractLib.liquidAlternative` | 2026-10-15 |
 | Spread at entry | soft (recorded) over 6% of the premium or 40% of the loss limit; **hard over 12% of the premium or 50% of the loss limit** (MU 10/21 $885c: 15.8%, $480 of $500 on arrival) | `entryRules` | 2026-10-15 |
 | Selection | no calls in an uptrend, no puts in a transitioning tape, no calls after 14:00, no FDA | `selectionLib` | 2026-10-13 |
 | Watch-only (record, never trade) | the fade, the fade scan | `entryRules.isWatchOnly` | 2026-10-14 |
