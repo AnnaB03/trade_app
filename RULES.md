@@ -34,7 +34,7 @@ contract or trade."* On unless `LEARNING_MODE=false` (`entryRules.learningMode`)
   - no usable stop;
   - an idea from an earlier session, or one that already reached its target;
   - same-day contracts after **15:30**;
-  - a second fade of the same stock in a day, or buying the other side of a stock within 30 minutes of the last entry (blocked trades go to the shadow book with `blockedBy`);
+  - a second fade of the same stock in a day, buying the other side of a stock within 30 minutes of the last entry, or buying the same side again within 30 minutes of a sale (blocked trades go to the shadow book with `blockedBy`);
   - at most **8** entries per stock per day.
 
 With learning mode off, the table below applies as written.
@@ -50,7 +50,7 @@ With learning mode off, the table below applies as written.
 | Entries per stock per day | 4, then a 45-minute wait after an exit | `entryRules` | 2026-10-13 |
 | Idea minimums | conviction 2, reward:risk 1.5 | `entryRules` | — |
 | Same-day contracts opened until | 15:00 ET | `entryRules.lateEntryRefused` | 2026-10-08 |
-| Fades / flips | one fade per stock per day; no opposite-side entry on a stock within 30 minutes. From the 10-14 replay: +$6,454 / +$3,065 at 3% worse fills, against +$5,274 / −$2,874 without | `entryRules.fadeLimitReached`, `flipTooSoon` | 2026-10-14 |
+| Fades / flips / re-buys | one fade per stock per day; no opposite-side entry on a stock within 30 minutes; **no same-side re-buy within 30 minutes of any sale of it** (2026-10-15: 11 such re-buys had lost $444). From the 10-14 replay: +$6,454 / +$3,065 at 3% worse fills, against +$5,274 / −$2,874 without | `entryRules.fadeLimitReached`, `flipTooSoon` | 2026-10-14 |
 | News playbook | the risk & market agent may propose up to 3 same-day ideas per report; the server checks the levels (right sides, 1.5:1 from the trigger, within 3% of the price) and picks a 1–4 day contract itself; traded live as strategy `news` under every rule above, shown in their own Ideas section; none after 15:00 ET | `newsIdeasLib`, `contractLib` | 2026-10-14 |
 | Entry test | triggered ideas split by id: half buy at the break, half wait for 2 completed 1-minute closes beyond it (`ENTRY_CONFIRM=all/off`) | `entryRules.entryArm`, `confirmedBreak` | 2026-10-14 |
 | Contracts per option trade | 2% of the account / loss at the stop that fires first | `entryRules.sizeOptionEntry` | 2026-10-14 |

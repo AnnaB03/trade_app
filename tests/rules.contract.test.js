@@ -236,6 +236,17 @@ test("RULE: one fade per stock per day, and no flipping sides on a stock within 
   assert.match(entry.flipTooSoon({ action: "PUT", rows: [{ optionType: "call", entryAt: at(5) }], now }), /5 min ago/);
 });
 
+test("RULE: no re-buying a stock on the same side within 30 minutes of any sale of it — 2026-10-15, 'after every sale'", () => {
+  assert.equal(entry.REBUY_WAIT_MIN, 30);
+  const now = Date.parse("2026-10-15T13:55:00Z");
+  const sold = { optionType: "put", entryFillPrice: 13.67, exitAt: "2026-10-15T13:54:00Z", exitReasonTag: "manual" }; // the owner's QQQ sale
+  assert.match(entry.rebuyTooSoon({ action: "PUT", rows: [sold], now }), /1 min ago \(manual\)/, "the -$322 QQQ re-buy");
+  assert.match(entry.rebuyTooSoon({ action: "PUT", rows: [{ ...sold, exitReasonTag: "premium_stop" }], now }), /premium_stop/, "every kind of sale, not only manual");
+  assert.equal(entry.rebuyTooSoon({ action: "CALL", rows: [sold], now }), null, "the other side is the no-flip rule's business");
+  assert.equal(entry.rebuyTooSoon({ action: "PUT", rows: [{ ...sold, exitAt: "2026-10-15T13:24:00Z" }], now }), null, "after 30 minutes the side is open again");
+  assert.equal(entry.rebuyTooSoon({ action: "PUT", rows: [{ ...sold, entryFillPrice: null }], now }), null, "an order that never filled sold nothing");
+});
+
 test("RULE: a setup is void when price is through its invalidation or already at its target — hard, in learning mode too", () => {
   assert.match(entry.setupVoid({ dir: -1, entry: 700, target: 705, invalidation: 710 }), /target/, "the SPY put loop of 2026-10-14");
   assert.match(entry.setupVoid({ dir: 1, entry: 99, target: 110, invalidation: 100 }), /invalidation/);

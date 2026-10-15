@@ -21,7 +21,7 @@ learn from every single contract or trade."
   - no usable stop;
   - an idea from an earlier session, or one that already reached its target;
   - same-day contracts after 15:30;
-  - a second fade of a stock in a day, or the other side of a stock within 30 minutes;
+  - a second fade of a stock in a day, the other side of a stock within 30 minutes, or the same side within 30 minutes of a sale;
   - more than 8 entries per stock per day.
 - When nothing is trading, that is the bug. Print every idea's refusal reason and fix the cause.
 - The agent team (`.claude/agents/`, run by `app/api/agentsLib.js`) is read-only and reports in the Team tab. The risk & market agent's trade ideas reach the Cockpit only through the server's checks (`app/api/newsIdeasLib.js`), as playbook `news`.

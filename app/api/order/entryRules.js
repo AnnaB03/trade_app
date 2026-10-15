@@ -100,6 +100,23 @@ export function flipTooSoon({ action, rows, now = Date.now(), waitMin = FLIP_WAI
   return `Bought the other side of this stock ${mins} min ago (${opposite.optionType ?? opposite.side}); no flipping sides within ${waitMin} minutes.`;
 }
 
+/* No re-buying a stock on the same side within REBUY_WAIT_MIN of any sale of
+   it (manual, stop, trail, target, +50%). 2026-10-15, the owner, choosing
+   "after every sale": eleven same-side re-buys within 30 minutes of a sale
+   had lost $444 (5 winners). The worst was QQQ, re-bought a minute after the
+   owner's own +$475 sale and stopped out for -$322. Like the other two rules,
+   what it blocks goes to the shadow book. rows: journal rows for the symbol
+   (any day) with a filled entry and an exitAt. */
+export const REBUY_WAIT_MIN = 30;
+export function rebuyTooSoon({ action, rows, now = Date.now(), waitMin = REBUY_WAIT_MIN }) {
+  const dir = action === "CALL" || action === "BUY" ? 1 : -1;
+  const last = (rows || []).filter((r) => r.exitAt && r.entryFillPrice != null && rowDir(r) === dir && now - Date.parse(r.exitAt) >= 0 && now - Date.parse(r.exitAt) < waitMin * 60000)
+    .sort((a, b) => Date.parse(b.exitAt) - Date.parse(a.exitAt))[0];
+  if (!last) return null;
+  const mins = Math.round((now - Date.parse(last.exitAt)) / 60000);
+  return `Sold this stock on the same side ${mins} min ago (${last.exitReasonTag ?? "exit"}); no re-buying for ${waitMin} minutes after a sale.`;
+}
+
 export function setupVoid({ dir, entry, target, invalidation }) {
   const e = Number(entry), t = Number(target), v = Number(invalidation);
   if (e > 0 && v > 0 && (dir > 0 ? e <= v : e >= v)) return `Live price $${e} is already ${dir > 0 ? "at or below" : "at or above"} the $${v} invalidation — the setup is void, not cheap.`;

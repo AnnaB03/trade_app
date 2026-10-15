@@ -14,7 +14,7 @@ import {
   MAX_SPREAD_SHARE_OF_LOSS, MAX_SPREAD_PCT_OF_PREMIUM, LAST_FLAT_BY_CLOSE_ENTRY_MIN, REENTRY_COOLDOWN_MIN,
   MAX_ENTRIES_PER_SYMBOL_DAY, RISK_PER_TRADE_PCT as INTRADAY_RISK_PCT, isWatchOnly, entriesAllowed,
   learningMode, lateEntryRefused, LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY, setupVoid, entryArm, confirmedBreak, CONFIRM_BARS,
-  fromEarlierSession, PLAYED_OUT_EXITS, countsAsEntry, etDate, fadeLimitReached, flipTooSoon,
+  fromEarlierSession, PLAYED_OUT_EXITS, countsAsEntry, etDate, fadeLimitReached, flipTooSoon, rebuyTooSoon,
 } from "../entryRules";
 import { optionStopPct, profileFor } from "../../swingLib";
 import { extremeRead, fadePlan, fadeEnabled, EXTREME_PCT, FADE_SIDES } from "../../fadeLib";
@@ -983,7 +983,12 @@ async function run(req) {
            (entryRules.js). Hard, but what they block is recorded to the
            shadow book so each rule is scored. */
         const todayRows = listJournal().filter((r) => r.symbol === idea.symbol && r.createdAt && new Date(r.createdAt).toDateString() === today && !isLegacy(r, baseline) && countsAsEntry(r));
-        const blocked = [["fade_once", fadeLimitReached({ strategy: idea.strategy, rows: todayRows })], ["flip_30min", flipTooSoon({ action: idea.action, rows: todayRows })]].find(([, why]) => why);
+        const soldRows = listJournal().filter((r) => r.symbol === idea.symbol && r.exitAt && !isLegacy(r, baseline));
+        const blocked = [
+          ["fade_once", fadeLimitReached({ strategy: idea.strategy, rows: todayRows })],
+          ["flip_30min", flipTooSoon({ action: idea.action, rows: todayRows })],
+          ["rebuy_30min", rebuyTooSoon({ action: idea.action, rows: soldRows })],
+        ].find(([, why]) => why);
         if (blocked) {
           const [rule, why] = blocked;
           const row = dryRun || idea.vehicle !== "OPTION" ? null : recordShadowEntry({
