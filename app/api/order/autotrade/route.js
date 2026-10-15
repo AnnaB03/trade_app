@@ -495,6 +495,7 @@ async function placeOption(idea, { dryRun, openOccs }) {
       closeByEod: Boolean(idea.flatByClose),
       stopPct: idea.stopPct ?? null,
       learningOverrides: idea.learningOverrides ?? null, entryStyle: idea.entryStyle ?? null,
+      entryUnderlying: Number(idea.entryPrice) || null, entryDelta: idea.leg?.delta != null ? Number(idea.leg.delta) : null,
     });
   } catch (e) {
     console.error("Autotrade journal write failed (order was still placed):", e);

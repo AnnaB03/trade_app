@@ -385,7 +385,13 @@ export function decideReversalExit({ pos, dir, ideas, now = Date.now() }) {
      profit: [{ kind: "take", price, usd } , { kind: "target", underlying, above }]
      loss:   { price, usd, pct, maxLossUsd }   the first of the option stop and the max-loss sale
      eod:    true when a same-day contract is sold at 15:45 whatever its P&L */
-export function exitPlan(row, { accountSize, profitMode = profitExitMode(), feePerContract = 0.35 } = {}) {
+/* The target's value in dollars is an estimate (2026-10-15, "can you also
+   display that expectation in amount"): the option's delta at entry times the
+   stock's move from where it was bought to the target. Delta grows as a
+   winning option moves into the money, so this usually understates it a
+   little. Needs the stock price and delta at entry: stored on rows from
+   2026-10-15 (entryUnderlying, entryDelta), else passed in from the idea. */
+export function exitPlan(row, { accountSize, profitMode = profitExitMode(), feePerContract = 0.35, delta = null, underlyingAtEntry = null } = {}) {
   const entry = Number(row?.entryFillPrice ?? row?.entryLimitPrice);
   const qty = Number(row?.entryFilledQuantity ?? row?.entryQuantity) || 0;
   if (!(entry > 0) || !(qty > 0)) return null;
@@ -400,7 +406,18 @@ export function exitPlan(row, { accountSize, profitMode = profitExitMode(), feeP
     profit.push({ kind: "take", pct, price, usd: Math.round((price - entry) * mult * qty - fees) });
     if (profitMode !== "target50") profit.push({ kind: "trail", armPct: TRAIL_ARM_PCT.OPTION, givebackPct: TRAIL_GIVEBACK_PCT });
   }
-  if (Number(row.target) > 0) profit.push({ kind: "target", underlying: Number(row.target), above: dir > 0 });
+  if (Number(row.target) > 0) {
+    const t = { kind: "target", underlying: Number(row.target), above: dir > 0 };
+    const d = Math.abs(Number(row.entryDelta ?? delta)), u0 = Number(row.entryUnderlying ?? underlyingAtEntry);
+    const move = (Number(row.target) - u0) * dir; // in the position's favour when positive
+    if (opt && d > 0 && u0 > 0 && move > 0) {
+      t.estPrice = Math.round((entry + d * move) * 100) / 100;
+      t.estUsd = Math.round(d * move * mult * qty - fees);
+      const take = profit.find((p) => p.kind === "take");
+      if (take && t.estUsd > take.usd) t.takeFirst = true; // +50% is reached before the target
+    }
+    profit.push(t);
+  }
   const cfg = exitConfig(accountSize);
   let loss = null;
   if (opt) {

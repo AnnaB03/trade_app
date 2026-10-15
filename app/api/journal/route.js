@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { listJournal } from "../store";
+import { listJournal, listIdeas } from "../store";
 import { reconcileJournal } from "../journalReconcile";
 import { readBaseline } from "../ledgerLib";
 import { exitPlan } from "../order/exitRules";
@@ -19,5 +19,7 @@ export async function GET(req) {
   const reconcile = await reconcileJournal({ force });
   // exitPlan: what each position is waiting for to be sold (exitRules.exitPlan).
   const acct = accountSize();
-  return NextResponse.json({ entries: listJournal().map((e) => ({ ...e, exitPlan: exitPlan(e, { accountSize: acct }) })), reconcile, freshStartAt: readBaseline().freshStartAt ?? null });
+  const ideaById = new Map(listIdeas().map((i) => [i.id, i]));
+  const fromIdea = (e) => { const i = ideaById.get(e.ideaId); return { delta: i?.leg?.delta ?? null, underlyingAtEntry: i?.triggerPrice ?? i?.entryPrice ?? e.entryPriceAtIdea ?? null }; };
+  return NextResponse.json({ entries: listJournal().map((e) => ({ ...e, exitPlan: exitPlan(e, { accountSize: acct, ...fromIdea(e) }) })), reconcile, freshStartAt: readBaseline().freshStartAt ?? null });
 }

@@ -47,7 +47,7 @@ function ExitPlanCell({ plan, symbol, faded }) {
     <div style={{ fontSize: 12, lineHeight: 1.45, opacity: faded ? 0.6 : 1 }}
       title="The Cockpit sells automatically at the first of these. Profit: the option at +50%, or the stock at the idea's target. Loss: the option stop or the max-loss sale, whichever comes first.">
       {take && <div className="up">+{take.pct}% → ${take.price.toFixed(2)} ({money(take.usd)})</div>}
-      {target && <div>or {symbol} {target.above ? "≥" : "≤"} ${target.underlying}</div>}
+      {target && <div>or {symbol} {target.above ? "≥" : "≤"} ${target.underlying}{target.estUsd != null && <> <span className="up">(≈ {money(target.estUsd)})</span>{target.takeFirst && <span className="muted"> · +50% comes first</span>}</>}</div>}
       {trail && <div className="muted">trail from +{trail.armPct}%</div>}
       {plan.loss && <div className="muted">stop ${plan.loss.price.toFixed(2)} ({money(plan.loss.usd)}){plan.loss.byMaxLoss ? " max loss" : ""}</div>}
       {plan.eod && <div className="muted">sold at 15:45 regardless</div>}

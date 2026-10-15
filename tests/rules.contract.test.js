@@ -300,6 +300,15 @@ test("the journal's 'sells automatically at' column comes from the live exit rul
   assert.equal(big.loss.byMaxLoss, true);
   assert.equal(big.loss.usd, -500);
   assert.equal(exits.exitPlan({ vehicle: "OPTION" }, { accountSize: ACCOUNT }), null, "no entry price, no plan");
+  // The target in dollars: delta x the move from the entry price to the target, less fees.
+  // GOOGL Nov 6 $345 call, 1 at $16.40, delta 0.6, bought with GOOGL at $348.25, target $356: +$7.75 x 0.6 = +$4.65.
+  const g = exits.exitPlan({ vehicle: "OPTION", optionType: "call", entryFillPrice: 16.4, entryQuantity: 1, target: 356, entryUnderlying: 348.25, entryDelta: 0.6 }, { accountSize: ACCOUNT, profitMode: "target50" });
+  const gt = g.profit.find((x) => x.kind === "target");
+  assert.equal(gt.estPrice, 21.05);
+  assert.equal(gt.estUsd, 464);
+  assert.equal(gt.takeFirst, undefined, "the target comes before +50% here");
+  // Passed in from the idea for rows bought before entryUnderlying was stored.
+  assert.equal(exits.exitPlan({ vehicle: "OPTION", optionType: "put", entryFillPrice: 5, entryQuantity: 1, target: 90 }, { accountSize: ACCOUNT, delta: -0.5, underlyingAtEntry: 100 }).profit.find((x) => x.kind === "target").estUsd, 499, "0.5 x $10 x 100 - fees");
 });
 
 test("RULE (legacy, PROFIT_EXITS=legacy): trail arms at +5% (options) and sells on a 25% giveback; 1-3 day contracts sold at +7% and flat from 15:45", () => {
