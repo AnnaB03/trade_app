@@ -287,6 +287,21 @@ test("RULE: an option is sold for profit only at +50% or at the idea's target; s
   assert.equal(exits.decideLevelExit({ dir: -1, target: 700, invalidation: 720, strategy: "intraday", underlyingPx: 699.5, favorableExtreme: 699 }).tag, "target");
 });
 
+test("the journal's 'sells automatically at' column comes from the live exit rules — 2026-10-15", () => {
+  // QQQ 10/20 $721 put, 2 contracts at $9.34: +50% at $14.01, about +$933 after fees; stop 20% at $7.47.
+  const row = { vehicle: "OPTION", optionType: "put", entryFillPrice: 9.34, entryQuantity: 2, target: 709, invalidation: 721.5, closeByEod: false };
+  const plan = exits.exitPlan(row, { accountSize: ACCOUNT, profitMode: "target50" });
+  assert.deepEqual(plan.profit[0], { kind: "take", pct: 50, price: 14.01, usd: 933 });
+  assert.deepEqual(plan.profit[1], { kind: "target", underlying: 709, above: false });
+  assert.equal(plan.loss.price, 7.47);
+  assert.equal(plan.loss.usd, -375);
+  // A bigger position reaches the $500 max-loss sale before its 20% stop.
+  const big = exits.exitPlan({ ...row, entryQuantity: 5, entryFillPrice: 5.3, stopPct: 20 }, { accountSize: ACCOUNT, profitMode: "target50" });
+  assert.equal(big.loss.byMaxLoss, true);
+  assert.equal(big.loss.usd, -500);
+  assert.equal(exits.exitPlan({ vehicle: "OPTION" }, { accountSize: ACCOUNT }), null, "no entry price, no plan");
+});
+
 test("RULE (legacy, PROFIT_EXITS=legacy): trail arms at +5% (options) and sells on a 25% giveback; 1-3 day contracts sold at +7% and flat from 15:45", () => {
   assert.deepEqual(exits.TRAIL_ARM_PCT, { OPTION: 5, SHARES: 15 });
   assert.equal(exits.TRAIL_GIVEBACK_PCT, 25);

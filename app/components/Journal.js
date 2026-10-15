@@ -35,6 +35,26 @@ function latestIv(sym) {
    sale could look broken (2026-10-14: "I can't sell stocks myself"). The
    server path was fine. The reason is now optional, the price defaults to the
    live bid, and the result says whether the sale filled or is resting. */
+/* What the Cockpit is waiting for to sell this position (exitRules.exitPlan,
+   computed on the server from the live rules). */
+const money = (v) => (v < 0 ? "−$" : "+$") + Math.abs(Math.round(v)).toLocaleString("en-US");
+function ExitPlanCell({ plan, symbol, faded }) {
+  if (!plan) return <span className="muted">—</span>;
+  const take = plan.profit.find((p) => p.kind === "take");
+  const target = plan.profit.find((p) => p.kind === "target");
+  const trail = plan.profit.find((p) => p.kind === "trail");
+  return (
+    <div style={{ fontSize: 12, lineHeight: 1.45, opacity: faded ? 0.6 : 1 }}
+      title="The Cockpit sells automatically at the first of these. Profit: the option at +50%, or the stock at the idea's target. Loss: the option stop or the max-loss sale, whichever comes first.">
+      {take && <div className="up">+{take.pct}% → ${take.price.toFixed(2)} ({money(take.usd)})</div>}
+      {target && <div>or {symbol} {target.above ? "≥" : "≤"} ${target.underlying}</div>}
+      {trail && <div className="muted">trail from +{trail.armPct}%</div>}
+      {plan.loss && <div className="muted">stop ${plan.loss.price.toFixed(2)} ({money(plan.loss.usd)}){plan.loss.byMaxLoss ? " max loss" : ""}</div>}
+      {plan.eod && <div className="muted">sold at 15:45 regardless</div>}
+    </div>
+  );
+}
+
 function ClosePositionControl({ position, onClosed }) {
   const [qty, setQty] = useState(String(Math.abs(position.quantity)));
   const [price, setPrice] = useState(position.last != null ? Number(position.last).toFixed(2) : "");
@@ -406,7 +426,7 @@ function PositionsPanel() {
       {positions && positions.length > 0 && (
         <table>
           <thead><tr>
-            <th style={{ textAlign: "left" }}>Symbol</th><th>Qty</th><th>Cost basis</th><th>Sell price now</th><th>Gain / loss</th><th></th>
+            <th style={{ textAlign: "left" }}>Symbol</th><th>Qty</th><th>Cost basis</th><th>Sell price now</th><th>Gain / loss</th><th style={{ textAlign: "left" }}>Sells automatically at</th><th></th>
           </tr></thead>
           <tbody>
             {positions.map((p) => {
@@ -424,11 +444,12 @@ function PositionsPanel() {
                     <td className={p.unrealizedPnl == null ? "muted" : p.unrealizedPnl >= 0 ? "up" : "down"} style={{ fontWeight: 600 }}>
                       {usd(p.unrealizedPnl)}
                     </td>
+                    <td style={{ textAlign: "left" }}><ExitPlanCell plan={p.journal?.exitPlan} symbol={p.underlying} /></td>
                     <td><button className="chip" onClick={() => setOpenSym(isOpen ? null : p.symbol)}>{isOpen ? "hide" : "close…"}</button></td>
                   </tr>
                   {isOpen && (
                     <tr>
-                      <td colSpan={6} style={{ textAlign: "left", background: "var(--paper)", padding: "10px" }}>
+                      <td colSpan={7} style={{ textAlign: "left", background: "var(--paper)", padding: "10px" }}>
                         {p.journal && (
                           <div className="muted" style={{ fontSize: 12.5, marginBottom: 4 }}>
                             {p.journal.thesis && <>Plan: {p.journal.thesis} </>}
@@ -500,7 +521,7 @@ function AutoJournalPanel() {
         <table>
           <thead><tr>
             <th style={{ textAlign: "left" }}>Opened</th><th style={{ textAlign: "left" }}>Closed</th><th style={{ textAlign: "left" }}>Symbol</th>
-            <th style={{ textAlign: "left" }}>Plan</th><th>Status</th>
+            <th style={{ textAlign: "left" }}>Plan</th><th style={{ textAlign: "left" }}>Sells for profit at</th><th>Status</th>
             <th style={{ textAlign: "left" }}>Exit reason</th><th>P&amp;L</th><th>R</th><th>Days</th>
           </tr></thead>
           <tbody>
@@ -513,6 +534,7 @@ function AutoJournalPanel() {
                   {e.vehicle === "OPTION" ? `${e.optionType ?? ""} ${e.strike ?? ""} ${e.expiration ?? ""}` : "shares"}
                   {e.source === "idea" && <span className="badge" style={{ fontSize: 10, marginLeft: 6, padding: "1px 5px" }}>{STRATEGY_TAG[e.strategy || "ai"] || "from idea"}</span>}
                 </td>
+                <td style={{ textAlign: "left" }}>{e.status === "unfilled" ? <span className="muted">—</span> : <ExitPlanCell plan={e.exitPlan} symbol={e.symbol} faded={e.status !== "open"} />}</td>
                 <td className={e.status === "open" ? "" : "muted"} title={e.status === "unfilled" ? "The entry limit expired without filling — logged so fill rate is measurable" : ""}>{e.status}</td>
                 <td style={{ textAlign: "left", fontSize: 12.5 }} className="muted">{e.exitReason || "—"}</td>
                 <td className={GRADE_TONE(e.pnl)} style={{ fontWeight: 600 }}>{e.pnl != null ? usd(e.pnl) : "—"}</td>

@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { listJournal } from "../store";
 import { reconcileJournal } from "../journalReconcile";
 import { readBaseline } from "../ledgerLib";
+import { exitPlan } from "../order/exitRules";
+import { accountSize } from "../accountLib";
 
 // Every REAL order this app placed (open -> close), auto-linked to its
 // originating idea when there was one. See app/api/journalLib.js. Reads
@@ -15,5 +17,7 @@ export async function GET(req) {
      and every call to this route answered {skipped: true}. */
   const force = new URL(req.url).searchParams.get("force") === "true";
   const reconcile = await reconcileJournal({ force });
-  return NextResponse.json({ entries: listJournal(), reconcile, freshStartAt: readBaseline().freshStartAt ?? null });
+  // exitPlan: what each position is waiting for to be sold (exitRules.exitPlan).
+  const acct = accountSize();
+  return NextResponse.json({ entries: listJournal().map((e) => ({ ...e, exitPlan: exitPlan(e, { accountSize: acct }) })), reconcile, freshStartAt: readBaseline().freshStartAt ?? null });
 }

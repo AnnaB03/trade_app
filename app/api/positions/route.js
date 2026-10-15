@@ -3,6 +3,8 @@ import { tradeFetch, accountId, asArray as asArrTrade } from "../tradeClient";
 import { tradier, asArray } from "../tradier";
 import { parseOcc } from "../../lib/orders";
 import { listJournal } from "../store";
+import { exitPlan } from "../order/exitRules";
+import { accountSize } from "../accountLib";
 
 /* Live positions from the paper account (see tradeClient.js), enriched with a current
    quote (for unrealized P&L) and cross-referenced with the open journal
@@ -50,6 +52,7 @@ export async function GET() {
           id: journalEntry.id, thesis: journalEntry.thesis, entryTrigger: journalEntry.entryTrigger,
           invalidation: journalEntry.invalidation, target: journalEntry.target, catalyst: journalEntry.catalyst,
           conviction: journalEntry.conviction, entryAt: journalEntry.entryAt, entryLimitPrice: journalEntry.entryLimitPrice,
+          exitPlan: exitPlan(journalEntry, { accountSize: accountSize() }),
         } : null,
       };
     });

@@ -375,3 +375,43 @@ export function decideReversalExit({ pos, dir, ideas, now = Date.now() }) {
   }
   return null;
 }
+
+/* ---------- What a position is waiting for (2026-10-14) ----------
+   The owner: "add a column on the journals where I can see the goal we are
+   waiting for to sell for profit ... what is Cockpit expecting it to be so
+   it's automatically sold". Computed from the same constants the exit rules
+   use, so the column cannot drift from them. Pure; one journal row in.
+   Returns null for a row with no entry price.
+     profit: [{ kind: "take", price, usd } , { kind: "target", underlying, above }]
+     loss:   { price, usd, pct, maxLossUsd }   the first of the option stop and the max-loss sale
+     eod:    true when a same-day contract is sold at 15:45 whatever its P&L */
+export function exitPlan(row, { accountSize, profitMode = profitExitMode(), feePerContract = 0.35 } = {}) {
+  const entry = Number(row?.entryFillPrice ?? row?.entryLimitPrice);
+  const qty = Number(row?.entryFilledQuantity ?? row?.entryQuantity) || 0;
+  if (!(entry > 0) || !(qty > 0)) return null;
+  const opt = row.vehicle === "OPTION";
+  const mult = opt ? 100 : 1;
+  const fees = opt ? 2 * feePerContract * qty : 0;
+  const dir = opt ? (row.optionType === "put" ? -1 : 1) : (row.side === "sell" ? -1 : 1);
+  const profit = [];
+  if (opt) {
+    const pct = profitMode === "target50" ? PROFIT_TAKE_PCT : HARD_TAKE_PROFIT_PCT.OPTION;
+    const price = Math.round(entry * (1 + pct / 100) * 100) / 100;
+    profit.push({ kind: "take", pct, price, usd: Math.round((price - entry) * mult * qty - fees) });
+    if (profitMode !== "target50") profit.push({ kind: "trail", armPct: TRAIL_ARM_PCT.OPTION, givebackPct: TRAIL_GIVEBACK_PCT });
+  }
+  if (Number(row.target) > 0) profit.push({ kind: "target", underlying: Number(row.target), above: dir > 0 });
+  const cfg = exitConfig(accountSize);
+  let loss = null;
+  if (opt) {
+    const pct = Number(row.stopPct) > 0 ? Number(row.stopPct) : HARD_LOSS_PCT.OPTION;
+    const atStop = entry * (pct / 100) * mult * qty + fees;
+    if (atStop <= cfg.maxLossUsd) loss = { pct, price: Math.round(entry * (1 - pct / 100) * 100) / 100, usd: -Math.round(atStop), maxLossUsd: cfg.maxLossUsd };
+    else {
+      // The max-loss sale comes first: the price at which the position is down maxLossUsd.
+      const price = entry - (cfg.maxLossUsd - fees) / (mult * qty);
+      loss = { pct: Math.round(((entry - price) / entry) * 1000) / 10, price: Math.round(price * 100) / 100, usd: -Math.round(cfg.maxLossUsd), maxLossUsd: cfg.maxLossUsd, byMaxLoss: true };
+    }
+  }
+  return { profit, loss, invalidation: Number(row.invalidation) > 0 ? Number(row.invalidation) : null, eod: Boolean(row.closeByEod) };
+}
