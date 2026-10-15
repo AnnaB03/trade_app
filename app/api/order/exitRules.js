@@ -245,6 +245,9 @@ export function decideProfitExit(cfg, {
   vehicle, closeByEod = false, eod = false, nowEtMinutes = etMinutes(),
   gainPct, gainUsd, peakGainPct, peakGainUsd, peakMark, entryPremium, markNow,
   stopPct = null, profitMode = profitExitMode(),
+  // The loss rules read these when given: the gain at the option's MID
+  // (2026-10-15). Profit rules keep reading gainPct/gainUsd, at the bid.
+  lossGainPct = gainPct, lossGainUsd = gainUsd,
 }) {
   const target50 = profitMode === "target50" && vehicle === "OPTION";
   const armBar = TRAIL_ARM_PCT[vehicle] ?? TRAIL_ARM_PCT.OPTION;
@@ -258,13 +261,19 @@ export function decideProfitExit(cfg, {
      away and would have cost about $650. A hard stop on the position's
      dollars, measured at the bid, whatever the idea's own levels say. Checked
      once a minute, so a fast move can overshoot it. */
-  if (gainUsd != null && gainUsd <= -cfg.maxLossUsd) {
-    exit = { tag: "max_loss", detail: `Down $${Math.abs(gainUsd).toFixed(0)} at the bid — at the $${cfg.maxLossUsd.toFixed(0)} most one trade may lose (${MAX_LOSS_PCT}% of the account)` };
+  /* Judged at the MID since 2026-10-15 (lossGainUsd), not the bid. MU 10/21
+     $885c was bought at the $30.40 ask with a $25.60 bid: $480 down at the
+     bid before anything moved, 96% of the $500 limit. The bid dipped to
+     $25.05 and it was sold for -$536 while MU had moved 0.3% (its stop level
+     was $19 away); MU then ran $15 higher. The owner: "it looks like the stop
+     loss kicked in too early". The sale still happens at the bid. */
+  if (lossGainUsd != null && lossGainUsd <= -cfg.maxLossUsd) {
+    exit = { tag: "max_loss", detail: `Down $${Math.abs(lossGainUsd).toFixed(0)} at the mid (${gainUsd != null ? `$${Math.abs(gainUsd).toFixed(0)} at the bid` : "no bid"}) — at the $${cfg.maxLossUsd.toFixed(0)} most one trade may lose (${MAX_LOSS_PCT}% of the account)` };
   }
   // The position's own stop (set at entry from its stock's history), else the flat one.
   const lossBar = vehicle === "OPTION" && Number(stopPct) > 0 ? Number(stopPct) : (HARD_LOSS_PCT[vehicle] ?? null);
-  if (!exit && lossBar != null && gainPct != null && gainPct <= -lossBar) {
-    exit = { tag: "premium_stop", detail: `Down ${Math.abs(gainPct).toFixed(1)}% at the bid ($${entryPremium} to $${markNow}${gainUsd != null ? `, $${Math.abs(gainUsd).toFixed(0)}` : ""}) — past this contract's ${lossBar}% stop` };
+  if (!exit && lossBar != null && lossGainPct != null && lossGainPct <= -lossBar) {
+    exit = { tag: "premium_stop", detail: `Down ${Math.abs(lossGainPct).toFixed(1)}% at the mid (bid $${markNow}${gainUsd != null ? `, $${Math.abs(gainUsd).toFixed(0)} at the bid` : ""}) — past this contract's ${lossBar}% stop` };
   }
   /* A closeByEod position is a short-dated contract that decays ~25% of its
      price a day. The end-of-day dollar bar only ever banks GAINS, so a loser

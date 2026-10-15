@@ -255,13 +255,19 @@ test("RULE: a setup is void when price is through its invalidation or already at
 });
 
 test("RULE: in learning mode a same-day contract over budget, or with a wide spread, is taken at size and the override recorded", () => {
-  const wide = { bid: 4.0, ask: 5.0, delta: 0.5 };
+  const wide = { bid: 4.6, ask: 5.0, delta: 0.5 }; // 8% spread: over the 6% soft line, under the 12% hard one
   const refused = entry.sizeOptionEntry({ accountSize: ACCOUNT, leg: wide, entryPrice: 100, invalidation: 90, action: "CALL", strategy: "intraday" });
   assert.equal(refused.ok, false, "outside learning mode it is still refused");
   const taken = entry.sizeOptionEntry({ accountSize: ACCOUNT, leg: wide, entryPrice: 100, invalidation: 90, action: "CALL", strategy: "intraday", learning: true });
   assert.equal(taken.ok, true);
   assert.ok(taken.contracts >= 1);
   assert.ok(taken.overrides.some((o) => o.rule === "spread"));
+  // Over the hard ceiling: refused in learning mode too (2026-10-15).
+  const mu = entry.sizeOptionEntry({ accountSize: ACCOUNT, leg: { bid: 25.6, ask: 30.4, delta: 0.55 }, entryPrice: 887, invalidation: 868, action: "CALL", learning: true });
+  assert.equal(mu.ok, false, "MU 10/21 $885c: a 15.8% spread, $480 of the $500 limit on arrival");
+  assert.equal(mu.hard, "spread");
+  assert.equal(entry.HARD_MAX_SPREAD_PCT, 12);
+  assert.equal(entry.HARD_MAX_SPREAD_SHARE, 0.5);
   const noStop = entry.sizeOptionEntry({ accountSize: ACCOUNT, leg: { bid: 0, ask: 0 }, entryPrice: 100, invalidation: 100, action: "CALL", learning: true });
   assert.equal(noStop.ok, false, "no usable stop is a hard refusal even in learning mode");
 });
@@ -320,6 +326,15 @@ test("the journal's 'sells automatically at' column comes from the live exit rul
   assert.equal(gt.takeFirst, undefined, "the target comes before +50% here");
   // Passed in from the idea for rows bought before entryUnderlying was stored.
   assert.equal(exits.exitPlan({ vehicle: "OPTION", optionType: "put", entryFillPrice: 5, entryQuantity: 1, target: 90 }, { accountSize: ACCOUNT, delta: -0.5, underlyingAtEntry: 100 }).profit.find((x) => x.kind === "target").estUsd, 499, "0.5 x $10 x 100 - fees");
+});
+
+test("RULE: the stop and the max-loss sale are judged at the option's mid, not the bid — 2026-10-15, 'the stop loss kicked in too early'", () => {
+  const cfg = exits.exitConfig(ACCOUNT);
+  // MU 10/21 $885c, 1 at $30.40: the bid at $25.05 is -$535, but the mid (~$27.50) is -$290.
+  const mu = { vehicle: "OPTION", entryPremium: 30.4, markNow: 25.05, gainPct: -17.6, gainUsd: -535, peakGainPct: 0, peakGainUsd: 0, peakMark: 30.4, stopPct: 20, profitMode: "target50" };
+  assert.equal(exits.decideProfitExit(cfg, { ...mu, lossGainPct: -9.5, lossGainUsd: -290 }), null, "held: the loss at the mid is inside both limits");
+  assert.equal(exits.decideProfitExit(cfg, { ...mu, lossGainPct: -16.8, lossGainUsd: -510 }).tag, "max_loss", "sold once the mid crosses $500");
+  assert.equal(exits.decideProfitExit(cfg, { ...mu, entryPremium: 5, lossGainPct: -21, lossGainUsd: -105, gainUsd: -130, gainPct: -26 }).tag, "premium_stop");
 });
 
 test("RULE (legacy, PROFIT_EXITS=legacy): trail arms at +5% (options) and sells on a 25% giveback; 1-3 day contracts sold at +7% and flat from 15:45", () => {

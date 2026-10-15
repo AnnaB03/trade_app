@@ -19,6 +19,7 @@ learn from every single contract or trade."
   - price is already through the invalidation, or already at the target;
   - an exact duplicate of an open position;
   - no usable stop;
+  - a spread over 12% of the premium, or over half the loss limit on arrival;
   - an idea from an earlier session, or one that already reached its target;
   - same-day contracts after 15:30;
   - a second fade of a stock in a day, the other side of a stock within 30 minutes, or the same side within 30 minutes of a sale;

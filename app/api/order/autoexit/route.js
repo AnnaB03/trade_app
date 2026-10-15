@@ -348,6 +348,10 @@ async function run(req) {
       }
       const qty = heldQuantity(pos);
       const { gainPct, gainUsd, peakGainPct, peakGainUsd } = gainFigures({ vehicle: pos.vehicle, dir, markNow, entryPremium, peakMark, qty });
+      /* The loss rules are judged at the option's MID (exitRules.decideProfitExit):
+         at the bid, a wide-spread contract starts most of the way to its stop. */
+      const midNow = pos.vehicle === "OPTION" && oq?.bid > 0 && oq?.ask > 0 ? (oq.bid + oq.ask) / 2 : markNow;
+      const lossFig = gainFigures({ vehicle: pos.vehicle, dir, markNow: midNow, entryPremium, peakMark, qty });
 
       /* 1a. Explicit breakeven exit, set per position (exitAtBreakeven) when
          the plan becomes "get out of this without a loss" rather than "wait
@@ -420,7 +424,7 @@ async function run(req) {
       const profitExit = decideProfitExit(CFG, {
         vehicle: pos.vehicle, closeByEod: pos.closeByEod, eod,
         gainPct, gainUsd, peakGainPct, peakGainUsd, peakMark, entryPremium, markNow,
-        stopPct: pos.stopPct ?? null,
+        stopPct: pos.stopPct ?? null, lossGainPct: lossFig.gainPct, lossGainUsd: lossFig.gainUsd,
       });
       if (profitExit && (!exit || profitExit.tag === "take_profit")) exit = profitExit;
 

@@ -24,6 +24,14 @@ export const REENTRY_COOLDOWN_MIN = 45;
 export const LAST_FLAT_BY_CLOSE_ENTRY_MIN = 15 * 60; // ET; same-day contracts not opened after 15:00
 export const MAX_SPREAD_PCT_OF_PREMIUM = 6;
 export const MAX_SPREAD_SHARE_OF_LOSS = 0.4;
+/* Hard, in learning mode too (2026-10-15): a contract whose spread is over
+   HARD_MAX_SPREAD_PCT of its price, or would cost over HARD_MAX_SPREAD_SHARE
+   of the loss limit on arrival, starts most of the way to its stop and can
+   only teach the spread. MU 10/21 $885c (15.8%, $480 of a $500 limit) and
+   QCOM 10/23 $175p (13.9%) came in this way; the two spread-override trades
+   that closed lost $838. */
+export const HARD_MAX_SPREAD_PCT = 12;
+export const HARD_MAX_SPREAD_SHARE = 0.5;
 export const SAME_DAY = new Set(["intraday", "contrarian", "fade_scan", "news"]); // "news": the analyst's ideas, 2026-10-14
 
 /* ---------- Learning mode (2026-10-14) ----------
@@ -208,6 +216,12 @@ export function sizeOptionEntry({ accountSize, leg, entryPrice, invalidation, ac
   const perContract = premium * 100;
   if (perContract > 0) contracts = Math.max(1, Math.min(contracts, Math.floor((accountSize * OPTION_HARD_PCT) / perContract) || 1));
 
+  if (premium > 0 && (spread / premium) * 100 > HARD_MAX_SPREAD_PCT) {
+    return { ok: false, stopPct, riskPer, contracts, hard: "spread", reason: `Spread is ${((spread / premium) * 100).toFixed(1)}% of the premium ($${leg?.bid}/$${leg?.ask}), over the ${HARD_MAX_SPREAD_PCT}% hard ceiling: the position would open most of the way to its stop.` };
+  }
+  if (spread * 100 * contracts > budget * HARD_MAX_SPREAD_SHARE) {
+    return { ok: false, stopPct, riskPer, contracts, hard: "spread", reason: `Spread costs $${(spread * 100 * contracts).toFixed(0)} on arrival, over half the $${budget.toFixed(0)} a trade may lose (hard ceiling).` };
+  }
   if (premium > 0 && (spread / premium) * 100 > MAX_SPREAD_PCT_OF_PREMIUM) {
     if (learning) overrides.push({ rule: "spread", reason: `Spread is ${((spread / premium) * 100).toFixed(1)}% of the premium ($${leg?.bid}/$${leg?.ask}), over ${MAX_SPREAD_PCT_OF_PREMIUM}%.` });
     else return { ok: false, stopPct, riskPer, contracts, reason: `Spread is ${((spread / premium) * 100).toFixed(1)}% of the premium ($${leg?.bid}/$${leg?.ask}) — over ${MAX_SPREAD_PCT_OF_PREMIUM}%, so the position would open most of the way to its ${stopPct}% stop.` };

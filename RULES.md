@@ -32,6 +32,7 @@ contract or trade."* On unless `LEARNING_MODE=false` (`entryRules.learningMode`)
   - price already through the invalidation, or already at the target;
   - an exact duplicate of an open position;
   - no usable stop;
+  - a spread over 12% of the premium, or over half the loss limit on arrival;
   - an idea from an earlier session, or one that already reached its target;
   - same-day contracts after **15:30**;
   - a second fade of the same stock in a day, buying the other side of a stock within 30 minutes of the last entry, or buying the same side again within 30 minutes of a sale (blocked trades go to the shadow book with `blockedBy`);
@@ -54,8 +55,9 @@ With learning mode off, the table below applies as written.
 | News playbook | the risk & market agent may propose up to 3 same-day ideas per report; the server checks the levels (right sides, 1.5:1 from the trigger, within 3% of the price) and picks a 1–4 day contract itself; traded live as strategy `news` under every rule above, shown in their own Ideas section; none after 15:00 ET | `newsIdeasLib`, `contractLib` | 2026-10-14 |
 | Entry test | triggered ideas split by id: half buy at the break, half wait for 2 completed 1-minute closes beyond it (`ENTRY_CONFIRM=all/off`) | `entryRules.entryArm`, `confirmedBreak` | 2026-10-14 |
 | Contracts per option trade | 2% of the account / loss at the stop that fires first | `entryRules.sizeOptionEntry` | 2026-10-14 |
+| Loss checks judged at | the option's **mid** (stop and max-loss); sales still at the bid; profit rules at the bid (MU sold −$536 on a bid dip while the stock had moved 0.3%) | `exitRules.decideProfitExit` | 2026-10-15 |
 | Option stop | from its stock's p90 30-minute adverse move, **20–35%; else 20%** (was 8–35%, else 10%: replayed on 31 trades, 10% netted −$1,502 against −$621 at 20% for the same $ risk) | `swingLib.optionStopPct`, `exitRules.HARD_LOSS_PCT` | 2026-10-14 |
-| Spread at entry | at most 6% of the premium and 40% of the loss limit | `entryRules` | 2026-10-12/14 |
+| Spread at entry | soft (recorded) over 6% of the premium or 40% of the loss limit; **hard over 12% of the premium or 50% of the loss limit** (MU 10/21 $885c: 15.8%, $480 of $500 on arrival) | `entryRules` | 2026-10-15 |
 | Selection | no calls in an uptrend, no puts in a transitioning tape, no calls after 14:00, no FDA | `selectionLib` | 2026-10-13 |
 | Watch-only (record, never trade) | the fade, the fade scan | `entryRules.isWatchOnly` | 2026-10-14 |
 | Same-day ideas | trade live (`INTRADAY_LIVE=false` to record only) | `entryRules.isWatchOnly` | 2026-10-14 |
