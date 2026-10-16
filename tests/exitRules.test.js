@@ -235,3 +235,12 @@ test("premium stop: an option is cut at -20% of its entry price (10% until 2026-
   // Shares are not held to a percentage of their price.
   assert.equal(decideProfitExit(cfg, { vehicle: "SHARES", entryPremium: 355.73, markNow: 320, gainPct: -10.1, gainUsd: -143, peakGainPct: 0, peakGainUsd: 0, peakMark: 355.73 }), null);
 });
+
+test("an option expires at 16:00 ET on its expiry date, not at midnight UTC the evening before — 2026-10-16, ORCL", async () => {
+  const { isExpired } = await import("../app/api/order/exitRules.js");
+  assert.equal(isExpired("2026-10-16", Date.parse("2026-10-16T14:54:00Z")), false, "10:54 ET on its expiry day: still trading");
+  assert.equal(isExpired("2026-10-16", Date.parse("2026-10-15T23:30:00Z")), false, "19:30 ET the evening before");
+  assert.equal(isExpired("2026-10-16", Date.parse("2026-10-16T20:00:00Z")), true, "16:00 ET on the day");
+  assert.equal(isExpired("2026-10-15", Date.parse("2026-10-16T13:00:00Z")), true, "the day after");
+  assert.equal(isExpired(null), false);
+});

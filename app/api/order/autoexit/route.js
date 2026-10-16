@@ -8,7 +8,7 @@ import { dailyBars } from "../../historyCache";
 import { markActivity } from "../../activityLib";
 import { accountSize } from "../../accountLib";
 import { notifySold } from "../../notifyLib";
-import { exitConfig, directionOf, heldQuantity, intrinsicAtExpiry, updatePeak, gainFigures, decideProfitExit, decideLevelExit, decideReversalExit } from "../exitRules";
+import { exitConfig, directionOf, heldQuantity, intrinsicAtExpiry, updatePeak, gainFigures, decideProfitExit, decideLevelExit, decideReversalExit, isExpired } from "../exitRules";
 
 /* Paper-only auto-EXIT — the other half of autotrade.js. That route only
    ever opens a position; until now, the only thing that could close one was
@@ -291,7 +291,7 @@ async function run(req) {
       // 2. Already past expiration — settles on the underlying's close that
       // day, not on a live quote that no longer exists. Target/invalidation/
       // reversal checks below don't apply to something already resolved.
-      if (pos.vehicle === "OPTION" && pos.expiration && new Date(pos.expiration) < new Date()) {
+      if (pos.vehicle === "OPTION" && pos.expiration && isExpired(pos.expiration)) { // exitRules.isExpired: from 16:00 ET on the expiry date
         const settle = await expirationSettlement(pos);
         if (settle) {
           if (dryRun) { results.push({ symbol: pos.symbol, wouldClose: true, tag: "expired", detail: `Expired ${settle.settlePrice > 0 ? "in the money" : "worthless"} — underlying closed $${settle.underlyingClose} on ${pos.expiration}` }); continue; }

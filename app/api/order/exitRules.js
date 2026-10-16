@@ -445,3 +445,18 @@ export function exitPlan(row, { accountSize, profitMode = profitExitMode(), feeP
   }
   return { profit, loss, invalidation: Number(row.invalidation) > 0 ? Number(row.invalidation) : null, eod: Boolean(row.closeByEod) };
 }
+
+/* Has this option expired? Only from 16:00 ET on its expiry date
+   (2026-10-16). The check was new Date("2026-10-16") < now, and that date
+   parses as midnight UTC, 20:00 ET the evening BEFORE, so on its expiry day
+   every option read as already expired. The ORCL Oct 16 $132 put was bought
+   at 10:53, settled at intrinsic a minute later (-$168) with its stop
+   cancelled, while the broker still held all 9 contracts unmanaged. */
+export function isExpired(expiration, now = Date.now()) {
+  if (!expiration) return false;
+  const p = Object.fromEntries(new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(new Date(now)).map((x) => [x.type, x.value]));
+  const today = `${p.year}-${p.month}-${p.day}`;
+  const mins = (Number(p.hour) % 24) * 60 + Number(p.minute);
+  const exp = String(expiration).slice(0, 10);
+  return exp < today || (exp === today && mins >= 16 * 60);
+}
