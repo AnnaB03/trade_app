@@ -122,15 +122,40 @@ export const REBUY_WAIT_MIN = 30;
    level, and the blocked re-buy would have made about +$1,000. livePrice: the
    stock now. */
 export const OPTION_PRICE_EXITS = new Set(["premium_stop", "max_loss", "stop"]);
-export function rebuyTooSoon({ action, rows, now = Date.now(), waitMin = REBUY_WAIT_MIN, livePrice = null }) {
+/* exemptionUsed (2026-10-16): the exemption is good once per idea per day.
+   AVGO used it twice on 10-15: stop, re-bought one second later, stop again,
+   re-bought again (+$73, then -$377). */
+export function rebuyTooSoon({ action, rows, now = Date.now(), waitMin = REBUY_WAIT_MIN, livePrice = null, exemptionUsed = false }) {
+  return rebuyCheck({ action, rows, now, waitMin, livePrice, exemptionUsed }).reason;
+}
+// { reason, exempted }: exempted is true when only the exemption let it through.
+export function rebuyCheck({ action, rows, now = Date.now(), waitMin = REBUY_WAIT_MIN, livePrice = null, exemptionUsed = false }) {
   const dir = action === "CALL" || action === "BUY" ? 1 : -1;
-  const thesisIntact = (r) => OPTION_PRICE_EXITS.has(r.exitReasonTag) && Number(livePrice) > 0 && Number(r.invalidation) > 0
+  const thesisIntact = (r) => !exemptionUsed && OPTION_PRICE_EXITS.has(r.exitReasonTag) && Number(livePrice) > 0 && Number(r.invalidation) > 0
     && (dir > 0 ? Number(livePrice) > Number(r.invalidation) : Number(livePrice) < Number(r.invalidation));
-  const last = (rows || []).filter((r) => r.exitAt && r.entryFillPrice != null && rowDir(r) === dir && !thesisIntact(r) && now - Date.parse(r.exitAt) >= 0 && now - Date.parse(r.exitAt) < waitMin * 60000)
+  const inWindow = (r) => r.exitAt && r.entryFillPrice != null && rowDir(r) === dir && now - Date.parse(r.exitAt) >= 0 && now - Date.parse(r.exitAt) < waitMin * 60000;
+  const blocking = (rows || []).filter((r) => inWindow(r) && !thesisIntact(r));
+  const exempted = !blocking.length && (rows || []).some((r) => inWindow(r) && thesisIntact(r));
+  const last = blocking
     .sort((a, b) => Date.parse(b.exitAt) - Date.parse(a.exitAt))[0];
-  if (!last) return null;
+  if (!last) return { reason: null, exempted };
   const mins = Math.round((now - Date.parse(last.exitAt)) / 60000);
-  return `Sold this stock on the same side ${mins} min ago (${last.exitReasonTag ?? "exit"}); no re-buying for ${waitMin} minutes after a sale.`;
+  return { reason: `Sold this stock on the same side ${mins} min ago (${last.exitReasonTag ?? "exit"}); no re-buying for ${waitMin} minutes after a sale.`, exempted: false };
+}
+
+/* At most MAX_TRADES_PER_IDEA_DAY trades of one idea per day (2026-10-16, the
+   owner: "implement both"). The AVGO 10-15 same-day put idea, written at
+   10:44 with a 45-minute shelf life, was traded 5 times (+$118, -$377, +$73,
+   -$377, -$377 = -$941); by 12:30 AVGO had found a floor and the setup was
+   over. Since the restart the cap would have blocked 9 trades from 3 ideas
+   (-$728, 4 small winners worth +$139, 4% of all winning dollars). A fresh
+   idea from a later refresh is a new idea and may trade.
+   rows: today's journal rows that count as entries. */
+export const MAX_TRADES_PER_IDEA_DAY = 2;
+export function ideaCapReached({ ideaId, rows, max = MAX_TRADES_PER_IDEA_DAY }) {
+  if (!ideaId) return null;
+  const n = (rows || []).filter((r) => r.ideaId === ideaId).length;
+  return n >= max ? `This idea has already been traded ${n} times today; at most ${max} trades per idea per day.` : null;
 }
 
 /* No holding both sides of one stock (2026-10-15, the owner: "ok, lets

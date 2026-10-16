@@ -268,6 +268,20 @@ test("RULE: never both sides of one stock at once; one position per stock, side 
   assert.ok(entry.samePlaybookPosition({ action: "CALL", strategy: undefined, openRows: [{ ...orcl, strategy: "ai" }] }), "swing ideas are journaled as 'ai'");
 });
 
+test("RULE: at most two trades per idea per day; the re-buy exemption once per idea per day — 2026-10-16, AVGO", () => {
+  assert.equal(entry.MAX_TRADES_PER_IDEA_DAY, 2);
+  const id = "1792075470772-86g4jx";
+  assert.equal(entry.ideaCapReached({ ideaId: id, rows: [{ ideaId: id }] }), null, "the retry is allowed");
+  assert.match(entry.ideaCapReached({ ideaId: id, rows: [{ ideaId: id }, { ideaId: id }] }), /at most 2/, "the third AVGO trade is not");
+  assert.equal(entry.ideaCapReached({ ideaId: "fresh-idea", rows: [{ ideaId: id }, { ideaId: id }] }), null, "a fresh idea on the same stock may trade");
+  const now = Date.parse("2026-10-15T17:26:00Z");
+  const stop = { optionType: "put", entryFillPrice: 4.95, exitAt: "2026-10-15T17:25:57Z", exitReasonTag: "premium_stop", invalidation: 342.2 };
+  const first = entry.rebuyCheck({ action: "PUT", rows: [stop], now, livePrice: 339.7 });
+  assert.deepEqual(first, { reason: null, exempted: true }, "the first time: exempt, and marked so");
+  assert.match(entry.rebuyCheck({ action: "PUT", rows: [stop], now, livePrice: 339.7, exemptionUsed: true }).reason, /no re-buying/, "the second time: the 30-minute wait applies");
+  assert.deepEqual(entry.rebuyCheck({ action: "PUT", rows: [], now, livePrice: 339.7 }), { reason: null, exempted: false }, "no recent sale: nothing to exempt");
+});
+
 test("RULE: a setup is void when price is through its invalidation or already at its target — hard, in learning mode too", () => {
   assert.match(entry.setupVoid({ dir: -1, entry: 700, target: 705, invalidation: 710 }), /target/, "the SPY put loop of 2026-10-14");
   assert.match(entry.setupVoid({ dir: 1, entry: 99, target: 110, invalidation: 100 }), /invalidation/);

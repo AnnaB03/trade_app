@@ -35,6 +35,7 @@ contract or trade."* On unless `LEARNING_MODE=false` (`entryRules.learningMode`)
   - a spread over 12% of the premium, or over half the loss limit on arrival;
   - an idea from an earlier session, or one that already reached its target;
   - the other side of a stock already held, or a second position in the same stock, side and playbook;
+  - a third trade of one idea in a day;
   - same-day contracts after **15:30**;
   - a second fade of the same stock in a day, buying the other side of a stock within 30 minutes of the last entry, or buying the same side again within 30 minutes of a sale (blocked trades go to the shadow book with `blockedBy`);
   - at most **8** entries per stock per day.
@@ -53,6 +54,7 @@ With learning mode off, the table below applies as written.
 | Idea minimums | conviction 2, reward:risk 1.5 | `entryRules` | — |
 | Same-day contracts opened until | 15:00 ET | `entryRules.lateEntryRefused` | 2026-10-08 |
 | Fade sides | **fade calls only** (fading put ideas in a transitioning tape: 4 for 4, +$887); fade puts and the fade scan off (0 for 4, −$1,235). `FADE_ACTIONS=CALL,PUT` restores both | `fadeLib.FADE_ACTIONS` | 2026-10-15 |
+| Trades per idea | **at most 2 per idea per day**; the re-buy exemption **once per idea per day** (AVGO 10-15: one idea traded 5 times, −$941; the cap would have blocked 9 trades since the restart, −$728, 4% of winning dollars) | `entryRules.ideaCapReached`, `rebuyCheck` | 2026-10-16 |
 | Both sides / duplicates | **never both sides of one stock at once** (4 losers −$1,113 against 2 winners +$110 since the restart); **one position per stock, side and playbook** whatever the contract (a switched expiry had let ORCL hold two same-day calls) | `entryRules.bothSidesOpen`, `samePlaybookPosition` | 2026-10-15 |
 | Fades / flips / re-buys | one fade per stock per day; no opposite-side entry on a stock within 30 minutes; **no same-side re-buy within 30 minutes of any sale of it**, except after a stop or max-loss sale while the stock is still on the right side of the idea's level (2026-10-15: 11 such re-buys had lost $444; MU's blocked re-buy would have made about +$1,000). From the 10-14 replay: +$6,454 / +$3,065 at 3% worse fills, against +$5,274 / −$2,874 without | `entryRules.fadeLimitReached`, `flipTooSoon` | 2026-10-14 |
 | News playbook | the risk & market agent may propose up to 3 same-day ideas per report; the server checks the levels (right sides, 1.5:1 from the trigger, within 3% of the price) and picks a 1–4 day contract itself; traded live as strategy `news` under every rule above, shown in their own Ideas section; none after 15:00 ET | `newsIdeasLib`, `contractLib` | 2026-10-14 |

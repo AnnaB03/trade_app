@@ -14,7 +14,7 @@ import {
   MAX_SPREAD_SHARE_OF_LOSS, MAX_SPREAD_PCT_OF_PREMIUM, LAST_FLAT_BY_CLOSE_ENTRY_MIN, REENTRY_COOLDOWN_MIN,
   MAX_ENTRIES_PER_SYMBOL_DAY, RISK_PER_TRADE_PCT as INTRADAY_RISK_PCT, isWatchOnly, entriesAllowed,
   learningMode, lateEntryRefused, LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY, setupVoid, entryArm, confirmedBreak, CONFIRM_BARS,
-  fromEarlierSession, PLAYED_OUT_EXITS, countsAsEntry, etDate, fadeLimitReached, flipTooSoon, rebuyTooSoon, bothSidesOpen, samePlaybookPosition,
+  fromEarlierSession, PLAYED_OUT_EXITS, countsAsEntry, etDate, fadeLimitReached, flipTooSoon, rebuyTooSoon, rebuyCheck, ideaCapReached, bothSidesOpen, samePlaybookPosition,
 } from "../entryRules";
 import { optionStopPct, profileFor } from "../../swingLib";
 import { extremeRead, fadePlan, fadeEnabled, EXTREME_PCT, FADE_SIDES, fadeActionAllowed } from "../../fadeLib";
@@ -498,7 +498,7 @@ async function placeOption(idea, { dryRun, openOccs }) {
       expiration: idea.expiration, side: "buy", quantity: contractQty, limitPrice: Number(vet.computed.price), order: orderResult,
       closeByEod: Boolean(idea.flatByClose),
       stopPct: idea.stopPct ?? null,
-      learningOverrides: idea.learningOverrides ?? null, entryStyle: idea.entryStyle ?? null, switchedFrom: idea.switchedFrom ?? null,
+      learningOverrides: idea.learningOverrides ?? null, entryStyle: idea.entryStyle ?? null, switchedFrom: idea.switchedFrom ?? null, rebuyExempt: Boolean(idea.rebuyExempt),
       entryUnderlying: Number(idea.entryPrice) || null, entryDelta: idea.leg?.delta != null ? Number(idea.leg.delta) : null,
     });
   } catch (e) {
@@ -1017,10 +1017,15 @@ async function run(req) {
           results.push({ ...tag, placed: false, reason: `Already holding a ${idea.symbol} ${dupPos.optionType ?? dupPos.side} in this playbook (${dupPos.occ ?? "shares"}): one position per stock, side and playbook.` });
           continue;
         }
+        // The re-buy exemption is good once per idea per day (entryRules.rebuyCheck).
+        const exemptionUsed = todayRows.some((r) => r.ideaId === idea.id && r.rebuyExempt);
+        const rb = rebuyCheck({ action: idea.action, rows: soldRows, livePrice: liveBySym[idea.symbol] ?? idea.entryPrice, exemptionUsed });
+        idea.rebuyExempt = rb.exempted;
         const blocked = [
+          ["idea_cap", ideaCapReached({ ideaId: idea.id, rows: todayRows })],
           ["fade_once", fadeLimitReached({ strategy: idea.strategy, rows: todayRows })],
           ["flip_30min", flipTooSoon({ action: idea.action, rows: todayRows })],
-          ["rebuy_30min", rebuyTooSoon({ action: idea.action, rows: soldRows, livePrice: liveBySym[idea.symbol] ?? idea.entryPrice })],
+          ["rebuy_30min", rb.reason],
           ["both_sides", bothSidesOpen({ action: idea.action, openRows })],
         ].find(([, why]) => why);
         if (blocked) {
