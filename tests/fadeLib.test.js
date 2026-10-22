@@ -102,3 +102,16 @@ test("only fade CALLS are taken: fading puts in a transitioning tape won 4 of 4,
   assert.equal(f.fadeActionAllowed("PUT"), false);
   assert.equal(f.fadeActionAllowed("PUT", new Set(["CALL", "PUT"])), true, "FADE_ACTIONS=CALL,PUT restores both");
 });
+
+test("a fade is not taken against a one-sided read from the model — 2026-10-22", async () => {
+  const f = await import("../app/api/fadeLib.js");
+  const rep = (a, n) => Array(n).fill(a);
+  // The losers: ORCL/AMZN/NVDA fade puts 10-15 (7 calls, 1 put), QQQ fade call 10-16 (5 puts, 0 calls).
+  assert.match(f.fadeAgainstTape({ fadeAction: "PUT", recentActions: [...rep("CALL", 7), "PUT"] }), /7 to 1/);
+  assert.match(f.fadeAgainstTape({ fadeAction: "CALL", recentActions: rep("PUT", 5) }), /5 to 0/);
+  // The winners: QQQ/SPCX fade calls 10-15 (10 calls, 4 puts), QQQ 10-14 (0/0, 1/2).
+  assert.equal(f.fadeAgainstTape({ fadeAction: "CALL", recentActions: [...rep("CALL", 10), ...rep("PUT", 4)] }), null);
+  assert.equal(f.fadeAgainstTape({ fadeAction: "CALL", recentActions: [] }), null);
+  assert.equal(f.fadeAgainstTape({ fadeAction: "CALL", recentActions: ["CALL", "PUT", "PUT"] }), null, "two opposite is not one-sided");
+  assert.equal(f.FADE_TAPE_MIN, 3);
+});

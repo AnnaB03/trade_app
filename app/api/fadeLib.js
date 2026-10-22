@@ -52,6 +52,25 @@ export function extremeRead({ action, price, low, high, threshold = EXTREME_PCT 
 export const FADE_ACTIONS = new Set(String(process.env.FADE_ACTIONS || "CALL").toUpperCase().split(",").map((s) => s.trim()).filter(Boolean));
 export const fadeActionAllowed = (action, allowed = FADE_ACTIONS) => allowed.has(String(action).toUpperCase());
 
+/* A fade is not taken against a one-sided read (2026-10-22, the owner: "fades
+   can be fixed"). A fade bets a move is overdone; when the model's other ideas
+   from the last 30 minutes mostly point the other way, the move is usually
+   real. Since the restart every big losing fade had 5-8 opposite ideas to 0-3
+   on its side (GOOGL 3/8, ORCL/AMZN/NVDA 1/7, SPY/AVGO 1/6, QQQ 0/5:
+   -$2,841), and the four winners did not (10/4, 10/4, 0/0, 1/2: +$887).
+   Blocked when at least FADE_TAPE_MIN ideas oppose it and they outnumber its
+   side. Found on the same 12 trades it is scored on; the shadow book keeps
+   scoring it. recentActions: the model's CALL/PUT actions from the window. */
+export const FADE_TAPE_MIN = 3;
+export const FADE_TAPE_WINDOW_MIN = 30;
+export function fadeAgainstTape({ fadeAction, recentActions }) {
+  const same = (recentActions || []).filter((a) => a === fadeAction).length;
+  const opposite = (recentActions || []).filter((a) => (a === "CALL" || a === "PUT") && a !== fadeAction).length;
+  return opposite >= FADE_TAPE_MIN && opposite > same
+    ? `The model's ideas from the last ${FADE_TAPE_WINDOW_MIN} minutes point the other way ${opposite} to ${same}; not fading a one-sided read.`
+    : null;
+}
+
 export const fadeEnabled = (side) => FADE_SIDES === "both" || (FADE_SIDES === "long" && side === "long");
 
 /* The plan for the opposite side: the levels, in the UNDERLYING's price.

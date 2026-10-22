@@ -14,10 +14,10 @@ import {
   MAX_SPREAD_SHARE_OF_LOSS, MAX_SPREAD_PCT_OF_PREMIUM, LAST_FLAT_BY_CLOSE_ENTRY_MIN, REENTRY_COOLDOWN_MIN,
   MAX_ENTRIES_PER_SYMBOL_DAY, RISK_PER_TRADE_PCT as INTRADAY_RISK_PCT, isWatchOnly, entriesAllowed,
   learningMode, lateEntryRefused, LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY, setupVoid, entryArm, confirmedBreak, CONFIRM_BARS,
-  fromEarlierSession, PLAYED_OUT_EXITS, countsAsEntry, etDate, expiresToday, fadeLimitReached, flipTooSoon, flipAfterStop, rebuyTooSoon, rebuyCheck, ideaCapReached, bothSidesOpen, samePlaybookPosition,
+  fromEarlierSession, PLAYED_OUT_EXITS, countsAsEntry, etDate, expiresToday, isFade, fadeLimitReached, flipTooSoon, flipAfterStop, rebuyTooSoon, rebuyCheck, ideaCapReached, bothSidesOpen, samePlaybookPosition,
 } from "../entryRules";
 import { optionStopPct, profileFor } from "../../swingLib";
-import { extremeRead, fadePlan, fadeEnabled, EXTREME_PCT, FADE_SIDES, fadeActionAllowed } from "../../fadeLib";
+import { extremeRead, fadePlan, fadeEnabled, EXTREME_PCT, FADE_SIDES, fadeActionAllowed, fadeAgainstTape, FADE_TAPE_WINDOW_MIN } from "../../fadeLib";
 import { appendIdea } from "../../store";
 import { selectionVerdict } from "../../selectionLib";
 import { markActivity } from "../../activityLib";
@@ -1032,6 +1032,9 @@ async function run(req) {
           ["rebuy_30min", rb.reason],
           ["both_sides", bothSidesOpen({ action: idea.action, openRows })],
           ["flip_after_stop", flipAfterStop({ action: idea.action, rows: soldRows })],
+          // Fades only: not against a one-sided read from the model (fadeLib.fadeAgainstTape).
+          ["fade_vs_tape", isFade(idea.strategy) ? fadeAgainstTape({ fadeAction: idea.action,
+            recentActions: listIdeas().filter((j) => (!j.strategy || j.strategy === "intraday") && Date.now() - Date.parse(j.createdAt) < FADE_TAPE_WINDOW_MIN * 60000).map((j) => j.action) }) : null],
         ].find(([, why]) => why);
         if (blocked) {
           const [rule, why] = blocked;
