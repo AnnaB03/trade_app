@@ -65,11 +65,14 @@ export function eventSlots(macroToday) {
 export function dueRuns({ nowMin, dow, macroToday = [], done = new Set(), runsToday = 0 }) {
   if (dow > 5 || runsToday >= MAX_RUNS_PER_DAY) return [];
   const want = [
-    { role: "risk-market-analyst", mode: "brief", slot: BRIEF_MIN, grace: 40 },
+    /* Grace windows widened 2026-10-22 so a run missed while the Mac slept
+       catches up when it wakes: 10-20 had no QA or performance report and
+       10-21 none either. Brief until 11:00, QA and performance until midnight. */
+    { role: "risk-market-analyst", mode: "brief", slot: BRIEF_MIN, grace: 11 * 60 - BRIEF_MIN },
     { role: "risk-market-analyst", mode: "midday", slot: MIDDAY_MIN, grace: 45 },
     ...eventSlots(macroToday).map((e) => ({ role: "risk-market-analyst", mode: "event", slot: e.slot, grace: 30, labels: e.labels })),
-    { role: "qa", mode: "daily", slot: QA_MIN, grace: 120 },
-    { role: "performance-analyst", mode: dow === 5 ? "weekly" : "daily", slot: PERF_MIN, grace: 120 },
+    { role: "qa", mode: "daily", slot: QA_MIN, grace: 24 * 60 - 1 - QA_MIN },
+    { role: "performance-analyst", mode: dow === 5 ? "weekly" : "daily", slot: PERF_MIN, grace: 24 * 60 - 1 - PERF_MIN },
   ];
   return want
     .map((w) => ({ ...w, key: `${w.role}|${w.mode}|${w.slot}` }))

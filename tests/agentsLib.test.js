@@ -9,10 +9,12 @@ test("the morning brief runs from 8:45, once", () => {
   const at = a.dueRuns({ nowMin: 8 * 60 + 45, dow: 3 });
   assert.deepEqual(keys(at), ["risk-market-analyst|brief"]);
   assert.deepEqual(keys(a.dueRuns({ nowMin: 8 * 60 + 50, dow: 3, done: new Set([at[0].key]) })), [], "not twice");
-  assert.deepEqual(keys(a.dueRuns({ nowMin: 9 * 60 + 40, dow: 3 })), [], "too late to be a pre-open brief");
+  assert.deepEqual(keys(a.dueRuns({ nowMin: 9 * 60 + 40, dow: 3 })), ["risk-market-analyst|brief"], "a brief missed while the Mac slept still runs before 11:00");
+  assert.deepEqual(keys(a.dueRuns({ nowMin: 11 * 60 + 1, dow: 3 })), [], "after 11:00 it is no longer a brief");
 });
 
-test("midday, then QA and the performance report after the close; weekly on Friday", () => {
+test("midday, then QA and the performance report after the close; weekly on Friday; they catch up until midnight", () => {
+  assert.deepEqual(keys(a.dueRuns({ nowMin: 21 * 60, dow: 2 })), ["qa|daily", "performance-analyst|daily"], "the Mac woke at 21:00: both still run");
   assert.deepEqual(keys(a.dueRuns({ nowMin: 12 * 60 + 31, dow: 2 })), ["risk-market-analyst|midday"]);
   assert.deepEqual(keys(a.dueRuns({ nowMin: 16 * 60 + 40, dow: 2 })), ["qa|daily", "performance-analyst|daily"]);
   assert.deepEqual(keys(a.dueRuns({ nowMin: 16 * 60 + 40, dow: 5 })), ["qa|daily", "performance-analyst|weekly"]);

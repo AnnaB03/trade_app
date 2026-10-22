@@ -35,7 +35,9 @@ fi
 # The agent team (app/api/agentsLib.js): the server decides what is due (the
 # 8:45 brief, 12:30 midday, a read after each big release, QA at 16:20, the
 # performance report at 16:35) and starts it. Read-only agents; they report.
-if [ "$now" -ge $((8 * 60 + 40)) ] && [ "$now" -lt $((17 * 60)) ]; then
+# Asked until midnight (2026-10-22), so a run missed while the Mac slept
+# catches up when it wakes.
+if [ "$now" -ge $((8 * 60 + 40)) ]; then
   ( r=$(curl -s -m 30 "http://localhost:3000/api/agents?tick=1"); case "$r" in *'"started":["'*) echo "$(date '+%F %T') agents $r" >> "$HOME/Library/Logs/cockpit-autopilot.log";; esac ) &
 fi
 [ "$now" -ge $((9 * 60 + 20)) ] && [ "$now" -lt $((16 * 60)) ] || exit 0

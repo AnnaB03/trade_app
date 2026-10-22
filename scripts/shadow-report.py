@@ -8,7 +8,7 @@ that is not allowed to trade yet) and replays each one minute by minute against
 real prices, applying the live exit rules for a same-day position:
 
   +7% at the bid          -> sold (quick_target)
-  down 1% of the account at the bid -> sold (max_loss)
+  (no dollar cap: options have none since 2026-10-15; the 20% stop is the limit)
   stock through the idea's invalidation or target -> sold
   15:45 ET                -> sold (flat by the close)
 
@@ -112,8 +112,8 @@ def replay(r):
             why = "take_profit"
         elif est_bid <= ask * (1 - STOP_PCT / 100):
             why = "stop"
-        elif (est_bid - ask) * 100 * n <= -MAX_LOSS:
-            why = "max_loss"
+        # No dollar cap on options since 2026-10-15 (exitRules): the 20% stop above
+        # is their loss limit. Every shadow row is an option, so MAX_LOSS no longer applies.
         elif ustock is not None and r.get("invalidation") is not None and (ustock >= r["invalidation"] if put else ustock <= r["invalidation"]):
             why = "invalidation"
         elif ustock is not None and r.get("target") is not None and (ustock <= r["target"] if put else ustock >= r["target"]):
