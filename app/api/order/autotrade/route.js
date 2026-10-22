@@ -17,7 +17,7 @@ import {
   fromEarlierSession, PLAYED_OUT_EXITS, countsAsEntry, etDate, expiresToday, isFade, fadeLimitReached, flipTooSoon, flipAfterStop, rebuyTooSoon, rebuyCheck, ideaCapReached, bothSidesOpen, samePlaybookPosition,
 } from "../entryRules";
 import { optionStopPct, profileFor } from "../../swingLib";
-import { extremeRead, fadePlan, fadeEnabled, EXTREME_PCT, FADE_SIDES, fadeActionAllowed, fadeAgainstTape, FADE_TAPE_WINDOW_MIN } from "../../fadeLib";
+import { extremeRead, fadePlan, fadeEnabled, EXTREME_PCT, FADE_SIDES, fadeActionAllowed, fadeAgainstTape, FADE_TAPE_WINDOW_MIN, fadeSymbolAllowed } from "../../fadeLib";
 import { appendIdea } from "../../store";
 import { selectionVerdict } from "../../selectionLib";
 import { markActivity } from "../../activityLib";
@@ -1032,6 +1032,8 @@ async function run(req) {
           ["rebuy_30min", rb.reason],
           ["both_sides", bothSidesOpen({ action: idea.action, openRows })],
           ["flip_after_stop", flipAfterStop({ action: idea.action, rows: soldRows })],
+          // Fades only: index ETFs live, single stocks recorded (fadeLib.FADE_SYMBOLS).
+          ["fade_single_stock", isFade(idea.strategy) && !fadeSymbolAllowed(idea.symbol) ? `Fades are placed on index ETFs only (single-stock fades lost 7 of 7); ${idea.symbol} is recorded, not placed.` : null],
           // Fades only: not against a one-sided read from the model (fadeLib.fadeAgainstTape).
           ["fade_vs_tape", isFade(idea.strategy) ? fadeAgainstTape({ fadeAction: idea.action,
             recentActions: listIdeas().filter((j) => (!j.strategy || j.strategy === "intraday") && Date.now() - Date.parse(j.createdAt) < FADE_TAPE_WINDOW_MIN * 60000).map((j) => j.action) }) : null],

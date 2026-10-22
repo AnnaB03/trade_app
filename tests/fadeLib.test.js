@@ -115,3 +115,10 @@ test("a fade is not taken against a one-sided read from the model — 2026-10-22
   assert.equal(f.fadeAgainstTape({ fadeAction: "CALL", recentActions: ["CALL", "PUT", "PUT"] }), null, "two opposite is not one-sided");
   assert.equal(f.FADE_TAPE_MIN, 3);
 });
+
+test("live fades on index ETFs only; single-stock fades are recorded — 2026-10-22", async () => {
+  const f = await import("../app/api/fadeLib.js");
+  for (const s of ["QQQ", "SPY", "IWM", "DIA", "qqq"]) assert.equal(f.fadeSymbolAllowed(s), true, s);
+  for (const s of ["NVDA", "ORCL", "AMZN", "AVGO", "MU", "GOOGL", "SPCX"]) assert.equal(f.fadeSymbolAllowed(s), false, s);
+  assert.equal(f.fadeSymbolAllowed("NVDA", new Set(["NVDA"])), true, "FADE_SYMBOLS overrides the list");
+});

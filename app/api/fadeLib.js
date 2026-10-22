@@ -61,6 +61,16 @@ export const fadeActionAllowed = (action, allowed = FADE_ACTIONS) => allowed.has
    Blocked when at least FADE_TAPE_MIN ideas oppose it and they outnumber its
    side. Found on the same 12 trades it is scored on; the shadow book keeps
    scoring it. recentActions: the model's CALL/PUT actions from the window. */
+/* Live fades on index ETFs only (2026-10-22, the owner: "lets keep option 2").
+   QQQ fades won 4 of 5 (its one loss was against a one-sided read, which
+   fade_vs_tape now skips); single stocks lost all 7 (NVDA x2, ORCL, AMZN,
+   AVGO, MU, GOOGL: -$2,302). An index tends to snap back after a stretch; a
+   single stock moving on its own news tends to keep going. Single-stock fades
+   are recorded to the shadow book (fade_single_stock), not placed; to be
+   looked at again after 20+ fades. FADE_SYMBOLS overrides the list. */
+export const FADE_SYMBOLS = new Set(String(process.env.FADE_SYMBOLS || "QQQ,SPY,IWM,DIA").toUpperCase().split(",").map((s) => s.trim()).filter(Boolean));
+export const fadeSymbolAllowed = (symbol, allowed = FADE_SYMBOLS) => allowed.has(String(symbol).toUpperCase());
+
 export const FADE_TAPE_MIN = 3;
 export const FADE_TAPE_WINDOW_MIN = 30;
 export function fadeAgainstTape({ fadeAction, recentActions }) {
