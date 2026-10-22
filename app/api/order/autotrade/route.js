@@ -1105,14 +1105,19 @@ async function run(req) {
       /* A contract that must be flat by the close needs time to work. MU 10/9
          $1090c was bought at 15:33 on 2026-10-07 with a forced sale due at 15:45:
          twelve minutes in which it could only pay the spread and two fees. */
-      // With no overnight carry every option is sold at 15:45, so the 15:30 cut-off applies to all of them.
+      // With no overnight carry every option is sold at 15:45, so the 14:00 cut-off applies to all of them.
+      // What it blocks is recorded to the shadow book, so the cut-off is scored like the other hard rules.
       if (idea.flatByClose || (!carryOvernight() && idea.vehicle === "OPTION")) {
-        const em = etNowMinutes();
-        if (lateEntryRefused({ flatByClose: true, etMinutes: em, learning: LEARN })) {
-          results.push({ ...tag, placed: false, reason: `Short-dated contract that is sold before the close — too late in the day to open one (no entries after ${LEARN ? "15:30" : "15:00"} ET).` });
+        if (lateEntryRefused({ flatByClose: true, etMinutes: etNowMinutes(), learning: LEARN })) {
+          const row = dryRun || idea.vehicle !== "OPTION" ? null : recordShadowEntry({
+            playbook: idea.strategy || "swing", blockedBy: "after_14", ideaId: idea.id, symbol: idea.symbol, action: idea.action,
+            occ: idea.leg?.occ ?? null, strike: idea.leg?.strike ?? null, expiration: idea.expiration ?? null,
+            contracts: Math.max(1, Number(idea.sizing?.contracts) || 1), optionBid: idea.leg?.bid ?? null, optionAsk: idea.leg?.ask ?? null, delta: idea.leg?.delta ?? null,
+            underlying: idea.entryPrice ?? null, invalidation: idea.invalidation ?? null, target: idea.target ?? null, catalyst: idea.catalyst ?? null,
+          });
+          results.push({ ...tag, placed: false, blockedBy: "after_14", recorded: Boolean(row), reason: "No new option trades from 14:00 ET: they have under two hours before the 15:45 sale (bought from 14:00 since 10-07: 32 trades, -$2,731)." });
           continue;
         }
-        if (lateEntryRefused({ flatByClose: true, etMinutes: em })) soft("late_entry", "Same-day contract opened after 15:00 ET, with less than 45 minutes to the 15:45 sale.");
       }
 
       /* Same-day trades are sized by what they can LOSE, not by what they cost.

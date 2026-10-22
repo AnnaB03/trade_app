@@ -21,7 +21,11 @@ export const MAX_SYMBOL_EXPOSURE_PCT = 20;      // of the account, one underlyin
 export const MAX_TOTAL_EXPOSURE_PCT = 100;      // no borrowing
 export const MAX_ENTRIES_PER_SYMBOL_DAY = 4;
 export const REENTRY_COOLDOWN_MIN = 45;
-export const LAST_FLAT_BY_CLOSE_ENTRY_MIN = 15 * 60; // ET; same-day contracts not opened after 15:00
+/* No new option trade from 14:00 ET (owner, 2026-10-22). Since 10-07, same-day
+   trades bought from 14:00 lost in both halves of the record (19 trades -$334,
+   then 13 trades -$2,397): under two hours before the 15:45 sale is too little
+   for them to work. Was 15:00 (15:30 in learning mode). */
+export const LAST_FLAT_BY_CLOSE_ENTRY_MIN = 14 * 60; // ET
 export const MAX_SPREAD_PCT_OF_PREMIUM = 6;
 export const MAX_SPREAD_SHARE_OF_LOSS = 0.4;
 /* Hard, in learning mode too (2026-10-15): a contract whose spread is over
@@ -50,8 +54,8 @@ export const SAME_DAY = new Set(["intraday", "contrarian", "fade_scan", "news"])
      exit and the option stop; the 15% position, 20% per-symbol and total
      capital caps; an idea's own trigger must have fired; price already
      through the invalidation or at the target (setupVoid); an exact repeat of an open
-     position; no usable stop to size from; a same-day contract opened after
-     15:30 (it is sold at 15:45); and at most 8 entries per symbol per day,
+     position; no usable stop to size from; a same-day contract opened from
+     14:00 (it is sold at 15:45); and at most 8 entries per symbol per day,
      a runaway guard so a broken loop cannot buy the same name every minute. */
 export const learningMode = (env = process.env) => env.LEARNING_MODE !== "false";
 
@@ -223,7 +227,7 @@ export const SOFT_RULES = Object.freeze([
   "conviction", "edge_throttle", "selection", "stale", "extreme", "reward_risk", "consumed",
   "daily_cap", "cooldown", "tape", "late_entry", "over_budget", "spread", "watch_only", "pdt",
 ]);
-export const LEARNING_LAST_ENTRY_MIN = 15 * 60 + 30;   // ET; hard, same-day contracts
+export const LEARNING_LAST_ENTRY_MIN = LAST_FLAT_BY_CLOSE_ENTRY_MIN; // ET; hard in learning mode too (was 15:30)
 export const LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY = 8;  // hard runaway guard
 
 /* ---------- The entry-confirmation test (2026-10-14) ----------
@@ -322,8 +326,7 @@ export function sizeOptionEntry({ accountSize, leg, entryPrice, invalidation, ac
   return { ok: true, contracts, riskPer, stopPct, riskAtStop: Math.round(riskPer * contracts), budget, overrides };
 }
 
-// Same-day contracts are not opened after 15:00 ET.
-// In learning mode the hard line is 15:30; 15:00-15:30 is a recorded override.
+// Same-day contracts are not opened from 14:00 ET, in learning mode too.
 export function lateEntryRefused({ flatByClose, etMinutes, learning = false }) {
   return Boolean(flatByClose) && Number(etMinutes) >= (learning ? LEARNING_LAST_ENTRY_MIN : LAST_FLAT_BY_CLOSE_ENTRY_MIN);
 }

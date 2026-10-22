@@ -36,7 +36,7 @@ contract or trade."* On unless `LEARNING_MODE=false` (`entryRules.learningMode`)
   - an idea from an earlier session, or one that already reached its target;
   - the other side of a stock already held, or a second position in the same stock, side and playbook;
   - a third trade of one idea in a day;
-  - any option after **15:30** (no overnight carry);
+  - any new option trade from **14:00** (no overnight carry);
   - the other side of a stock within 30 minutes of a stop-out on it;
   - a target within 0.15% of the live price (`TARGET_MARGIN_PCT`);
   - a second fade of the same stock in a day, buying the other side of a stock within 30 minutes of the last entry, or buying the same side again within 30 minutes of a sale (blocked trades go to the shadow book with `blockedBy`);
@@ -54,11 +54,11 @@ With learning mode off, the table below applies as written.
 | One stock | 20% of the account | `entryRules.MAX_SYMBOL_EXPOSURE_PCT` | 2026-10-06 |
 | Entries per stock per day | 4, then a 45-minute wait after an exit | `entryRules` | 2026-10-13 |
 | Idea minimums | conviction 2, reward:risk 1.5 | `entryRules` | — |
-| Same-day contracts opened until | 15:00 ET | `entryRules.lateEntryRefused` | 2026-10-08 |
+| New option trades opened until | **14:00 ET**, learning mode too (was 15:00, then 15:30). Bought from 14:00 since 10-07: 32 trades, −$2,731, losing in both halves (−$334, then −$2,397). Blocked ideas are recorded to the shadow book as `after_14` | `entryRules.lateEntryRefused` | 2026-10-22 |
 | Fade symbols | **live fades on index ETFs only** (QQQ, SPY, IWM, DIA; `FADE_SYMBOLS` overrides); single-stock fades recorded as `fade_single_stock`, not placed (QQQ 4 of 5 won; single stocks 0 of 7, −$2,302). Review after 20+ fades | `fadeLib.FADE_SYMBOLS` | 2026-10-22 |
 | Fade vs the tape | **no fade against a one-sided read**: skipped when 3+ of the model's ideas from the last 30 minutes point the other way and outnumber its side (every big losing fade had 5–8 opposite to 0–3, −$2,841; the four winners did not, +$887). Fitted on 12 trades; scored in the shadow book as `fade_vs_tape` | `fadeLib.fadeAgainstTape` | 2026-10-22 |
 | Fade sides | **fade calls only** (fading put ideas in a transitioning tape: 4 for 4, +$887); fade puts and the fade scan off (0 for 4, −$1,235). `FADE_ACTIONS=CALL,PUT` restores both | `fadeLib.FADE_ACTIONS` | 2026-10-15 |
-| Overnight | **no overnight carry**: every option position is sold from 15:45, and none is opened after 15:30 (10-14..10-21: 20 overnight trades, 1 winner, −$8,000; the replayed same-day sale saved $4,456 on the 11 with bars). `CARRY_OVERNIGHT=true` restores the carry | `exitRules.carryOvernight` | 2026-10-22 |
+| Overnight | **no overnight carry**: every option position is sold from 15:45, and none is opened from 14:00 (10-14..10-21: 20 overnight trades, 1 winner, −$8,000; the replayed same-day sale saved $4,456 on the 11 with bars). `CARRY_OVERNIGHT=true` restores the carry | `exitRules.carryOvernight` | 2026-10-22 |
 | Expiry day | options expiring today **are** bought: the ban added and undone on 2026-10-22 would have blocked +$2,201 of winners (ORCL +$1,182, INTC +$751, ORCL +$268) for one −$481 loss | `entryRules.expiresToday` (helper only) | 2026-10-22 |
 | Flip after a stop | **no buying the other side of a stock within 30 minutes of a stop-out on it** (10-19: NVDA and INTC puts bought 2 seconds after their calls stopped; replayed: 8 losers −$3,152, 3 winners +$852) | `entryRules.flipAfterStop` | 2026-10-22 |
 | Trades per idea | **at most 2 per idea per day**; the re-buy exemption **once per idea per day** (AVGO 10-15: one idea traded 5 times, −$941; the cap would have blocked 9 trades since the restart, −$728, 4% of winning dollars) | `entryRules.ideaCapReached`, `rebuyCheck` | 2026-10-16 |

@@ -88,10 +88,10 @@ test("RULE: an idea needs conviction 2+ and 1.5:1 reward to risk", () => {
   assert.equal(entry.MIN_REWARD_RISK, 1.5);
 });
 
-test("RULE: same-day contracts are not opened after 15:00 ET", () => {
-  assert.equal(entry.LAST_FLAT_BY_CLOSE_ENTRY_MIN, 15 * 60);
-  assert.equal(entry.lateEntryRefused({ flatByClose: true, etMinutes: 15 * 60 }), true);
-  assert.equal(entry.lateEntryRefused({ flatByClose: true, etMinutes: 14 * 60 + 59 }), false);
+test("RULE: no new option trades from 14:00 ET — 2026-10-22", () => {
+  assert.equal(entry.LAST_FLAT_BY_CLOSE_ENTRY_MIN, 14 * 60, "no new option trades from 14:00 (2026-10-22)");
+  assert.equal(entry.lateEntryRefused({ flatByClose: true, etMinutes: 14 * 60 }), true);
+  assert.equal(entry.lateEntryRefused({ flatByClose: true, etMinutes: 13 * 60 + 59 }), false);
   assert.equal(entry.lateEntryRefused({ flatByClose: false, etMinutes: 15 * 60 + 30 }), false, "multi-day positions are not same-day contracts");
 });
 
@@ -181,11 +181,11 @@ test("RULE: learning mode is ON by default and every playbook trades — 2026-10
     "the rules that record instead of refusing; adding one means changing this test on purpose");
 });
 
-test("RULE: learning mode keeps the safety core — same-day entries end at 15:30, 8 entries per symbol per day at most", () => {
-  assert.equal(entry.LEARNING_LAST_ENTRY_MIN, 15 * 60 + 30);
+test("RULE: learning mode keeps the safety core — option entries end at 14:00, 8 entries per symbol per day at most", () => {
+  assert.equal(entry.LEARNING_LAST_ENTRY_MIN, 14 * 60, "14:00 since 2026-10-22 (was 15:30)");
   assert.equal(entry.LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY, 8);
-  assert.equal(entry.lateEntryRefused({ flatByClose: true, etMinutes: 15 * 60 + 10, learning: true }), false, "15:00-15:30 is an override, not a refusal");
-  assert.equal(entry.lateEntryRefused({ flatByClose: true, etMinutes: 15 * 60 + 30, learning: true }), true);
+  assert.equal(entry.lateEntryRefused({ flatByClose: true, etMinutes: 13 * 60 + 59, learning: true }), false);
+  assert.equal(entry.lateEntryRefused({ flatByClose: true, etMinutes: 14 * 60, learning: true }), true, "hard in learning mode too");
   // The losses are still capped: the max-loss exit (2% since 2026-10-14) and the position cap.
   assert.equal(entry.RISK_PER_TRADE_PCT, 2);
   assert.equal(sizing.OPTION_HARD_PCT, 0.15);
@@ -282,7 +282,7 @@ test("RULE: at most two trades per idea per day; the re-buy exemption once per i
   assert.deepEqual(entry.rebuyCheck({ action: "PUT", rows: [], now, livePrice: 339.7 }), { reason: null, exempted: false }, "no recent sale: nothing to exempt");
 });
 
-test("RULE: no overnight carry — every option position leaves from 15:45, and none is opened after 15:30 — 2026-10-22", () => {
+test("RULE: no overnight carry — every option position leaves from 15:45, and none is opened from 14:00 — 2026-10-22", () => {
   assert.equal(exits.carryOvernight({}), false);
   assert.equal(exits.carryOvernight({ CARRY_OVERNIGHT: "true" }), true);
   const cfg = exits.exitConfig(ACCOUNT);
