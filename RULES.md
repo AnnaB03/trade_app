@@ -36,7 +36,8 @@ contract or trade."* On unless `LEARNING_MODE=false` (`entryRules.learningMode`)
   - an idea from an earlier session, or one that already reached its target;
   - the other side of a stock already held, or a second position in the same stock, side and playbook;
   - a third trade of one idea in a day;
-  - any option after **15:30** (no overnight carry), and an option expiring today;
+  - any option after **15:30** (no overnight carry);
+  - the other side of a stock within 30 minutes of a stop-out on it;
   - a target within 0.15% of the live price (`TARGET_MARGIN_PCT`);
   - a second fade of the same stock in a day, buying the other side of a stock within 30 minutes of the last entry, or buying the same side again within 30 minutes of a sale (blocked trades go to the shadow book with `blockedBy`);
   - at most **8** entries per stock per day.
@@ -56,7 +57,8 @@ With learning mode off, the table below applies as written.
 | Same-day contracts opened until | 15:00 ET | `entryRules.lateEntryRefused` | 2026-10-08 |
 | Fade sides | **fade calls only** (fading put ideas in a transitioning tape: 4 for 4, +$887); fade puts and the fade scan off (0 for 4, −$1,235). `FADE_ACTIONS=CALL,PUT` restores both | `fadeLib.FADE_ACTIONS` | 2026-10-15 |
 | Overnight | **no overnight carry**: every option position is sold from 15:45, and none is opened after 15:30 (10-14..10-21: 20 overnight trades, 1 winner, −$8,000; the replayed same-day sale saved $4,456 on the 11 with bars). `CARRY_OVERNIGHT=true` restores the carry | `exitRules.carryOvernight` | 2026-10-22 |
-| Expiry day | no option is bought on its expiry day: switched to a liquid contract with a day or more left, or refused (INTC Oct 16 put −$481 in 2 minutes) | `entryRules.expiresToday` | 2026-10-22 |
+| Expiry day | options expiring today **are** bought: the ban added and undone on 2026-10-22 would have blocked +$2,201 of winners (ORCL +$1,182, INTC +$751, ORCL +$268) for one −$481 loss | `entryRules.expiresToday` (helper only) | 2026-10-22 |
+| Flip after a stop | **no buying the other side of a stock within 30 minutes of a stop-out on it** (10-19: NVDA and INTC puts bought 2 seconds after their calls stopped; replayed: 8 losers −$3,152, 3 winners +$852) | `entryRules.flipAfterStop` | 2026-10-22 |
 | Trades per idea | **at most 2 per idea per day**; the re-buy exemption **once per idea per day** (AVGO 10-15: one idea traded 5 times, −$941; the cap would have blocked 9 trades since the restart, −$728, 4% of winning dollars) | `entryRules.ideaCapReached`, `rebuyCheck` | 2026-10-16 |
 | Both sides / duplicates | **never both sides of one stock at once** (4 losers −$1,113 against 2 winners +$110 since the restart); **one position per stock, side and playbook** whatever the contract (a switched expiry had let ORCL hold two same-day calls) | `entryRules.bothSidesOpen`, `samePlaybookPosition` | 2026-10-15 |
 | Fades / flips / re-buys | one fade per stock per day; no opposite-side entry on a stock within 30 minutes; **no same-side re-buy within 30 minutes of any sale of it**, except after a stop or max-loss sale while the stock is still on the right side of the idea's level (2026-10-15: 11 such re-buys had lost $444; MU's blocked re-buy would have made about +$1,000). From the 10-14 replay: +$6,454 / +$3,065 at 3% worse fills, against +$5,274 / −$2,874 without | `entryRules.fadeLimitReached`, `flipTooSoon` | 2026-10-14 |

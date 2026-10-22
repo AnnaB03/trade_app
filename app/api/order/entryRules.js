@@ -189,12 +189,28 @@ export function samePlaybookPosition({ action, strategy, openRows }) {
    and sold "at target" a minute later for -$71, after the next quote ticked
    through; the same shape as the 10-14 SPY loop. */
 export const TARGET_MARGIN_PCT = 0.15;
-/* No option bought on its expiry day (2026-10-22). The INTC Oct 16 put lost
-   $481 two minutes after it was bought on 10-16: an option in its last
-   hours swings on every tick. The route switches to a liquid contract with
-   at least a day left (contractLib), or refuses. */
+/* expiresToday: kept as a helper. The expiry-day buying ban built on it was
+   undone on 2026-10-22, the same day: replayed, it would have blocked +$2,201
+   of winners for one $481 loss (see the autotrade route). */
 export const etDay = (t = Date.now()) => new Date(t).toLocaleDateString("en-CA", { timeZone: "America/New_York" });
 export const expiresToday = (expiration, now = Date.now()) => Boolean(expiration) && String(expiration).slice(0, 10) <= etDay(now);
+
+/* No buying the other side of a stock within FLIP_AFTER_STOP_MIN of a
+   stop-out on it (2026-10-22, the owner: "No other side within 30 min of a
+   stop-out"). On 10-19 NVDA and INTC calls were stopped out and puts on the
+   same stocks were bought two seconds later. Replayed since the restart: it
+   blocks 11 trades, 8 losers (-$3,152) and 3 winners (+$852).
+   rows: journal rows for the symbol with an exitAt. */
+export const FLIP_AFTER_STOP_MIN = 30;
+export const STOP_EXITS = new Set(["premium_stop", "stop", "stop_hit", "max_loss"]);
+export function flipAfterStop({ action, rows, now = Date.now(), waitMin = FLIP_AFTER_STOP_MIN }) {
+  const dir = action === "CALL" || action === "BUY" ? 1 : -1;
+  const s = (rows || []).filter((r) => r.exitAt && STOP_EXITS.has(r.exitReasonTag) && rowDir(r) === -dir && now - Date.parse(r.exitAt) >= 0 && now - Date.parse(r.exitAt) < waitMin * 60000)
+    .sort((a, b) => Date.parse(b.exitAt) - Date.parse(a.exitAt))[0];
+  if (!s) return null;
+  const mins = Math.round((now - Date.parse(s.exitAt)) / 60000);
+  return `The other side of this stock was stopped out ${mins} min ago (${s.optionType ?? s.side}, ${s.exitReasonTag}); no flipping sides for ${waitMin} minutes after a stop-out.`;
+}
 
 export function setupVoid({ dir, entry, target, invalidation }) {
   const e = Number(entry), t = Number(target), v = Number(invalidation);

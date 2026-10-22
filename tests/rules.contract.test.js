@@ -293,17 +293,29 @@ test("RULE: no overnight carry — every option position leaves from 15:45, and 
   assert.notEqual(exits.decideProfitExit(cfg, { ...swing, vehicle: "SHARES", eod: true, nowEtMinutes: 15 * 60 + 45, carry: false })?.tag, "eod_flat", "shares are not sold by the no-carry rule; their own rules are unchanged");
 });
 
-test("RULE: a target within 0.15% counts as reached; options expiring today are never bought; a resting-stop sale counts for the re-buy exemption — 2026-10-22", () => {
+test("RULE: a target within 0.15% counts as reached; a resting-stop sale counts for the re-buy exemption — 2026-10-22", () => {
   assert.equal(entry.TARGET_MARGIN_PCT, 0.15);
   assert.match(entry.setupVoid({ dir: -1, entry: 175.2, target: 175, invalidation: 177 }), /target/, "QCOM 10-16: 20 cents short of a $175 target");
   assert.equal(entry.setupVoid({ dir: -1, entry: 176, target: 175, invalidation: 177 }), null, "a dollar away is a trade");
+  // expiresToday stays a helper; the ban on buying such options was undone the same day (+$2,201 of winners).
   const morning = Date.parse("2026-10-16T14:00:00Z");
-  assert.equal(entry.expiresToday("2026-10-16", morning), true, "INTC Oct 16 put on 10-16");
+  assert.equal(entry.expiresToday("2026-10-16", morning), true);
   assert.equal(entry.expiresToday("2026-10-17", morning), false);
   assert.ok(entry.OPTION_PRICE_EXITS.has("stop_hit"), "the QQQ 10-20 gap stop");
   const now = Date.parse("2026-10-20T13:49:00Z");
   const qqq = { optionType: "call", entryFillPrice: 9.06, exitAt: "2026-10-20T13:30:02Z", exitReasonTag: "stop_hit", invalidation: 710 };
   assert.deepEqual(entry.rebuyCheck({ action: "CALL", rows: [qqq], now, livePrice: 714 }), { reason: null, exempted: true });
+});
+
+test("RULE: no buying the other side of a stock within 30 minutes of a stop-out on it — 2026-10-22", () => {
+  assert.equal(entry.FLIP_AFTER_STOP_MIN, 30);
+  const now = Date.parse("2026-10-19T17:47:04Z");
+  const stopped = { optionType: "call", exitAt: "2026-10-19T17:47:02Z", exitReasonTag: "premium_stop" }; // NVDA 10-19
+  assert.match(entry.flipAfterStop({ action: "PUT", rows: [stopped], now }), /stopped out 0 min ago/);
+  assert.equal(entry.flipAfterStop({ action: "CALL", rows: [stopped], now }), null, "the same side is the re-buy rule's business");
+  assert.equal(entry.flipAfterStop({ action: "PUT", rows: [{ ...stopped, exitReasonTag: "take_profit" }], now }), null, "only after a stop-out");
+  assert.equal(entry.flipAfterStop({ action: "PUT", rows: [{ ...stopped, exitAt: "2026-10-19T17:16:00Z" }], now }), null, "after 30 minutes");
+  assert.match(entry.flipAfterStop({ action: "CALL", rows: [{ optionType: "put", exitAt: "2026-10-19T17:40:00Z", exitReasonTag: "stop_hit" }], now }), /stop_hit/);
 });
 
 test("RULE: a setup is void when price is through its invalidation or already at its target — hard, in learning mode too", () => {

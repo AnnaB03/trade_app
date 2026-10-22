@@ -14,7 +14,7 @@ import {
   MAX_SPREAD_SHARE_OF_LOSS, MAX_SPREAD_PCT_OF_PREMIUM, LAST_FLAT_BY_CLOSE_ENTRY_MIN, REENTRY_COOLDOWN_MIN,
   MAX_ENTRIES_PER_SYMBOL_DAY, RISK_PER_TRADE_PCT as INTRADAY_RISK_PCT, isWatchOnly, entriesAllowed,
   learningMode, lateEntryRefused, LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY, setupVoid, entryArm, confirmedBreak, CONFIRM_BARS,
-  fromEarlierSession, PLAYED_OUT_EXITS, countsAsEntry, etDate, expiresToday, fadeLimitReached, flipTooSoon, rebuyTooSoon, rebuyCheck, ideaCapReached, bothSidesOpen, samePlaybookPosition,
+  fromEarlierSession, PLAYED_OUT_EXITS, countsAsEntry, etDate, expiresToday, fadeLimitReached, flipTooSoon, flipAfterStop, rebuyTooSoon, rebuyCheck, ideaCapReached, bothSidesOpen, samePlaybookPosition,
 } from "../entryRules";
 import { optionStopPct, profileFor } from "../../swingLib";
 import { extremeRead, fadePlan, fadeEnabled, EXTREME_PCT, FADE_SIDES, fadeActionAllowed } from "../../fadeLib";
@@ -924,17 +924,11 @@ async function run(req) {
            (contractLib.liquidAlternative). Never refuses; with nothing
            better the idea's own contract goes on to the usual checks. */
         const sp = spreadPct(bid, ask);
-        // An option expiring today is never bought: switch to one with a day or more left, or refuse.
-        if (expiresToday(idea.expiration)) {
-          const alt = await liquidAlternative(idea.symbol, idea.action === "CALL" ? "call" : "put", {
-            targetDelta: idea.leg.delta ?? 0.55, currentSpreadPct: Infinity, ideaExpiration: idea.expiration, minDte: 1, accountSize: ACCOUNT_SIZE,
-          });
-          if (!alt) { results.push({ ...tag, placed: false, reason: `${idea.leg.occ} expires today, and no liquid contract with a day or more left fits.` }); continue; }
-          idea = { ...idea, expiration: alt.expiration, strike: alt.strike,
-            leg: { occ: alt.occ, strike: alt.strike, bid: alt.bid, ask: alt.ask, mid: (alt.bid + alt.ask) / 2, delta: alt.delta },
-            switchedFrom: { occ: rawIdea.leg?.occ ?? null, spreadPct: sp != null ? Math.round(sp * 10) / 10 : null, reason: "expires today" } };
-          tag.switched = `${idea.switchedFrom.occ} (expires today) -> ${alt.occ}`;
-        } else if (sp != null && sp > SWITCH_SPREAD_PCT) {
+        /* Options expiring today ARE bought (2026-10-22, undone the same day).
+           The ban would have blocked +$2,201 of winners since the restart
+           (ORCL Oct 16 put +$1,182, INTC Oct 16 put +$751, ORCL +$268) to save
+           one $481 loss. The owner: "Undo the expiry-day ban". */
+        if (sp != null && sp > SWITCH_SPREAD_PCT) {
           const alt = await liquidAlternative(idea.symbol, idea.action === "CALL" ? "call" : "put", {
             targetDelta: idea.leg.delta ?? 0.55, currentSpreadPct: sp, ideaExpiration: idea.expiration,
             minDte: idea.flatByClose ? 1 : 2, accountSize: ACCOUNT_SIZE,
@@ -1037,6 +1031,7 @@ async function run(req) {
           ["flip_30min", flipTooSoon({ action: idea.action, rows: todayRows })],
           ["rebuy_30min", rb.reason],
           ["both_sides", bothSidesOpen({ action: idea.action, openRows })],
+          ["flip_after_stop", flipAfterStop({ action: idea.action, rows: soldRows })],
         ].find(([, why]) => why);
         if (blocked) {
           const [rule, why] = blocked;
