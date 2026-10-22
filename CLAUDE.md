@@ -23,7 +23,7 @@ learn from every single contract or trade."
   - an idea from an earlier session, or one that already reached its target;
   - the other side of a stock already held, or a second position in the same stock, side and playbook;
   - a third trade of one idea in a day;
-  - same-day contracts after 15:30;
+  - any option after 15:30 (nothing is carried overnight unless CARRY_OVERNIGHT=true), an option expiring today, or a target within 0.15%;
   - a second fade of a stock in a day, the other side of a stock within 30 minutes, or the same side within 30 minutes of a sale;
   - more than 8 entries per stock per day.
 - When nothing is trading, that is the bug. Print every idea's refusal reason and fix the cause.

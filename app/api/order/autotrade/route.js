@@ -8,13 +8,13 @@ import { getClock } from "../../clockLib";
 import { isLegacy, readBaseline } from "../../ledgerLib";
 import { journalOpen } from "../../journalLib";
 import { OPTION_HARD_PCT } from "../../sizingLib";
-import { HARD_LOSS_PCT } from "../exitRules";
+import { HARD_LOSS_PCT, carryOvernight } from "../exitRules";
 import {
   payPrice, sizeOptionEntry, SAME_DAY, MIN_CONVICTION, MIN_REWARD_RISK, MAX_SYMBOL_EXPOSURE_PCT,
   MAX_SPREAD_SHARE_OF_LOSS, MAX_SPREAD_PCT_OF_PREMIUM, LAST_FLAT_BY_CLOSE_ENTRY_MIN, REENTRY_COOLDOWN_MIN,
   MAX_ENTRIES_PER_SYMBOL_DAY, RISK_PER_TRADE_PCT as INTRADAY_RISK_PCT, isWatchOnly, entriesAllowed,
   learningMode, lateEntryRefused, LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY, setupVoid, entryArm, confirmedBreak, CONFIRM_BARS,
-  fromEarlierSession, PLAYED_OUT_EXITS, countsAsEntry, etDate, fadeLimitReached, flipTooSoon, rebuyTooSoon, rebuyCheck, ideaCapReached, bothSidesOpen, samePlaybookPosition,
+  fromEarlierSession, PLAYED_OUT_EXITS, countsAsEntry, etDate, expiresToday, fadeLimitReached, flipTooSoon, rebuyTooSoon, rebuyCheck, ideaCapReached, bothSidesOpen, samePlaybookPosition,
 } from "../entryRules";
 import { optionStopPct, profileFor } from "../../swingLib";
 import { extremeRead, fadePlan, fadeEnabled, EXTREME_PCT, FADE_SIDES, fadeActionAllowed } from "../../fadeLib";
@@ -924,7 +924,17 @@ async function run(req) {
            (contractLib.liquidAlternative). Never refuses; with nothing
            better the idea's own contract goes on to the usual checks. */
         const sp = spreadPct(bid, ask);
-        if (sp != null && sp > SWITCH_SPREAD_PCT) {
+        // An option expiring today is never bought: switch to one with a day or more left, or refuse.
+        if (expiresToday(idea.expiration)) {
+          const alt = await liquidAlternative(idea.symbol, idea.action === "CALL" ? "call" : "put", {
+            targetDelta: idea.leg.delta ?? 0.55, currentSpreadPct: Infinity, ideaExpiration: idea.expiration, minDte: 1, accountSize: ACCOUNT_SIZE,
+          });
+          if (!alt) { results.push({ ...tag, placed: false, reason: `${idea.leg.occ} expires today, and no liquid contract with a day or more left fits.` }); continue; }
+          idea = { ...idea, expiration: alt.expiration, strike: alt.strike,
+            leg: { occ: alt.occ, strike: alt.strike, bid: alt.bid, ask: alt.ask, mid: (alt.bid + alt.ask) / 2, delta: alt.delta },
+            switchedFrom: { occ: rawIdea.leg?.occ ?? null, spreadPct: sp != null ? Math.round(sp * 10) / 10 : null, reason: "expires today" } };
+          tag.switched = `${idea.switchedFrom.occ} (expires today) -> ${alt.occ}`;
+        } else if (sp != null && sp > SWITCH_SPREAD_PCT) {
           const alt = await liquidAlternative(idea.symbol, idea.action === "CALL" ? "call" : "put", {
             targetDelta: idea.leg.delta ?? 0.55, currentSpreadPct: sp, ideaExpiration: idea.expiration,
             minDte: idea.flatByClose ? 1 : 2, accountSize: ACCOUNT_SIZE,
@@ -1095,7 +1105,8 @@ async function run(req) {
       /* A contract that must be flat by the close needs time to work. MU 10/9
          $1090c was bought at 15:33 on 2026-10-07 with a forced sale due at 15:45:
          twelve minutes in which it could only pay the spread and two fees. */
-      if (idea.flatByClose) {
+      // With no overnight carry every option is sold at 15:45, so the 15:30 cut-off applies to all of them.
+      if (idea.flatByClose || (!carryOvernight() && idea.vehicle === "OPTION")) {
         const em = etNowMinutes();
         if (lateEntryRefused({ flatByClose: true, etMinutes: em, learning: LEARN })) {
           results.push({ ...tag, placed: false, reason: `Short-dated contract that is sold before the close — too late in the day to open one (no entries after ${LEARN ? "15:30" : "15:00"} ET).` });

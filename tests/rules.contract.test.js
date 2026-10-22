@@ -282,6 +282,30 @@ test("RULE: at most two trades per idea per day; the re-buy exemption once per i
   assert.deepEqual(entry.rebuyCheck({ action: "PUT", rows: [], now, livePrice: 339.7 }), { reason: null, exempted: false }, "no recent sale: nothing to exempt");
 });
 
+test("RULE: no overnight carry — every option position leaves from 15:45, and none is opened after 15:30 — 2026-10-22", () => {
+  assert.equal(exits.carryOvernight({}), false);
+  assert.equal(exits.carryOvernight({ CARRY_OVERNIGHT: "true" }), true);
+  const cfg = exits.exitConfig(ACCOUNT);
+  const swing = { vehicle: "OPTION", closeByEod: false, entryPremium: 9.06, markNow: 9.3, gainPct: 2.6, gainUsd: 72, peakGainPct: 5, peakGainUsd: 140, peakMark: 9.5, profitMode: "target50" };
+  assert.equal(exits.decideProfitExit(cfg, { ...swing, eod: true, nowEtMinutes: 15 * 60 + 45, carry: false }).tag, "eod_flat", "a swing call is sold at 15:45");
+  assert.equal(exits.decideProfitExit(cfg, { ...swing, eod: true, nowEtMinutes: 15 * 60 + 44, carry: false }), null, "not before 15:45");
+  assert.equal(exits.decideProfitExit(cfg, { ...swing, eod: true, nowEtMinutes: 15 * 60 + 45, carry: true }), null, "CARRY_OVERNIGHT=true holds it");
+  assert.notEqual(exits.decideProfitExit(cfg, { ...swing, vehicle: "SHARES", eod: true, nowEtMinutes: 15 * 60 + 45, carry: false })?.tag, "eod_flat", "shares are not sold by the no-carry rule; their own rules are unchanged");
+});
+
+test("RULE: a target within 0.15% counts as reached; options expiring today are never bought; a resting-stop sale counts for the re-buy exemption — 2026-10-22", () => {
+  assert.equal(entry.TARGET_MARGIN_PCT, 0.15);
+  assert.match(entry.setupVoid({ dir: -1, entry: 175.2, target: 175, invalidation: 177 }), /target/, "QCOM 10-16: 20 cents short of a $175 target");
+  assert.equal(entry.setupVoid({ dir: -1, entry: 176, target: 175, invalidation: 177 }), null, "a dollar away is a trade");
+  const morning = Date.parse("2026-10-16T14:00:00Z");
+  assert.equal(entry.expiresToday("2026-10-16", morning), true, "INTC Oct 16 put on 10-16");
+  assert.equal(entry.expiresToday("2026-10-17", morning), false);
+  assert.ok(entry.OPTION_PRICE_EXITS.has("stop_hit"), "the QQQ 10-20 gap stop");
+  const now = Date.parse("2026-10-20T13:49:00Z");
+  const qqq = { optionType: "call", entryFillPrice: 9.06, exitAt: "2026-10-20T13:30:02Z", exitReasonTag: "stop_hit", invalidation: 710 };
+  assert.deepEqual(entry.rebuyCheck({ action: "CALL", rows: [qqq], now, livePrice: 714 }), { reason: null, exempted: true });
+});
+
 test("RULE: a setup is void when price is through its invalidation or already at its target — hard, in learning mode too", () => {
   assert.match(entry.setupVoid({ dir: -1, entry: 700, target: 705, invalidation: 710 }), /target/, "the SPY put loop of 2026-10-14");
   assert.match(entry.setupVoid({ dir: 1, entry: 99, target: 110, invalidation: 100 }), /invalidation/);
@@ -328,8 +352,9 @@ test("RULE: an option is sold for profit only at +50% or at the idea's target; s
   assert.equal(exits.decideProfitExit(cfg, { ...opt, markNow: 6, gainPct: 20, gainUsd: 100, peakGainPct: 40, peakGainUsd: 200, peakMark: 7 }), null);
   // A same-day contract up 10%: the old quick +7% would have sold it. Held.
   assert.equal(exits.decideProfitExit(cfg, { ...opt, closeByEod: true, markNow: 5.5, gainPct: 10, gainUsd: 50, peakGainPct: 10, peakGainUsd: 50, peakMark: 5.5 }), null);
-  // Up $300 into the close on a multi-day contract: the old end-of-day bar would have sold it. Held.
-  assert.equal(exits.decideProfitExit(cfg, { ...opt, eod: true, nowEtMinutes: 15 * 60 + 50, markNow: 6.5, gainPct: 30, gainUsd: 300, peakGainPct: 30, peakGainUsd: 300, peakMark: 6.5 }), null);
+  // Up $300 into the close on a multi-day contract: no profit rule sells it; with
+  // overnight carry allowed it is held. (Without carry, 2026-10-22, it leaves at 15:45 like everything else.)
+  assert.equal(exits.decideProfitExit(cfg, { ...opt, carry: true, eod: true, nowEtMinutes: 15 * 60 + 50, markNow: 6.5, gainPct: 30, gainUsd: 300, peakGainPct: 30, peakGainUsd: 300, peakMark: 6.5 }), null);
   // +50%: sold.
   assert.equal(exits.decideProfitExit(cfg, { ...opt, markNow: 7.5, gainPct: 50, gainUsd: 250, peakGainPct: 50, peakGainUsd: 250, peakMark: 7.5 }).tag, "take_profit");
   // The loss side is unchanged, and a same-day contract is still flat by the close.

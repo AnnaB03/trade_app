@@ -69,5 +69,14 @@ if due eod 3 $eod_slots; then "$RUN" eod; else "$RUN" exits; fi
 # Every tick, all three playbooks. It was every 15 minutes for the multi-day
 # ideas, and the best hour of the day paid for that: of 136 directional ideas
 # written in the 9am hour, 9 were ever filled. Quotes only, no AI cost.
-"$RUN" entries
+# Detached, behind a lock (2026-10-22): launchd never starts a tick while the
+# last one is still running, so a slow entry check used to delay the next
+# minute's EXIT check too. On 10-20 the exit checks stopped for 7+ minutes.
+# Exits stay in the foreground, every tick; entries skip a tick rather than
+# pile up. A lock older than 10 minutes is a crashed run and is cleared.
+LOCK="$STATE/entries.lock"
+find "$LOCK" -maxdepth 0 -mmin +10 -exec rmdir {} \; 2>/dev/null
+if mkdir "$LOCK" 2>/dev/null; then
+  ( "$RUN" entries; rmdir "$LOCK" ) >/dev/null 2>&1 &
+fi
 exit 0

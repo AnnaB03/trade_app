@@ -127,6 +127,14 @@ export const HARD_LOSS_PCT = { OPTION: 20, SHARES: null };
 export const SAME_DAY_STRATEGIES = new Set(["intraday", "contrarian", "news"]);
 export const SHORT_DATED_TARGET_PCT = 7; // sell a closeByEod contract outright at this gain
 export const EOD_FLAT_FROM_ET_MIN = 15 * 60 + 45; // closeByEod positions leave from 15:45 ET
+/* No overnight carry (2026-10-22), unless CARRY_OVERNIGHT=true. The week of
+   10-14 to 10-21: positions held overnight lost $8,000 over 20 trades with one
+   winner. The book was one-sided every night and resting stops filled at the
+   opening price on gaps (INTC $2.09 stop -> $1.35, QQQ $7.64 -> $6.09).
+   Replayed, the 11 overnight trades with bars would have lost $53 instead of
+   $4,509 if sold at 15:45 on the day they were bought. The owner chose
+   "Stop the overnight carry". From 15:45 every option position leaves. */
+export const carryOvernight = (env = process.env) => env.CARRY_OVERNIGHT === "true";
 /* Dollar thresholds were tuned on the $99K paper account, where one position
    is ~$9,900 and $200 is about 2% of it. They are kept as a SHARE of the
    account so they mean the same thing at any size: at $10K a position is
@@ -244,7 +252,7 @@ export const profitExitMode = (env = process.env) => (env.PROFIT_EXITS === "lega
 export function decideProfitExit(cfg, {
   vehicle, closeByEod = false, eod = false, nowEtMinutes = etMinutes(),
   gainPct, gainUsd, peakGainPct, peakGainUsd, peakMark, entryPremium, markNow,
-  stopPct = null, profitMode = profitExitMode(),
+  stopPct = null, profitMode = profitExitMode(), carry = carryOvernight(),
   // The loss rules read these when given: the gain at the option's MID
   // (2026-10-15). Profit rules keep reading gainPct/gainUsd, at the bid.
   lossGainPct = gainPct, lossGainUsd = gainUsd,
@@ -287,8 +295,10 @@ export function decideProfitExit(cfg, {
      price a day. The end-of-day dollar bar only ever banks GAINS, so a loser
      would be carried overnight and lose that again. These close in the last
      15 minutes whatever the P&L. */
-  if (!exit && eod && closeByEod && nowEtMinutes >= EOD_FLAT_FROM_ET_MIN) {
-    exit = { tag: "eod_flat", detail: `Flat by the close: short-dated contract, up/down ${gainUsd != null ? "$" + gainUsd.toFixed(0) : "?"}, not carrying overnight decay` };
+  if (!exit && eod && (closeByEod || (!carry && vehicle === "OPTION")) && nowEtMinutes >= EOD_FLAT_FROM_ET_MIN) {
+    exit = { tag: "eod_flat", detail: closeByEod
+      ? `Flat by the close: short-dated contract, up/down ${gainUsd != null ? "$" + gainUsd.toFixed(0) : "?"}, not carrying overnight decay`
+      : `Flat by the close: no overnight carry (up/down ${gainUsd != null ? "$" + gainUsd.toFixed(0) : "?"}); overnight gaps fill resting stops at the open` };
   }
   /* Fixed target for the same short-dated contracts. Everywhere else a
      trailing exit beat a fixed one in the replay, but these lose about a

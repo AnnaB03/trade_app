@@ -121,7 +121,9 @@ export const REBUY_WAIT_MIN = 30;
    sold it, not the thesis: MU was sold at -$536 with the stock $19 from its
    level, and the blocked re-buy would have made about +$1,000. livePrice: the
    stock now. */
-export const OPTION_PRICE_EXITS = new Set(["premium_stop", "max_loss", "stop"]);
+// "stop_hit" (a resting broker stop) added 2026-10-22: a QQQ call stopped on
+// the 10-20 opening gap was not exempt, and its blocked re-buy made +$752.
+export const OPTION_PRICE_EXITS = new Set(["premium_stop", "max_loss", "stop", "stop_hit"]);
 /* exemptionUsed (2026-10-16): the exemption is good once per idea per day.
    AVGO used it twice on 10-15: stop, re-bought one second later, stop again,
    re-bought again (+$73, then -$377). */
@@ -182,10 +184,23 @@ export function samePlaybookPosition({ action, strategy, openRows }) {
   return (openRows || []).find((r) => rowDir(r) === dir && playbookOf(r.strategy) === playbookOf(strategy)) || null;
 }
 
+/* TARGET_MARGIN_PCT (2026-10-22): within 0.15% of the target counts as
+   reached. The QCOM put on 10-16 was bought a few cents short of its target
+   and sold "at target" a minute later for -$71, after the next quote ticked
+   through; the same shape as the 10-14 SPY loop. */
+export const TARGET_MARGIN_PCT = 0.15;
+/* No option bought on its expiry day (2026-10-22). The INTC Oct 16 put lost
+   $481 two minutes after it was bought on 10-16: an option in its last
+   hours swings on every tick. The route switches to a liquid contract with
+   at least a day left (contractLib), or refuses. */
+export const etDay = (t = Date.now()) => new Date(t).toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+export const expiresToday = (expiration, now = Date.now()) => Boolean(expiration) && String(expiration).slice(0, 10) <= etDay(now);
+
 export function setupVoid({ dir, entry, target, invalidation }) {
   const e = Number(entry), t = Number(target), v = Number(invalidation);
   if (e > 0 && v > 0 && (dir > 0 ? e <= v : e >= v)) return `Live price $${e} is already ${dir > 0 ? "at or below" : "at or above"} the $${v} invalidation — the setup is void, not cheap.`;
-  if (e > 0 && t > 0 && (dir > 0 ? e >= t : e <= t)) return `Live price $${e} is already ${dir > 0 ? "at or above" : "at or below"} the $${t} target — the move this trade was for has happened; it would be sold at once.`;
+  const tm = t * (TARGET_MARGIN_PCT / 100);
+  if (e > 0 && t > 0 && (dir > 0 ? e >= t - tm : e <= t + tm)) return `Live price $${e} is already ${dir > 0 ? "at or above" : "at or below"} the $${t} target — the move this trade was for has happened; it would be sold at once.`;
   return null;
 }
 export const SOFT_RULES = Object.freeze([
