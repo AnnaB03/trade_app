@@ -1144,7 +1144,17 @@ async function run(req) {
           riskMult: rawIdea.__riskMult ?? 1, learning: LEARN,
         });
         idea.stopPct = sz.stopPct;
-        if (!sz.ok) { results.push({ ...tag, placed: false, reason: sz.reason }); continue; }
+        if (!sz.ok) {
+          // Recorded to the shadow book, so the under-$1 rule is scored like the other hard rules.
+          const row = sz.hard === "under_1" && !dryRun ? recordShadowEntry({
+            playbook: idea.strategy || "swing", blockedBy: "under_1", ideaId: idea.id, symbol: idea.symbol, action: idea.action,
+            occ: idea.leg?.occ ?? null, strike: idea.leg?.strike ?? null, expiration: idea.expiration ?? null,
+            contracts: 1, optionBid: idea.leg?.bid ?? null, optionAsk: idea.leg?.ask ?? null, delta: idea.leg?.delta ?? null,
+            underlying: idea.entryPrice ?? null, invalidation: idea.invalidation ?? null, target: idea.target ?? null, catalyst: idea.catalyst ?? null,
+          }) : null;
+          results.push({ ...tag, placed: false, ...(sz.hard === "under_1" ? { blockedBy: "under_1", recorded: Boolean(row) } : {}), reason: sz.reason });
+          continue;
+        }
         overrides.push(...(sz.overrides || []));
         idea.sizing = { ...(idea.sizing || {}), contracts: sz.contracts, riskAtStop: sz.riskAtStop };
         tag.sizedByRisk = `${sz.contracts} contract${sz.contracts === 1 ? "" : "s"}, about $${sz.riskAtStop} at risk to the stop (option stop ${sz.stopPct}%)`;

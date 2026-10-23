@@ -490,3 +490,12 @@ test("RULE: same-day ideas are asked for 1.8x reward to risk at the trigger — 
   const src = fs.readFileSync(path.join(process.cwd(), "app/api/suggestions/route.js"), "utf8");
   assert.match(src, /Reward at least 1\.8x risk MEASURED FROM THE TRIGGER PRICE/);
 });
+
+test("RULE: no option under $1, in learning mode too — 2026-10-23", () => {
+  assert.equal(entry.MIN_OPTION_PREMIUM, 1);
+  const aal = entry.sizeOptionEntry({ accountSize: ACCOUNT, leg: { bid: 0.19, ask: 0.2, delta: 0.4 }, entryPrice: 12.02, invalidation: 12.2, action: "PUT", strategy: "intraday", learning: true });
+  assert.equal(aal.ok, false, "AAL 10/23 $12p at $0.20");
+  assert.equal(aal.hard, "under_1");
+  const ok = entry.sizeOptionEntry({ accountSize: ACCOUNT, leg: { bid: 1.12, ask: 1.14, delta: 0.45 }, entryPrice: 127.3, invalidation: 128.2, action: "PUT", strategy: "intraday", learning: true });
+  assert.notEqual(ok.hard, "under_1", "ORCL at $1.14 is allowed");
+});

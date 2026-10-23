@@ -36,6 +36,11 @@ export const MAX_SPREAD_SHARE_OF_LOSS = 0.4;
    that closed lost $838. */
 export const HARD_MAX_SPREAD_PCT = 12;
 export const HARD_MAX_SPREAD_SHARE = 0.5;
+/* No option under $1 (owner, 2026-10-23), in learning mode too. Every one
+   bought since 10-07 lost: AAL x5, 0 winners, -$2,490. At 20-40 cents one
+   cent is 3-5% of the price, so a 20% stop is a few ticks and fills past
+   itself (AAL 10/23 $12p: -30% against a 20% stop). */
+export const MIN_OPTION_PREMIUM = 1;
 export const SAME_DAY = new Set(["intraday", "contrarian", "fade_scan", "news"]); // "news": the analyst's ideas, 2026-10-14
 
 /* ---------- Learning mode (2026-10-14) ----------
@@ -308,6 +313,9 @@ export function sizeOptionEntry({ accountSize, leg, entryPrice, invalidation, ac
   const perContract = premium * 100;
   if (perContract > 0) contracts = Math.max(1, Math.min(contracts, Math.floor((accountSize * OPTION_HARD_PCT) / perContract) || 1));
 
+  if (premium > 0 && premium < MIN_OPTION_PREMIUM) {
+    return { ok: false, stopPct, riskPer, contracts, hard: "under_1", reason: `The contract costs $${premium.toFixed(2)}, under the $${MIN_OPTION_PREMIUM} minimum: at this price one cent is ${(1 / premium).toFixed(1)}% and the stop cannot hold (options under $1 since 10-07: 5 trades, 0 winners, -$2,490).` };
+  }
   if (premium > 0 && (spread / premium) * 100 > HARD_MAX_SPREAD_PCT) {
     return { ok: false, stopPct, riskPer, contracts, hard: "spread", reason: `Spread is ${((spread / premium) * 100).toFixed(1)}% of the premium ($${leg?.bid}/$${leg?.ask}), over the ${HARD_MAX_SPREAD_PCT}% hard ceiling: the position would open most of the way to its stop.` };
   }
