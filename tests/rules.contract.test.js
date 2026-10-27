@@ -503,7 +503,7 @@ test("RULE: no option under $1, in learning mode too — 2026-10-23", () => {
   assert.notEqual(ok.hard, "under_1", "ORCL at $1.14 is allowed");
 });
 
-test("RULE: anything up over $50 at the bid is sold right away, options and shares — 2026-10-27, 'sell whatever goes to more than +$50 right away'", () => {
+test("RULE: an option up over $50 at the bid is sold right away — 2026-10-27, 'sell whatever goes to more than +$50 right away', then 'only on options'", () => {
   assert.equal(exits.PROFIT_TAKE_USD, 50);
   assert.equal(exits.profitTakeUsd({}), 50, "on by default");
   assert.equal(exits.profitTakeUsd({ PROFIT_TAKE_USD: "0" }), 0, "PROFIT_TAKE_USD=0 turns it off");
@@ -511,7 +511,7 @@ test("RULE: anything up over $50 at the bid is sold right away, options and shar
   const opt = { vehicle: "OPTION", closeByEod: false, entryPremium: 14.45, markNow: 14.75, gainPct: 2.1, gainUsd: 60, peakGainPct: 2.1, peakGainUsd: 60, peakMark: 14.75, profitMode: "target50", takeUsd: 50 };
   assert.equal(exits.decideProfitExit(cfg, opt).tag, "take_profit_usd", "GOOGL 10/30 call, +$60 at the bid");
   assert.equal(exits.decideProfitExit(cfg, { ...opt, gainUsd: 50 }), null, "exactly $50 is not more than $50");
-  assert.equal(exits.decideProfitExit(cfg, { ...opt, vehicle: "SHARES", gainUsd: 81 }).tag, "take_profit_usd", "shares too");
+  assert.notEqual(exits.decideProfitExit(cfg, { ...opt, vehicle: "SHARES", gainUsd: 81 })?.tag, "take_profit_usd", "options only since the evening of 10-27: shares keep their own exits");
   assert.equal(exits.decideProfitExit(cfg, { ...opt, gainPct: -21, lossGainPct: -21, gainUsd: -300, lossGainUsd: -300 }).tag, "premium_stop", "the loss side is unchanged");
   process.env.PROFIT_TAKE_USD = "50";
   try {

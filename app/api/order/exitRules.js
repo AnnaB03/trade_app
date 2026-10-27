@@ -266,8 +266,9 @@ export function gainFigures({ vehicle, dir, markNow, entryPremium, peakMark, qty
    PROFIT_EXITS=legacy restores the old profit rules. Shares are unchanged. */
 export const PROFIT_TAKE_PCT = 50;
 /* Sell any position up more than PROFIT_TAKE_USD at the bid, right away
-   (owner, 2026-10-27: "sell whatever goes to more than +$50 right away").
-   Options and shares alike, before fees. The owner's hand sales were the best
+   (owner, 2026-10-27: "sell whatever goes to more than +$50 right away"; the
+   same evening, "lets keep selling over 50 only on options"). Options only,
+   before fees; shares keep their own exits. The owner's hand sales were the best
    exits on the record (31 trades, +$7,950 by 10-23) while only 4 of 122
    same-day options ever reached +50%. PROFIT_TAKE_USD=0 turns it off. */
 export const PROFIT_TAKE_USD = 50;
@@ -343,7 +344,7 @@ export function decideProfitExit(cfg, {
   if (gainPct != null && gainPct >= hardBar) {
     exit = { tag: "take_profit", detail: `Up ${gainPct.toFixed(0)}% ($${entryPremium} to $${markNow}) — past the ${hardBar}% ${target50 ? "profit take" : "ceiling"}, banking it outright` };
   }
-  if (!exit && takeUsd > 0 && gainUsd != null && gainUsd > takeUsd) {
+  if (!exit && vehicle === "OPTION" && takeUsd > 0 && gainUsd != null && gainUsd > takeUsd) {
     exit = { tag: "take_profit_usd", detail: `Up $${gainUsd.toFixed(0)} at the bid${gainPct != null ? ` (${gainPct.toFixed(1)}%)` : ""} — over the $${takeUsd.toFixed(0)} quick profit, sold right away` };
   }
   /* Trailing take-profit: armed once the position has been up at least
@@ -465,7 +466,7 @@ export function exitPlan(row, { accountSize, profitMode = profitExitMode(), feeP
     if (profitMode !== "target50") profit.push({ kind: "trail", armPct: TRAIL_ARM_PCT.OPTION, givebackPct: TRAIL_GIVEBACK_PCT });
   }
   const quick = profitTakeUsd();
-  if (quick > 0) profit.unshift({ kind: "take_usd", usd: quick });
+  if (opt && quick > 0) profit.unshift({ kind: "take_usd", usd: quick });
   if (Number(row.target) > 0) {
     const t = { kind: "target", underlying: Number(row.target), above: dir > 0 };
     const d = Math.abs(Number(row.entryDelta ?? delta)), u0 = Number(row.entryUnderlying ?? underlyingAtEntry);
