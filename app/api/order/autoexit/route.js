@@ -8,7 +8,7 @@ import { dailyBars } from "../../historyCache";
 import { markActivity } from "../../activityLib";
 import { accountSize } from "../../accountLib";
 import { notifySold } from "../../notifyLib";
-import { exitConfig, directionOf, heldQuantity, intrinsicAtExpiry, updatePeak, gainFigures, decideProfitExit, decideLevelExit, decideReversalExit, isExpired } from "../exitRules";
+import { exitConfig, directionOf, heldQuantity, intrinsicAtExpiry, updatePeak, gainFigures, decideProfitExit, decideLevelExit, decideReversalExit, isExpired, carriesOvernight } from "../exitRules";
 
 /* Paper-only auto-EXIT — the other half of autotrade.js. That route only
    ever opens a position; until now, the only thing that could close one was
@@ -425,6 +425,7 @@ async function run(req) {
         vehicle: pos.vehicle, closeByEod: pos.closeByEod, eod,
         gainPct, gainUsd, peakGainPct, peakGainUsd, peakMark, entryPremium, markNow,
         stopPct: pos.stopPct ?? null, lossGainPct: lossFig.gainPct, lossGainUsd: lossFig.gainUsd,
+        carry: carriesOvernight(pos), // exitRules: options with 14+ days left are held overnight
       });
       if (profitExit && (!exit || profitExit.tag === "take_profit")) exit = profitExit;
 

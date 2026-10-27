@@ -519,3 +519,17 @@ test("RULE: anything up over $50 at the bid is sold right away, options and shar
     assert.deepEqual(plan.profit[0], { kind: "take_usd", usd: 50 }, "the journal shows it first");
   } finally { process.env.PROFIT_TAKE_USD = "0"; }
 });
+
+test("RULE: options with 14+ days left are held overnight; shorter ones and same-day contracts are sold from 15:45 — 2026-10-27, 'lets not sell options that don't expire tomorrow in the EOD'", () => {
+  const now = Date.parse("2026-10-27T19:30:00Z"); // 15:30 ET
+  assert.equal(exits.CARRY_MIN_DTE, 14);
+  assert.equal(exits.daysToExpiry("2026-11-20", now), 24);
+  assert.equal(exits.carriesOvernight({ vehicle: "OPTION", expiration: "2026-11-20" }, { now, env: {} }), true, "ORCL and MRVL 11/20 calls: carried");
+  assert.equal(exits.carriesOvernight({ vehicle: "OPTION", expiration: "2026-11-06" }, { now, env: {} }), false, "SMCI 11/06, 10 days: sold");
+  assert.equal(exits.carriesOvernight({ vehicle: "OPTION", expiration: "2026-10-30" }, { now, env: {} }), false, "QQQ 10/30: sold");
+  assert.equal(exits.carriesOvernight({ vehicle: "OPTION", expiration: "2026-11-20", closeByEod: true }, { now, env: {} }), false, "a same-day contract is always sold");
+  const cfg = exits.exitConfig(ACCOUNT);
+  const swing = { vehicle: "OPTION", closeByEod: false, entryPremium: 9, markNow: 8.5, gainPct: -5.6, gainUsd: -100, peakGainPct: 0, peakGainUsd: 0, peakMark: 9, profitMode: "target50", eod: true, nowEtMinutes: 15 * 60 + 45, takeUsd: 0 };
+  assert.equal(exits.decideProfitExit(cfg, { ...swing, carry: true }), null, "a carried option is not sold at 15:45");
+  assert.equal(exits.decideProfitExit(cfg, { ...swing, carry: false }).tag, "eod_flat");
+});

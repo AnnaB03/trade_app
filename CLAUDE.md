@@ -23,7 +23,7 @@ learn from every single contract or trade."
   - an idea from an earlier session, or one that already reached its target;
   - the other side of a stock already held, or a second position in the same stock, side and playbook;
   - a third trade of one idea in a day;
-  - any new option trade from 14:00 ET (it is sold at 15:45; nothing is carried overnight unless CARRY_OVERNIGHT=true), or a target within 0.15%;
+  - any new option trade from 14:00 ET, or a target within 0.15%. At 15:45 options with under 14 days to expiry are sold; those with 14+ days are held overnight (since 2026-10-27);
   - the other side of a stock within 30 minutes of a stop-out on it;
   - a second fade of a stock in a day, the other side of a stock within 30 minutes, or the same side within 30 minutes of a sale;
   - more than 8 entries per stock per day.

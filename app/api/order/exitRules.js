@@ -135,6 +135,24 @@ export const EOD_FLAT_FROM_ET_MIN = 15 * 60 + 45; // closeByEod positions leave 
    $4,509 if sold at 15:45 on the day they were bought. The owner chose
    "Stop the overnight carry". From 15:45 every option position leaves. */
 export const carryOvernight = (env = process.env) => env.CARRY_OVERNIGHT === "true";
+/* Long-dated options are carried (owner, 2026-10-27, "lets not sell options
+   that don't expire tomorrow in the EOD"; on the night before the Fed the owner
+   chose to carry only the November calls). An option with at least
+   CARRY_MIN_DTE calendar days left is held overnight; a shorter one, and any
+   same-day (closeByEod) contract, is still sold from 15:45. */
+export const CARRY_MIN_DTE = 14;
+const etDateOf = (t) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date(t));
+export function daysToExpiry(expiration, now = Date.now()) {
+  const b = Date.parse(String(expiration ?? "").slice(0, 10) + "T00:00:00Z");
+  if (!Number.isFinite(b)) return null;
+  return Math.round((b - Date.parse(etDateOf(now) + "T00:00:00Z")) / 86400000);
+}
+export function carriesOvernight({ vehicle, expiration, closeByEod } = {}, { now = Date.now(), env = process.env } = {}) {
+  if (closeByEod) return false;
+  if (carryOvernight(env)) return true;
+  const d = vehicle === "OPTION" ? daysToExpiry(expiration, now) : null;
+  return d != null && d >= CARRY_MIN_DTE;
+}
 /* Dollar thresholds were tuned on the $99K paper account, where one position
    is ~$9,900 and $200 is about 2% of it. They are kept as a SHARE of the
    account so they mean the same thing at any size: at $10K a position is
@@ -468,7 +486,7 @@ export function exitPlan(row, { accountSize, profitMode = profitExitMode(), feeP
     // The option stop alone (no dollar cap on options since 2026-10-15).
     loss = { pct, price: Math.round(entry * (1 - pct / 100) * 100) / 100, usd: -Math.round(atStop) };
   }
-  return { profit, loss, invalidation: Number(row.invalidation) > 0 ? Number(row.invalidation) : null, eod: Boolean(row.closeByEod) };
+  return { profit, loss, invalidation: Number(row.invalidation) > 0 ? Number(row.invalidation) : null, eod: row.vehicle === "OPTION" ? !carriesOvernight(row) : Boolean(row.closeByEod) };
 }
 
 /* Has this option expired? Only from 16:00 ET on its expiry date
