@@ -3,6 +3,7 @@ import { test } from "node:test";
 // which run with PROFIT_EXITS=legacy. Since 2026-10-14 the default for options
 // is +50% or the idea's target: tests/rules.contract.test.js pins that.
 process.env.PROFIT_EXITS = "legacy";
+process.env.PROFIT_TAKE_USD = "0"; // the +$50 quick sale (2026-10-27) is pinned in rules.contract.test.js
 import assert from "node:assert/strict";
 import {
   exitConfig, updatePeak, gainFigures, decideProfitExit, decideLevelExit, decideReversalExit,

@@ -247,12 +247,22 @@ export function gainFigures({ vehicle, dir, markNow, entryPremium, peakMark, qty
    idea's target (decideLevelExit), or by hand. The loss side is unchanged.
    PROFIT_EXITS=legacy restores the old profit rules. Shares are unchanged. */
 export const PROFIT_TAKE_PCT = 50;
+/* Sell any position up more than PROFIT_TAKE_USD at the bid, right away
+   (owner, 2026-10-27: "sell whatever goes to more than +$50 right away").
+   Options and shares alike, before fees. The owner's hand sales were the best
+   exits on the record (31 trades, +$7,950 by 10-23) while only 4 of 122
+   same-day options ever reached +50%. PROFIT_TAKE_USD=0 turns it off. */
+export const PROFIT_TAKE_USD = 50;
+export const profitTakeUsd = (env = process.env) => {
+  const v = env.PROFIT_TAKE_USD;
+  return v == null || v === "" ? PROFIT_TAKE_USD : Math.max(0, Number(v) || 0);
+};
 export const profitExitMode = (env = process.env) => (env.PROFIT_EXITS === "legacy" ? "legacy" : "target50");
 
 export function decideProfitExit(cfg, {
   vehicle, closeByEod = false, eod = false, nowEtMinutes = etMinutes(),
   gainPct, gainUsd, peakGainPct, peakGainUsd, peakMark, entryPremium, markNow,
-  stopPct = null, profitMode = profitExitMode(), carry = carryOvernight(),
+  stopPct = null, profitMode = profitExitMode(), carry = carryOvernight(), takeUsd = profitTakeUsd(),
   // The loss rules read these when given: the gain at the option's MID
   // (2026-10-15). Profit rules keep reading gainPct/gainUsd, at the bid.
   lossGainPct = gainPct, lossGainUsd = gainUsd,
@@ -314,6 +324,9 @@ export function decideProfitExit(cfg, {
   // Outright ceiling — big enough that it goes in the book now.
   if (gainPct != null && gainPct >= hardBar) {
     exit = { tag: "take_profit", detail: `Up ${gainPct.toFixed(0)}% ($${entryPremium} to $${markNow}) — past the ${hardBar}% ${target50 ? "profit take" : "ceiling"}, banking it outright` };
+  }
+  if (!exit && takeUsd > 0 && gainUsd != null && gainUsd > takeUsd) {
+    exit = { tag: "take_profit_usd", detail: `Up $${gainUsd.toFixed(0)} at the bid${gainPct != null ? ` (${gainPct.toFixed(1)}%)` : ""} — over the $${takeUsd.toFixed(0)} quick profit, sold right away` };
   }
   /* Trailing take-profit: armed once the position has been up at least
      armBar at some point, then exits on a giveback of that peak gain.
@@ -433,6 +446,8 @@ export function exitPlan(row, { accountSize, profitMode = profitExitMode(), feeP
     profit.push({ kind: "take", pct, price, usd: Math.round((price - entry) * mult * qty - fees) });
     if (profitMode !== "target50") profit.push({ kind: "trail", armPct: TRAIL_ARM_PCT.OPTION, givebackPct: TRAIL_GIVEBACK_PCT });
   }
+  const quick = profitTakeUsd();
+  if (quick > 0) profit.unshift({ kind: "take_usd", usd: quick });
   if (Number(row.target) > 0) {
     const t = { kind: "target", underlying: Number(row.target), above: dir > 0 };
     const d = Math.abs(Number(row.entryDelta ?? delta)), u0 = Number(row.entryUnderlying ?? underlyingAtEntry);

@@ -27,6 +27,7 @@ learn from every single contract or trade."
   - the other side of a stock within 30 minutes of a stop-out on it;
   - a second fade of a stock in a day, the other side of a stock within 30 minutes, or the same side within 30 minutes of a sale;
   - more than 8 entries per stock per day.
+- Profits: anything up over $50 at the bid is sold at once (since 2026-10-27, `PROFIT_TAKE_USD`); otherwise an option sells at +50% or the idea's target.
 - When nothing is trading, that is the bug. Print every idea's refusal reason and fix the cause.
 - The agent team (`.claude/agents/`, run by `app/api/agentsLib.js`) is read-only and reports in the Team tab. The risk & market agent's trade ideas reach the Cockpit only through the server's checks (`app/api/newsIdeasLib.js`), as playbook `news`.
 - Every agreed rule is in `RULES.md` and pinned by `tests/rules.contract.test.js`. Never push
