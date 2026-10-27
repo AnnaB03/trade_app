@@ -13,7 +13,7 @@ import {
   payPrice, sizeOptionEntry, SAME_DAY, MIN_CONVICTION, MIN_REWARD_RISK, MAX_SYMBOL_EXPOSURE_PCT,
   MAX_SPREAD_SHARE_OF_LOSS, MAX_SPREAD_PCT_OF_PREMIUM, LAST_FLAT_BY_CLOSE_ENTRY_MIN, REENTRY_COOLDOWN_MIN,
   MAX_ENTRIES_PER_SYMBOL_DAY, RISK_PER_TRADE_PCT as INTRADAY_RISK_PCT, isWatchOnly, entriesAllowed,
-  learningMode, lateEntryRefused, LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY, setupVoid, entryArm, confirmedBreak, CONFIRM_BARS,
+  learningMode, stackedWarnings, lateEntryRefused, LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY, setupVoid, entryArm, confirmedBreak, CONFIRM_BARS,
   fromEarlierSession, PLAYED_OUT_EXITS, countsAsEntry, etDate, expiresToday, isFade, fadeLimitReached, flipTooSoon, flipAfterStop, rebuyTooSoon, rebuyCheck, ideaCapReached, bothSidesOpen, samePlaybookPosition,
 } from "../entryRules";
 import { optionStopPct, profileFor } from "../../swingLib";
@@ -1240,6 +1240,18 @@ async function run(req) {
         continue;
       }
 
+      // 3+ warnings at once: refused, in learning mode too (entryRules.stackedWarnings).
+      const stacked = stackedWarnings(overrides);
+      if (stacked) {
+        const row = dryRun || idea.vehicle !== "OPTION" ? null : recordShadowEntry({
+          playbook: idea.strategy || "swing", blockedBy: "stacked_warnings", ideaId: idea.id, symbol: idea.symbol, action: idea.action,
+          occ: idea.leg?.occ ?? null, strike: idea.leg?.strike ?? null, expiration: idea.expiration ?? null,
+          contracts: Math.max(1, Number(idea.sizing?.contracts) || 1), optionBid: idea.leg?.bid ?? null, optionAsk: idea.leg?.ask ?? null, delta: idea.leg?.delta ?? null,
+          underlying: idea.entryPrice ?? null, invalidation: idea.invalidation ?? null, target: idea.target ?? null, catalyst: idea.catalyst ?? null,
+        });
+        results.push({ ...tag, placed: false, blockedBy: "stacked_warnings", recorded: Boolean(row), reason: `${stacked.length} warnings at once (${stacked.join(", ")}): refused. Ideas with 3+ warnings lost in both halves of the record (-$1,988, then -$2,081).` });
+        continue;
+      }
       // Written on the journal row (journalOpen), so the edge report can split
       // results by which rules were overridden.
       idea.learningOverrides = overrides.length ? overrides : null;

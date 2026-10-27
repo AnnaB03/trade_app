@@ -533,3 +533,12 @@ test("RULE: options with 14+ days left are held overnight; shorter ones and same
   assert.equal(exits.decideProfitExit(cfg, { ...swing, carry: true }), null, "a carried option is not sold at 15:45");
   assert.equal(exits.decideProfitExit(cfg, { ...swing, carry: false }).tag, "eod_flat");
 });
+
+test("RULE: an idea with 3+ warnings at once is refused, in learning mode too — 2026-10-27", () => {
+  assert.equal(entry.MAX_SOFT_WARNINGS, 2);
+  assert.equal(entry.stackedWarnings([{ rule: "edge_throttle" }, { rule: "extreme" }]), null, "two warnings still trade");
+  assert.deepEqual(entry.stackedWarnings([{ rule: "edge_throttle" }, { rule: "extreme" }, { rule: "reward_risk" }, { rule: "cooldown" }]),
+    ["edge_throttle", "extreme", "reward_risk", "cooldown"], "QQQ 10/30 re-buy 10-27: four warnings, refused");
+  assert.equal(entry.stackedWarnings([{ rule: "extreme" }, { rule: "extreme" }, { rule: "stale" }]), null, "the same warning twice counts once");
+  assert.equal(entry.stackedWarnings([]), null);
+});

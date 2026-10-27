@@ -232,6 +232,18 @@ export const SOFT_RULES = Object.freeze([
   "conviction", "edge_throttle", "selection", "stale", "extreme", "reward_risk", "consumed",
   "daily_cap", "cooldown", "tape", "late_entry", "over_budget", "spread", "watch_only", "pdt",
 ]);
+/* Three or more warnings on one idea is a refusal, in learning mode too
+   (owner, 2026-10-27). A single soft rule still records and trades; when
+   several separate checks object at once the trade has lost in both halves
+   of the record: same-day options bought before 14:00 with 3+ overrides,
+   -$1,988 (10 of 20 won) then -$2,081 (3 of 10 won). Refusing them saves
+   about $4,070 and gives up about $2,460 of winners (QQQ +$424, SPCX +$353,
+   MU +$304). What it refuses goes to the shadow book as stacked_warnings. */
+export const MAX_SOFT_WARNINGS = 2;
+export function stackedWarnings(overrides = []) {
+  const rules = [...new Set((overrides || []).map((o) => (typeof o === "string" ? o : o?.rule)).filter(Boolean))];
+  return rules.length > MAX_SOFT_WARNINGS ? rules : null;
+}
 export const LEARNING_LAST_ENTRY_MIN = LAST_FLAT_BY_CLOSE_ENTRY_MIN; // ET; hard in learning mode too (was 15:30)
 export const LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY = 8;  // hard runaway guard
 

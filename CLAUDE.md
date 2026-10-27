@@ -26,7 +26,8 @@ learn from every single contract or trade."
   - any new option trade from 14:00 ET, or a target within 0.15%. At 15:45 options with under 14 days to expiry are sold; those with 14+ days are held overnight (since 2026-10-27);
   - the other side of a stock within 30 minutes of a stop-out on it;
   - a second fade of a stock in a day, the other side of a stock within 30 minutes, or the same side within 30 minutes of a sale;
-  - more than 8 entries per stock per day.
+  - more than 8 entries per stock per day;
+  - an idea carrying 3 or more different warnings at once (since 2026-10-27).
 - Profits: anything up over $50 at the bid is sold at once (since 2026-10-27, `PROFIT_TAKE_USD`); otherwise an option sells at +50% or the idea's target.
 - When nothing is trading, that is the bug. Print every idea's refusal reason and fix the cause.
 - The agent team (`.claude/agents/`, run by `app/api/agentsLib.js`) is read-only and reports in the Team tab. The risk & market agent's trade ideas reach the Cockpit only through the server's checks (`app/api/newsIdeasLib.js`), as playbook `news`.
