@@ -545,12 +545,19 @@ test("RULE: an idea with 3+ warnings at once is refused, in learning mode too �
   assert.equal(entry.stackedWarnings([]), null);
 });
 
-test("RULE: the dip buy — shares of a stock up on the day, 1% under today's high; sold +1%, stopped -1.5% — 2026-10-29, 'buy stocks on dips and sell rising'", () => {
+test("RULE: the dip buy — shares of a stock up on the day, 1% under today's high; sold +1%, stopped -1% — 2026-10-29, 'buy stocks on dips and sell rising', 'lets drop the stop to 1%'", () => {
   assert.equal(entry.DIP_PCT, 1);
   assert.equal(entry.DIP_TARGET_PCT, 1);
-  assert.equal(entry.DIP_STOP_PCT, 1.5);
+  assert.equal(entry.DIP_STOP_PCT, 1, "-1% since the owner's call the same day (was -1.5%)");
   assert.equal(entry.dipSignal({ last: 99, high: 100, prevClose: 97 }), true, "up on the day, 1% off the high");
   assert.equal(entry.dipSignal({ last: 99.5, high: 100, prevClose: 97 }), false, "only 0.5% off the high");
   assert.equal(entry.dipSignal({ last: 140.59, high: 144.61, prevClose: 144.54 }), false, "ORCL 10-29: dipped but down on the day — buying dips in falling stocks lost in both halves");
   assert.equal(entry.dipSignal({ last: 99, high: 100 }), false, "no previous close, no trade");
+});
+
+test("BUG 2026-10-29: a dip buy's target is judged on the live price, not the day's high", () => {
+  assert.ok(exits.SAME_DAY_STRATEGIES.has("dip"));
+  const mara = { dir: 1, target: 7.45, invalidation: 7.31, strategy: "dip", underlyingPx: 7.37, favorableExtreme: 7.46 };
+  assert.equal(exits.decideLevelExit(mara), null, "MARA: bought $7.38, day's high $7.46 — not a target hit");
+  assert.equal(exits.decideLevelExit({ ...mara, underlyingPx: 7.45 }).tag, "target");
 });

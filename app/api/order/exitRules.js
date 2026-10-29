@@ -124,7 +124,10 @@ export const HARD_LOSS_PCT = { OPTION: 20, SHARES: null };
    fade, app/api/fadeLib.js) is one of them, and it is BUILT against the
    multi-day read on its symbol, so the reversal rule would close it the moment
    it opened. */
-export const SAME_DAY_STRATEGIES = new Set(["intraday", "contrarian", "news"]);
+/* "dip" (2026-10-29): judged on the live price. Against the day's high its +1%
+   target was "hit" the minute it was bought, because a dip buy starts at least
+   1% under that high (MARA 10-29: bought $7.38, high $7.46, sold at once for -$5). */
+export const SAME_DAY_STRATEGIES = new Set(["intraday", "contrarian", "news", "dip"]);
 export const SHORT_DATED_TARGET_PCT = 7; // sell a closeByEod contract outright at this gain
 export const EOD_FLAT_FROM_ET_MIN = 15 * 60 + 45; // closeByEod positions leave from 15:45 ET
 /* No overnight carry (2026-10-22), unless CARRY_OVERNIGHT=true. The week of

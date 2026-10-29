@@ -253,7 +253,9 @@ export const FIRST_ENTRY_MIN = 10 * 60;
 export const tooEarlyToEnter = (etMinutes) => Number(etMinutes) < FIRST_ENTRY_MIN;
 /* The dip buy (shares, owner 2026-10-29, "buy stocks on dips and sell rising").
    A stock up on the day that has fallen DIP_PCT below today's high. */
-export const DIP_PCT = 1, DIP_TARGET_PCT = 1, DIP_STOP_PCT = 1.5;
+// Stop -1% since 2026-10-29 (owner: "lets drop the stop to 1%"; it was -1.5%).
+// Tested: -1%: -$712 (46% won) then +$516 (58%); -1.5%: -$398 (54%) then +$577 (63%).
+export const DIP_PCT = 1, DIP_TARGET_PCT = 1, DIP_STOP_PCT = 1;
 export function dipSignal({ last, high, prevClose } = {}) {
   if (!(last > 0) || !(high > 0) || !(prevClose > 0)) return false;
   return last > prevClose && last <= high * (1 - DIP_PCT / 100);

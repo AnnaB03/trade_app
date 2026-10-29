@@ -692,9 +692,9 @@ async function deriveScanFades(now = Date.now()) {
    The owner: "buy stocks on dips and sell rising". Each core-list stock
    that is up on the day (above yesterday's close) and has fallen DIP_PCT
    below today's high is bought as shares, once per stock per day, between
-   10:00 and 15:00; sold at +DIP_TARGET_PCT, stopped at -DIP_STOP_PCT, or at
-   15:45. Sized at $500 at the stop but capped at 15% of the account, so
-   about $56 is at risk per trade. Tested on 5-minute bars 9/15-10/28: 1% dip,
+   10:00 and 15:00; sold at +DIP_TARGET_PCT, stopped at -DIP_STOP_PCT (1%), or
+   at 15:45. Sized at $500 at the stop but capped at 15% of the account, so
+   about $38 is at risk per trade. Tested on 5-minute bars 9/15-10/28: 1% dip,
    +1%, -1.5%: 168 trades -$398 (54% won), then 125 trades +$577 (63%).
    Roughly break-even and cheap to learn with; buying dips in stocks DOWN on
    the day lost in both halves, which is why "up on the day" is required. */
