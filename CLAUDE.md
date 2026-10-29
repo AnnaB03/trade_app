@@ -30,6 +30,7 @@ learn from every single contract or trade."
   - an idea carrying 3 or more different warnings at once (since 2026-10-27).
 - Profits: an option up over $50 at the bid is sold at once (shares keep their own exits) (since 2026-10-27, `PROFIT_TAKE_USD`); otherwise an option sells at +50% or the idea's target.
 - When nothing is trading, that is the bug. Print every idea's refusal reason and fix the cause.
+- The dip playbook (`strategy: "dip"`, since 2026-10-29) buys shares of core-list stocks that are up on the day after a 1% dip from the high; sold +1%, stopped -1.5%, or at 15:45.
 - The agent team (`.claude/agents/`, run by `app/api/agentsLib.js`) is read-only and reports in the Team tab. The risk & market agent's trade ideas reach the Cockpit only through the server's checks (`app/api/newsIdeasLib.js`), as playbook `news`.
 - Every agreed rule is in `RULES.md` and pinned by `tests/rules.contract.test.js`. Never push
   red tests; the pre-push hook enforces this.

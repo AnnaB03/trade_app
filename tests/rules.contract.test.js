@@ -544,3 +544,13 @@ test("RULE: an idea with 3+ warnings at once is refused, in learning mode too �
   assert.equal(entry.stackedWarnings([{ rule: "extreme" }, { rule: "extreme" }, { rule: "stale" }]), null, "the same warning twice counts once");
   assert.equal(entry.stackedWarnings([]), null);
 });
+
+test("RULE: the dip buy — shares of a stock up on the day, 1% under today's high; sold +1%, stopped -1.5% — 2026-10-29, 'buy stocks on dips and sell rising'", () => {
+  assert.equal(entry.DIP_PCT, 1);
+  assert.equal(entry.DIP_TARGET_PCT, 1);
+  assert.equal(entry.DIP_STOP_PCT, 1.5);
+  assert.equal(entry.dipSignal({ last: 99, high: 100, prevClose: 97 }), true, "up on the day, 1% off the high");
+  assert.equal(entry.dipSignal({ last: 99.5, high: 100, prevClose: 97 }), false, "only 0.5% off the high");
+  assert.equal(entry.dipSignal({ last: 140.59, high: 144.61, prevClose: 144.54 }), false, "ORCL 10-29: dipped but down on the day — buying dips in falling stocks lost in both halves");
+  assert.equal(entry.dipSignal({ last: 99, high: 100 }), false, "no previous close, no trade");
+});

@@ -251,6 +251,13 @@ export function stackedWarnings(overrides = []) {
    open, into its widest spreads and swings. */
 export const FIRST_ENTRY_MIN = 10 * 60;
 export const tooEarlyToEnter = (etMinutes) => Number(etMinutes) < FIRST_ENTRY_MIN;
+/* The dip buy (shares, owner 2026-10-29, "buy stocks on dips and sell rising").
+   A stock up on the day that has fallen DIP_PCT below today's high. */
+export const DIP_PCT = 1, DIP_TARGET_PCT = 1, DIP_STOP_PCT = 1.5;
+export function dipSignal({ last, high, prevClose } = {}) {
+  if (!(last > 0) || !(high > 0) || !(prevClose > 0)) return false;
+  return last > prevClose && last <= high * (1 - DIP_PCT / 100);
+}
 export const LEARNING_LAST_ENTRY_MIN = LAST_FLAT_BY_CLOSE_ENTRY_MIN; // ET; hard in learning mode too (was 15:30)
 export const LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY = 8;  // hard runaway guard
 

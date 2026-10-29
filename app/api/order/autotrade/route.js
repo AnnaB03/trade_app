@@ -8,12 +8,13 @@ import { getClock } from "../../clockLib";
 import { isLegacy, readBaseline } from "../../ledgerLib";
 import { journalOpen } from "../../journalLib";
 import { OPTION_HARD_PCT } from "../../sizingLib";
+import { CORE_SYMBOLS } from "../../watchCore";
 import { HARD_LOSS_PCT, carryOvernight } from "../exitRules";
 import {
   payPrice, sizeOptionEntry, SAME_DAY, MIN_CONVICTION, MIN_REWARD_RISK, MAX_SYMBOL_EXPOSURE_PCT,
   MAX_SPREAD_SHARE_OF_LOSS, MAX_SPREAD_PCT_OF_PREMIUM, LAST_FLAT_BY_CLOSE_ENTRY_MIN, REENTRY_COOLDOWN_MIN,
   MAX_ENTRIES_PER_SYMBOL_DAY, RISK_PER_TRADE_PCT as INTRADAY_RISK_PCT, isWatchOnly, entriesAllowed,
-  learningMode, stackedWarnings, tooEarlyToEnter, lateEntryRefused, LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY, setupVoid, entryArm, confirmedBreak, CONFIRM_BARS,
+  learningMode, stackedWarnings, tooEarlyToEnter, dipSignal, DIP_PCT, DIP_TARGET_PCT, DIP_STOP_PCT, lateEntryRefused, LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY, setupVoid, entryArm, confirmedBreak, CONFIRM_BARS,
   fromEarlierSession, PLAYED_OUT_EXITS, countsAsEntry, etDate, expiresToday, isFade, fadeLimitReached, flipTooSoon, flipAfterStop, rebuyTooSoon, rebuyCheck, ideaCapReached, bothSidesOpen, samePlaybookPosition,
 } from "../entryRules";
 import { optionStopPct, profileFor } from "../../swingLib";
@@ -351,9 +352,9 @@ async function dayQuote(symbol) {
     const d = await tradier(`/markets/quotes?symbols=${encodeURIComponent(symbol)}`);
     const q = asArray(d?.quotes?.quote)?.[0];
     const last = q?.last != null ? Number(q.last) : null;
-    return { last, high: Number(q?.high) > 0 ? Number(q.high) : null, low: Number(q?.low) > 0 ? Number(q.low) : null };
+    return { last, high: Number(q?.high) > 0 ? Number(q.high) : null, low: Number(q?.low) > 0 ? Number(q.low) : null, prevClose: Number(q?.prevclose) > 0 ? Number(q.prevclose) : null };
   } catch {
-    return { last: null, high: null, low: null };
+    return { last: null, high: null, low: null, prevClose: null };
   }
 }
 
@@ -687,6 +688,48 @@ async function deriveScanFades(now = Date.now()) {
   return made;
 }
 
+/* ---------- The dip buy (shares, LIVE, 2026-10-29) ----------
+   The owner: "buy stocks on dips and sell rising". Each core-list stock
+   that is up on the day (above yesterday's close) and has fallen DIP_PCT
+   below today's high is bought as shares, once per stock per day, between
+   10:00 and 15:00; sold at +DIP_TARGET_PCT, stopped at -DIP_STOP_PCT, or at
+   15:45. Sized at $500 at the stop but capped at 15% of the account, so
+   about $56 is at risk per trade. Tested on 5-minute bars 9/15-10/28: 1% dip,
+   +1%, -1.5%: 168 trades -$398 (54% won), then 125 trades +$577 (63%).
+   Roughly break-even and cheap to learn with; buying dips in stocks DOWN on
+   the day lost in both halves, which is why "up on the day" is required. */
+const DIP_FROM_ET_MIN = 10 * 60, DIP_UNTIL_ET_MIN = 15 * 60; // DIP_PCT, DIP_TARGET_PCT, DIP_STOP_PCT and dipSignal: entryRules.js
+
+async function deriveDips() {
+  const made = [];
+  try {
+    const mins = etNowMinutes();
+    if (mins < DIP_FROM_ET_MIN || mins >= DIP_UNTIL_ET_MIN) return made;
+    const today = etDate(new Date().toISOString());
+    const doneToday = new Set(listIdeas().filter((i) => i.strategy === "dip" && etDate(i.createdAt) === today).map((i) => i.symbol));
+    for (const symbol of CORE_SYMBOLS) {
+      if (doneToday.has(symbol)) continue;
+      const q = await dayQuote(symbol);
+      if (!(q.last > 0) || !(q.high > 0) || !(q.prevClose > 0)) continue;
+      if (!dipSignal(q)) continue;
+      const e = q.last, cap = ACCOUNT_SIZE * OPTION_HARD_PCT;
+      const shares = Math.max(1, Math.floor(Math.min((ACCOUNT_SIZE * INTRADAY_RISK_PCT / 100) / (e * DIP_STOP_PCT / 100), cap / e)));
+      const stop = Math.round(e * (1 - DIP_STOP_PCT / 100) * 100) / 100, target = Math.round(e * (1 + DIP_TARGET_PCT / 100) * 100) / 100;
+      const why = `${symbol} is up on the day ($${e} against yesterday's $${q.prevClose}) and has dipped ${(100 * (1 - e / q.high)).toFixed(1)}% from today's $${q.high} high. Buy the dip, sell at $${target} (+${DIP_TARGET_PCT}%), stop $${stop} (-${DIP_STOP_PCT}%).`;
+      const row = appendIdea({
+        symbol, action: "BUY", vehicle: "SHARES", entryTrigger: `dip: ${DIP_PCT}%+ below today's high, up on the day`, triggerPrice: null, triggerDirection: null, triggered: true,
+        invalidation: stop, target, staleMinutes: 15, conviction: 3, catalyst: "dip in a stock up on the day", risk: "MEDIUM",
+        why_pro: why, why_plain: why, sizing: { vehicle: "SHARES", shares }, affordable: true, accountSize: ACCOUNT_SIZE,
+        flatByClose: true, horizon: "intraday", strategy: "dip", entryPrice: e, marketState: "open",
+      });
+      made.push(row.id);
+    }
+  } catch (e) {
+    console.error("deriveDips failed:", e);
+  }
+  return made;
+}
+
 async function run(req) {
   const params = new URL(req.url).searchParams;
   const dryRun = params.get("dryRun") === "true";
@@ -700,9 +743,9 @@ async function run(req) {
     // Two playbooks share this route and never read each other's ideas: the
     // multi-day AI ideas (no strategy tag) and the intraday ones.
     const asked = params.get("playbook");
-    const playbook = ["intraday", "contrarian", "fade_scan", "news"].includes(asked) ? asked : null;
+    const playbook = ["intraday", "contrarian", "fade_scan", "news", "dip"].includes(asked) ? asked : null;
     // The fade scan only ever buys puts at the day's high, so it is off while fade puts are (fadeLib.FADE_ACTIONS).
-    const derived = playbook === "contrarian" ? await deriveFades() : playbook === "fade_scan" && fadeActionAllowed("PUT") ? await deriveScanFades() : [];
+    const derived = playbook === "dip" ? await deriveDips() : playbook === "contrarian" ? await deriveFades() : playbook === "fade_scan" && fadeActionAllowed("PUT") ? await deriveScanFades() : [];
     const all = listIdeas().filter((i) => (playbook ? i.strategy === playbook : !i.strategy));
     const batch = latestPerSymbol(all);
     /* An empty playbook is not an error: the fade only has ideas while a
@@ -793,7 +836,7 @@ async function run(req) {
         if (!soft("conviction", why)) { results.push({ ...tag, placed: false, reason: why }); continue; }
       }
       if (verdicts) {
-        const pb = ["intraday", "contrarian", "fade_scan", "news"].includes(rawIdea.strategy) ? rawIdea.strategy : "swing";
+        const pb = ["intraday", "contrarian", "fade_scan", "news", "dip"].includes(rawIdea.strategy) ? rawIdea.strategy : "swing";
         // The edge THROTTLE (edgeLib.edgeRiskMultiplier): a losing recent record
         // cuts the size, never to zero. It used to refuse the trade outright.
         const th = edgeRiskMultiplier(verdicts[pb]);
@@ -980,7 +1023,7 @@ async function run(req) {
         // on its next pass for breaching the very level it was bought under.
         const voidWhy = setupVoid({ dir, entry: e, target: t, invalidation: v }); // entryRules.js, hard
         if (voidWhy) { results.push({ ...tag, placed: false, reason: voidWhy }); continue; }
-        if (e > 0 && t > 0 && v > 0 && risk > 0 && reward / risk < MIN_REWARD_RISK) {
+        if (idea.strategy !== "dip" && e > 0 && t > 0 && v > 0 && risk > 0 && reward / risk < MIN_REWARD_RISK) { // the dip's +1%/-1.5% plan is tested as is
           const why = `Reward:risk ${(reward / risk).toFixed(2)}:1 at the live entry $${e} is below the ${MIN_REWARD_RISK}:1 floor — risking $${risk.toFixed(2)}/share to make $${reward.toFixed(2)}.`;
           if (!soft("reward_risk", why)) { results.push({ ...tag, placed: false, reason: why }); continue; }
         }
@@ -1341,7 +1384,7 @@ export function GET(req) {
     const u = new URL(req.url);
     let out = res;
     if (u.searchParams.get("playbook") == null) {
-      for (const pb of ["intraday", "contrarian", "fade_scan", "news"]) {
+      for (const pb of ["intraday", "contrarian", "fade_scan", "news", "dip"]) {
         const pu = new URL(u);
         pu.searchParams.set("playbook", pb);
         try {
