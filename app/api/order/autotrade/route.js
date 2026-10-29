@@ -442,6 +442,26 @@ async function nearbyStrikes(symbol, expiration, type, targetStrike) {
 
 const MAX_STRIKE_FALLBACKS = 6;
 
+/* The mirror (owner, 2026-10-29: "what about buying the opposite way?" — yes
+   to recording it). Every option actually placed also writes its opposite
+   side to the shadow book, never placed: the other option type at the same
+   expiry, the strike mirrored around the stock price, the idea's target and
+   invalidation swapped. scripts/shadow-report.py scores it as "mirror", so
+   the two sides of the same ideas are compared on real option prices. */
+async function recordMirror(idea) {
+  const leg = idea.leg, S = Number(idea.entryPrice), K = Number(leg?.strike);
+  if (idea.vehicle !== "OPTION" || !leg?.occ || !(S > 0) || !(K > 0) || !idea.expiration) return null;
+  const type = idea.action === "CALL" ? "put" : "call";
+  const [c] = await nearbyStrikes(idea.symbol, idea.expiration, type, 2 * S - K);
+  if (!c || !(c.ask > 0)) return null;
+  return recordShadowEntry({
+    playbook: "mirror", blockedBy: "mirror", ideaId: `${idea.id}:mirror`, symbol: idea.symbol, action: idea.action === "CALL" ? "PUT" : "CALL",
+    occ: c.occ, strike: c.strike, expiration: idea.expiration, contracts: Math.max(1, Number(idea.sizing?.contracts) || 1),
+    optionBid: c.bid, optionAsk: c.ask, delta: leg.delta != null ? -Number(leg.delta) : null,
+    underlying: S, invalidation: idea.target ?? null, target: idea.invalidation ?? null, catalyst: idea.catalyst ?? null,
+  });
+}
+
 async function placeOption(idea, { dryRun, openOccs }) {
   const leg = idea.leg;
   if (!leg?.occ) return { placed: false, reason: "No resolved contract (leg.occ) for this idea." };
@@ -1277,6 +1297,7 @@ async function run(req) {
          (payPrice), so placed and filled are different events: the AMZN put
          placed at 15:55 on 2026-10-13 never filled, and the phone was told it
          had been bought. An order still working is reported as working. */
+      if (r?.placed && !dryRun && idea.vehicle === "OPTION") recordMirror(idea).catch(() => {});
       if (r?.placed && !dryRun && r.fill) {
         const got = await confirmEntryFill(r.order?.id);
         if (got?.filled) {
