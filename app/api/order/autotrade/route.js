@@ -13,7 +13,7 @@ import {
   payPrice, sizeOptionEntry, SAME_DAY, MIN_CONVICTION, MIN_REWARD_RISK, MAX_SYMBOL_EXPOSURE_PCT,
   MAX_SPREAD_SHARE_OF_LOSS, MAX_SPREAD_PCT_OF_PREMIUM, LAST_FLAT_BY_CLOSE_ENTRY_MIN, REENTRY_COOLDOWN_MIN,
   MAX_ENTRIES_PER_SYMBOL_DAY, RISK_PER_TRADE_PCT as INTRADAY_RISK_PCT, isWatchOnly, entriesAllowed,
-  learningMode, stackedWarnings, lateEntryRefused, LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY, setupVoid, entryArm, confirmedBreak, CONFIRM_BARS,
+  learningMode, stackedWarnings, tooEarlyToEnter, lateEntryRefused, LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY, setupVoid, entryArm, confirmedBreak, CONFIRM_BARS,
   fromEarlierSession, PLAYED_OUT_EXITS, countsAsEntry, etDate, expiresToday, isFade, fadeLimitReached, flipTooSoon, flipAfterStop, rebuyTooSoon, rebuyCheck, ideaCapReached, bothSidesOpen, samePlaybookPosition,
 } from "../entryRules";
 import { optionStopPct, profileFor } from "../../swingLib";
@@ -1100,6 +1100,18 @@ async function run(req) {
           const why = `Tape gate — ${idea.symbol} has already used ${t.rangeUsedPct.toFixed(0)}% of its normal daily range ($${t.dayLow}-$${t.dayHigh} against a $${t.atr14.toFixed(2)} ATR); a continuation here buys the end of the move.`;
           if (!soft("tape", why)) { results.push({ ...tag, placed: false, reason: why }); continue; }
         }
+      }
+
+      // No new buy before 10:00 ET (entryRules.tooEarlyToEnter); blocked options go to the shadow book.
+      if (tooEarlyToEnter(etNowMinutes())) {
+        const row = dryRun || idea.vehicle !== "OPTION" ? null : recordShadowEntry({
+          playbook: idea.strategy || "swing", blockedBy: "before_10", ideaId: idea.id, symbol: idea.symbol, action: idea.action,
+          occ: idea.leg?.occ ?? null, strike: idea.leg?.strike ?? null, expiration: idea.expiration ?? null,
+          contracts: Math.max(1, Number(idea.sizing?.contracts) || 1), optionBid: idea.leg?.bid ?? null, optionAsk: idea.leg?.ask ?? null, delta: idea.leg?.delta ?? null,
+          underlying: idea.entryPrice ?? null, invalidation: idea.invalidation ?? null, target: idea.target ?? null, catalyst: idea.catalyst ?? null,
+        });
+        results.push({ ...tag, placed: false, blockedBy: "before_10", recorded: Boolean(row), reason: "No new buys before 10:00 ET: buys in the first half hour won 1 of 12 (-$3,694)." });
+        continue;
       }
 
       /* A contract that must be flat by the close needs time to work. MU 10/9

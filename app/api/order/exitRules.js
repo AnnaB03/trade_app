@@ -135,12 +135,13 @@ export const EOD_FLAT_FROM_ET_MIN = 15 * 60 + 45; // closeByEod positions leave 
    $4,509 if sold at 15:45 on the day they were bought. The owner chose
    "Stop the overnight carry". From 15:45 every option position leaves. */
 export const carryOvernight = (env = process.env) => env.CARRY_OVERNIGHT === "true";
-/* Long-dated options are carried (owner, 2026-10-27, "lets not sell options
-   that don't expire tomorrow in the EOD"; on the night before the Fed the owner
-   chose to carry only the November calls). An option with at least
-   CARRY_MIN_DTE calendar days left is held overnight; a shorter one, and any
-   same-day (closeByEod) contract, is still sold from 15:45. */
-export const CARRY_MIN_DTE = 14;
+/* Long-dated options were carried from 2026-10-27 15:15 (owner: "lets not
+   sell options that don't expire tomorrow in the EOD", 14+ days to expiry).
+   Undone 2026-10-29 at the owner's choice: both trades it held lost (ORCL
+   11/20 -$381, QQQ 11/20 -$730 through its stop on the opening gap), and
+   options held overnight on the record won 3 of 26, -$9,720. Off by default:
+   every option is sold from 15:45. CARRY_MIN_DTE=14 in the env restores it. */
+export const CARRY_MIN_DTE = null;
 const etDateOf = (t) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date(t));
 export function daysToExpiry(expiration, now = Date.now()) {
   const b = Date.parse(String(expiration ?? "").slice(0, 10) + "T00:00:00Z");
@@ -150,8 +151,10 @@ export function daysToExpiry(expiration, now = Date.now()) {
 export function carriesOvernight({ vehicle, expiration, closeByEod } = {}, { now = Date.now(), env = process.env } = {}) {
   if (closeByEod) return false;
   if (carryOvernight(env)) return true;
+  const min = env.CARRY_MIN_DTE != null && env.CARRY_MIN_DTE !== "" ? Number(env.CARRY_MIN_DTE) : CARRY_MIN_DTE;
+  if (min == null || !Number.isFinite(min)) return false;
   const d = vehicle === "OPTION" ? daysToExpiry(expiration, now) : null;
-  return d != null && d >= CARRY_MIN_DTE;
+  return d != null && d >= min;
 }
 /* Dollar thresholds were tuned on the $99K paper account, where one position
    is ~$9,900 and $200 is about 2% of it. They are kept as a SHARE of the

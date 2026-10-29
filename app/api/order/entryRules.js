@@ -244,6 +244,13 @@ export function stackedWarnings(overrides = []) {
   const rules = [...new Set((overrides || []).map((o) => (typeof o === "string" ? o : o?.rule)).filter(Boolean))];
   return rules.length > MAX_SOFT_WARNINGS ? rules : null;
 }
+/* No new buy before 10:00 ET (owner, 2026-10-29), in learning mode too. Swing
+   options bought 9:30-9:59 since 10-07 won 1 of 12, -$3,694 (both halves:
+   0 of 5, then 1 of 7); 10-28's TSLA call bought at 9:30 was stopped at 9:44
+   for -$501. Ideas that gapped through their trigger overnight fire at the
+   open, into its widest spreads and swings. */
+export const FIRST_ENTRY_MIN = 10 * 60;
+export const tooEarlyToEnter = (etMinutes) => Number(etMinutes) < FIRST_ENTRY_MIN;
 export const LEARNING_LAST_ENTRY_MIN = LAST_FLAT_BY_CLOSE_ENTRY_MIN; // ET; hard in learning mode too (was 15:30)
 export const LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY = 8;  // hard runaway guard
 

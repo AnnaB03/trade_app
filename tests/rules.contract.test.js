@@ -520,18 +520,20 @@ test("RULE: an option up over $50 at the bid is sold right away — 2026-10-27, 
   } finally { process.env.PROFIT_TAKE_USD = "0"; }
 });
 
-test("RULE: options with 14+ days left are held overnight; shorter ones and same-day contracts are sold from 15:45 — 2026-10-27, 'lets not sell options that don't expire tomorrow in the EOD'", () => {
-  const now = Date.parse("2026-10-27T19:30:00Z"); // 15:30 ET
-  assert.equal(exits.CARRY_MIN_DTE, 14);
-  assert.equal(exits.daysToExpiry("2026-11-20", now), 24);
-  assert.equal(exits.carriesOvernight({ vehicle: "OPTION", expiration: "2026-11-20" }, { now, env: {} }), true, "ORCL and MRVL 11/20 calls: carried");
-  assert.equal(exits.carriesOvernight({ vehicle: "OPTION", expiration: "2026-11-06" }, { now, env: {} }), false, "SMCI 11/06, 10 days: sold");
-  assert.equal(exits.carriesOvernight({ vehicle: "OPTION", expiration: "2026-10-30" }, { now, env: {} }), false, "QQQ 10/30: sold");
-  assert.equal(exits.carriesOvernight({ vehicle: "OPTION", expiration: "2026-11-20", closeByEod: true }, { now, env: {} }), false, "a same-day contract is always sold");
-  const cfg = exits.exitConfig(ACCOUNT);
-  const swing = { vehicle: "OPTION", closeByEod: false, entryPremium: 9, markNow: 8.5, gainPct: -5.6, gainUsd: -100, peakGainPct: 0, peakGainUsd: 0, peakMark: 9, profitMode: "target50", eod: true, nowEtMinutes: 15 * 60 + 45, takeUsd: 0 };
-  assert.equal(exits.decideProfitExit(cfg, { ...swing, carry: true }), null, "a carried option is not sold at 15:45");
-  assert.equal(exits.decideProfitExit(cfg, { ...swing, carry: false }).tag, "eod_flat");
+test("RULE: every option is sold from 15:45 again; the 14+ day carry is off — 2026-10-29 (it ran 10-27 to 10-29)", () => {
+  const now = Date.parse("2026-10-29T19:30:00Z");
+  assert.equal(exits.CARRY_MIN_DTE, null);
+  assert.equal(exits.daysToExpiry("2026-11-20", now), 22);
+  assert.equal(exits.carriesOvernight({ vehicle: "OPTION", expiration: "2026-11-20" }, { now, env: {} }), false, "QQQ 11/20: sold at 15:45");
+  assert.equal(exits.carriesOvernight({ vehicle: "OPTION", expiration: "2026-11-20" }, { now, env: { CARRY_MIN_DTE: "14" } }), true, "CARRY_MIN_DTE=14 restores the carry");
+  assert.equal(exits.carriesOvernight({ vehicle: "OPTION", expiration: "2026-11-20", closeByEod: true }, { now, env: { CARRY_OVERNIGHT: "true" } }), false, "a same-day contract is always sold");
+});
+
+test("RULE: no new buy before 10:00 ET, in learning mode too — 2026-10-29", () => {
+  assert.equal(entry.FIRST_ENTRY_MIN, 10 * 60);
+  assert.equal(entry.tooEarlyToEnter(9 * 60 + 30), true, "TSLA 10-28 at 9:30");
+  assert.equal(entry.tooEarlyToEnter(9 * 60 + 59), true);
+  assert.equal(entry.tooEarlyToEnter(10 * 60), false);
 });
 
 test("RULE: an idea with 3+ warnings at once is refused, in learning mode too — 2026-10-27", () => {
