@@ -7,12 +7,15 @@ saved, so an interrupted download resumes where it stopped.
 
     python3 scripts/backtest/fetch_chains.py QQQ SPY
 """
-import gzip, json, os, sys, time, datetime as dt, urllib.request
+import gzip, json, os, sys, time, datetime as dt, urllib.request, urllib.error
 
 BASE = "http://127.0.0.1:25503/v3"
 ROOT = os.path.join(os.path.dirname(__file__), "..", "..")
 OUT = os.path.join(ROOT, "data", "backtest")
 START, END = dt.date(2025, 10, 27), dt.date(2026, 10, 29)
+# Other years: FETCH_START=2024-10-28 FETCH_END=2025-10-24 python3 scripts/backtest/fetch_chains.py QQQ SPY
+if os.environ.get("FETCH_START"): START = dt.date.fromisoformat(os.environ["FETCH_START"])
+if os.environ.get("FETCH_END"): END = dt.date.fromisoformat(os.environ["FETCH_END"])
 
 
 def get(path, timeout=600):
@@ -41,8 +44,14 @@ def fetch(sym, exp):
         day = exp - dt.timedelta(days=back)
         if day.weekday() >= 5:
             continue
-        for c in get(f"/option/history/quote?symbol={sym}&expiration={exp:%Y%m%d}&strike=*&right=both"
-                     f"&date={day:%Y%m%d}&interval=15m&format=json"):
+        try:
+            day_rows = get(f"/option/history/quote?symbol={sym}&expiration={exp:%Y%m%d}&strike=*&right=both"
+                           f"&date={day:%Y%m%d}&interval=15m&format=json")
+        except urllib.error.HTTPError as e:
+            if e.code == 472:   # ThetaData: no data for that day (a market holiday); skip the day, keep the week
+                continue
+            raise
+        for c in day_rows:
             key = (c["contract"]["strike"], c["contract"]["right"][0])
             merged.setdefault(key, []).extend([b["timestamp"], b["bid"], b["ask"]] for b in c["data"] if b["bid"] > 0 or b["ask"] > 0)
     slim = [{"k": k, "r": r, "q": q} for (k, r), q in merged.items()]

@@ -104,6 +104,9 @@ def run_spread(q, exp, day, side, dist, take, stop):
 
 def main():
     files = sorted(glob.glob(os.path.join(DATA, "*.json.gz")))
+    # One period at a time: BT_FROM=2022-01-01 BT_TO=2022-12-31 python3 scripts/backtest/credit_spreads.py
+    lo, hi = os.environ.get("BT_FROM", "2025-10-27"), os.environ.get("BT_TO", "2026-10-30")
+    files = [f for f in files if lo.replace("-", "") <= os.path.basename(f).split("_")[1][:8] <= hi.replace("-", "")]
     chains = [load(f) for f in files]
     print(f"{len(chains)} weekly chains: " + ", ".join(f"{s} {n}" for s, n in collections.Counter(c[0] for c in chains).items()))
     grid = list(itertools.product(("put", "call"), (1.0, 2.0, 3.0), (1, 2, 4, 7), (0.5, None), (2.0, None)))
