@@ -952,6 +952,29 @@ function RegimeBanner() {
   );
 }
 
+/* The trend-day read (app/api/trendDayLib.js): information only, no rule acts
+   on it. From 10:30 it says whether QQQ and SPY are moving together with the
+   ideas on the same side, so a day like 10-30 is visible early and a winner
+   can be let run by hand. scripts/trendday-report.py scores how often it was right. */
+function TrendBanner() {
+  const [t, setT] = useState(null);
+  useEffect(() => {
+    const load = () => getJSON("/api/trendday").then(setT).catch(() => {});
+    load();
+    const id = setInterval(load, 60000);
+    return () => clearInterval(id);
+  }, []);
+  if (!t || t.flag === "no_data") return null;
+  const strong = String(t.flag).startsWith("trend_");
+  const cls = t.side === "up" ? "up" : t.side === "down" ? "down" : "muted";
+  return (
+    <div className="mono" style={{ fontSize: 12, marginBottom: 12, paddingBottom: 10, borderBottom: "1px solid var(--line)", fontWeight: strong ? 600 : 400 }}
+      title="Information only: no trading rule uses this. It is recorded at 10:30, 11:00 and 12:00 and checked against the close, so its record can be judged before it is trusted.">
+      Trend day — <span className={strong ? cls : "muted"}>{t.label}</span>
+    </div>
+  );
+}
+
 // Ideas auto-refresh only at the moments the desk rulebook actually calls
 // for a fresh read — never on a fixed poll: 8:30 ET (pre-market plan) and the
 // two prime trading windows, 9:45 and 14:30 ET. Deliberately nothing at
@@ -1228,6 +1251,7 @@ function Ideas() {
         </div>
       )}
       <RegimeBanner />
+      <TrendBanner />
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
         <span className="label" style={{ margin: 0 }}>
           <span className="live" style={closed ? { background: "var(--faint)" } : undefined} />

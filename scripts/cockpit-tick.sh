@@ -65,6 +65,9 @@ if due refresh 20 $refresh_slots; then nohup "$RUN" refresh >/dev/null 2>&1 & fi
 if due swing 9 $((9 * 60 + 20)); then nohup "$RUN" swing >/dev/null 2>&1 & fi
 
 [ "$now" -ge $((9 * 60 + 30)) ] || exit 0
+# The trend-day read (trendDayLib.js, information only): recorded every tick so
+# its 10:30/11:00/12:00 reads and the 15:59 close are kept. Detached; quotes only.
+( curl -s -m 20 "http://localhost:3000/api/trendday" >/dev/null 2>&1 ) &
 if due eod 3 $eod_slots; then "$RUN" eod; else "$RUN" exits; fi
 # The full entry check runs both playbooks; in between, same-day ideas get
 # their own look every tick until 15:00, after which none are opened.
