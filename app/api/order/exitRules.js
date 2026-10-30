@@ -277,7 +277,11 @@ export const PROFIT_TAKE_PCT = 50;
    before fees; shares keep their own exits. The owner's hand sales were the best
    exits on the record (31 trades, +$7,950 by 10-23) while only 4 of 122
    same-day options ever reached +50%. PROFIT_TAKE_USD=0 turns it off. */
-export const PROFIT_TAKE_USD = 50;
+/* Raised to $80 on 2026-10-30 (owner's choice). Replayed on ThetaData minute
+   quotes, the 33 option trades since the rule began: +$50 -> +$338, +$80 ->
+   +$1,433 with the same wins and stops in both halves (-$361/+$699 became
+   +$251/+$1,182); +$150 and up doubled the stop-outs in the first half. */
+export const PROFIT_TAKE_USD = 80;
 export const profitTakeUsd = (env = process.env) => {
   const v = env.PROFIT_TAKE_USD;
   return v == null || v === "" ? PROFIT_TAKE_USD : Math.max(0, Number(v) || 0);
