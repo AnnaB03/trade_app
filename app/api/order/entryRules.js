@@ -230,7 +230,7 @@ export function setupVoid({ dir, entry, target, invalidation }) {
 }
 export const SOFT_RULES = Object.freeze([
   "conviction", "edge_throttle", "selection", "stale", "extreme", "reward_risk", "consumed",
-  "daily_cap", "cooldown", "tape", "late_entry", "over_budget", "spread", "watch_only", "pdt",
+  "daily_cap", "cooldown", "tape", "late_entry", "over_budget", "spread", "watch_only", "pdt", "against_market",
 ]);
 /* Three or more warnings on one idea is a refusal, in learning mode too
    (owner, 2026-10-27). A single soft rule still records and trades; when
@@ -259,6 +259,19 @@ export const DIP_PCT = 1, DIP_TARGET_PCT = 1, DIP_STOP_PCT = 1;
 export function dipSignal({ last, high, prevClose } = {}) {
   if (!(last > 0) || !(high > 0) || !(prevClose > 0)) return false;
   return last > prevClose && last <= high * (1 - DIP_PCT / 100);
+}
+/* Against the market (recorded, 2026-10-30): an option bought against QQQ's
+   move since the open — a put while QQQ is up AGAINST_MARKET_PCT or more, a
+   call while it is down that much. Of 76 trades with QQQ minute bars, those
+   with the market made +$1,682 (66% won) then +$339 (76%); the 4 against it
+   lost -$767. A warning for now (it counts toward the 3+ refusal); a hard
+   refusal once it has ~20 trades behind it. */
+export const AGAINST_MARKET_PCT = 0.3;
+export function againstMarket({ action, qqqOpen, qqqLast } = {}) {
+  if (!(qqqOpen > 0) || !(qqqLast > 0)) return null;
+  const move = ((qqqLast - qqqOpen) / qqqOpen) * 100;
+  const side = action === "CALL" ? 1 : action === "PUT" ? -1 : 0;
+  return side && move * side <= -AGAINST_MARKET_PCT ? move : null;
 }
 export const LEARNING_LAST_ENTRY_MIN = LAST_FLAT_BY_CLOSE_ENTRY_MIN; // ET; hard in learning mode too (was 15:30)
 export const LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY = 8;  // hard runaway guard

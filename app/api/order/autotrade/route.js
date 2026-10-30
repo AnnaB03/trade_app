@@ -14,7 +14,7 @@ import {
   payPrice, sizeOptionEntry, SAME_DAY, MIN_CONVICTION, MIN_REWARD_RISK, MAX_SYMBOL_EXPOSURE_PCT,
   MAX_SPREAD_SHARE_OF_LOSS, MAX_SPREAD_PCT_OF_PREMIUM, LAST_FLAT_BY_CLOSE_ENTRY_MIN, REENTRY_COOLDOWN_MIN,
   MAX_ENTRIES_PER_SYMBOL_DAY, RISK_PER_TRADE_PCT as INTRADAY_RISK_PCT, isWatchOnly, entriesAllowed,
-  learningMode, stackedWarnings, tooEarlyToEnter, dipSignal, DIP_PCT, DIP_TARGET_PCT, DIP_STOP_PCT, lateEntryRefused, LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY, setupVoid, entryArm, confirmedBreak, CONFIRM_BARS,
+  learningMode, stackedWarnings, againstMarket, tooEarlyToEnter, dipSignal, DIP_PCT, DIP_TARGET_PCT, DIP_STOP_PCT, lateEntryRefused, LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY, setupVoid, entryArm, confirmedBreak, CONFIRM_BARS,
   fromEarlierSession, PLAYED_OUT_EXITS, countsAsEntry, etDate, expiresToday, isFade, fadeLimitReached, flipTooSoon, flipAfterStop, rebuyTooSoon, rebuyCheck, ideaCapReached, bothSidesOpen, samePlaybookPosition,
 } from "../entryRules";
 import { optionStopPct, profileFor } from "../../swingLib";
@@ -352,9 +352,9 @@ async function dayQuote(symbol) {
     const d = await tradier(`/markets/quotes?symbols=${encodeURIComponent(symbol)}`);
     const q = asArray(d?.quotes?.quote)?.[0];
     const last = q?.last != null ? Number(q.last) : null;
-    return { last, high: Number(q?.high) > 0 ? Number(q.high) : null, low: Number(q?.low) > 0 ? Number(q.low) : null, prevClose: Number(q?.prevclose) > 0 ? Number(q.prevclose) : null };
+    return { last, high: Number(q?.high) > 0 ? Number(q.high) : null, low: Number(q?.low) > 0 ? Number(q.low) : null, prevClose: Number(q?.prevclose) > 0 ? Number(q.prevclose) : null, open: Number(q?.open) > 0 ? Number(q.open) : null };
   } catch {
-    return { last: null, high: null, low: null, prevClose: null };
+    return { last: null, high: null, low: null, prevClose: null, open: null };
   }
 }
 
@@ -1162,6 +1162,16 @@ async function run(req) {
         if (t?.rangeUsedPct != null && t.rangeUsedPct >= ATR_USED_MAX_PCT) {
           const why = `Tape gate — ${idea.symbol} has already used ${t.rangeUsedPct.toFixed(0)}% of its normal daily range ($${t.dayLow}-$${t.dayHigh} against a $${t.atr14.toFixed(2)} ATR); a continuation here buys the end of the move.`;
           if (!soft("tape", why)) { results.push({ ...tag, placed: false, reason: why }); continue; }
+        }
+      }
+
+      // Against QQQ's move since the open: recorded (entryRules.againstMarket); counts toward the 3+ warnings refusal.
+      if (idea.vehicle === "OPTION") {
+        const qq = await dayQuote("QQQ");
+        const mv = againstMarket({ action: idea.action, qqqOpen: qq.open, qqqLast: qq.last });
+        if (mv != null) {
+          const why = `Against the market: a ${idea.action === "CALL" ? "call" : "put"} while QQQ is ${mv > 0 ? "up" : "down"} ${Math.abs(mv).toFixed(2)}% since the open.`;
+          if (!soft("against_market", why)) { results.push({ ...tag, placed: false, reason: why }); continue; }
         }
       }
 

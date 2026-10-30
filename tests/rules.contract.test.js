@@ -180,7 +180,7 @@ test("RULE: learning mode is ON by default and every playbook trades — 2026-10
   assert.equal(entry.learningMode({}), true);
   assert.equal(entry.learningMode({ LEARNING_MODE: "false" }), false);
   for (const pb of ["contrarian", "fade_scan", "intraday", undefined]) assert.equal(entry.isWatchOnly(pb, {}), false, `${pb} trades in learning mode`);
-  assert.deepEqual([...entry.SOFT_RULES].sort(), ["conviction", "consumed", "cooldown", "daily_cap", "edge_throttle", "extreme", "late_entry", "over_budget", "pdt", "reward_risk", "selection", "spread", "stale", "tape", "watch_only"].sort(),
+  assert.deepEqual([...entry.SOFT_RULES].sort(), ["against_market", "conviction", "consumed", "cooldown", "daily_cap", "edge_throttle", "extreme", "late_entry", "over_budget", "pdt", "reward_risk", "selection", "spread", "stale", "tape", "watch_only"].sort(),
     "the rules that record instead of refusing; adding one means changing this test on purpose");
 });
 
@@ -560,4 +560,14 @@ test("BUG 2026-10-29: a dip buy's target is judged on the live price, not the da
   const mara = { dir: 1, target: 7.45, invalidation: 7.31, strategy: "dip", underlyingPx: 7.37, favorableExtreme: 7.46 };
   assert.equal(exits.decideLevelExit(mara), null, "MARA: bought $7.38, day's high $7.46 — not a target hit");
   assert.equal(exits.decideLevelExit({ ...mara, underlyingPx: 7.45 }).tag, "target");
+});
+
+test("RULE: an option bought against QQQ's move since the open is recorded as a warning (not refused) — 2026-10-30", () => {
+  assert.equal(entry.AGAINST_MARKET_PCT, 0.3);
+  assert.ok(entry.SOFT_RULES.includes("against_market"));
+  assert.ok(entry.againstMarket({ action: "PUT", qqqOpen: 700, qqqLast: 703 }) > 0, "10-15: puts into a rally");
+  assert.equal(entry.againstMarket({ action: "PUT", qqqOpen: 697.21, qqqLast: 688.96 }), null, "10-30: puts with a falling QQQ are fine");
+  assert.ok(entry.againstMarket({ action: "CALL", qqqOpen: 697.21, qqqLast: 688.96 }) < 0);
+  assert.equal(entry.againstMarket({ action: "CALL", qqqOpen: 700, qqqLast: 701 }), null, "under 0.3% is flat");
+  assert.equal(entry.againstMarket({ action: "PUT" }), null, "no quote, no warning");
 });
