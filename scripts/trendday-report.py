@@ -25,7 +25,8 @@ for day in sorted(days):
         if r.get("side") in ("up", "down") and kind in ("trend", "lean"):
             more = after if r["side"] == "up" else -after
             s = score.setdefault((slot, kind), [0, 0, 0.0]); s[0] += 1; s[1] += more > 0; s[2] += more
-            print(f"{day} {slot} {flag:10} QQQ {r['qqqMove']:+.2f}% by then, then {after:+.2f}% to the close -> {'kept going' if more > 0 else 'turned back'}")
+            b = r.get("breadth") or {}
+            print(f"{day} {slot} {flag:10} QQQ {r['qqqMove']:+.2f}% by then (breadth {b.get('down', '?')} down / {b.get('up', '?')} up of {b.get('total', '?')}), then {after:+.2f}% to the close -> {'kept going' if more > 0 else 'turned back'}")
         else:
             print(f"{day} {slot} {flag:10} QQQ {(r.get('qqqMove') or 0):+.2f}% by then, then {after:+.2f}% to the close")
 print()

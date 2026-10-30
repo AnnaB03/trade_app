@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { tradier, asArray } from "../tradier";
 import { listIdeas } from "../store";
-import { trendRead, recordTrendRead, trendHistory } from "../trendDayLib";
+import { trendRead, recordTrendRead, trendHistory, breadthOf } from "../trendDayLib";
+import { CORE_SYMBOLS } from "../watchCore";
 
 /* The trend-day read (trendDayLib.js): QQQ and SPY since the open, and which
    side today's ideas lean. Information only: it changes no trading rule. The
@@ -20,6 +21,13 @@ export async function GET(req) {
       if (q.symbol === "QQQ") qqq = v; else if (q.symbol === "SPY") spy = v;
     }
   } catch {}
+  // Breadth: how many core-list stocks are 1%+ down or up since the open (recorded, not acted on).
+  let stocks = [];
+  try {
+    const names = CORE_SYMBOLS.filter((x) => x !== "SPY" && x !== "QQQ");
+    const d = await tradier(`/markets/quotes?symbols=${names.join(",")}`);
+    stocks = asArray(d?.quotes?.quote).map((q) => ({ open: Number(q.open) || null, last: Number(q.last) || null }));
+  } catch {}
   // Today's latest directional read per symbol, from the model's ideas.
   const latest = new Map();
   for (const i of listIdeas()) {
@@ -29,6 +37,8 @@ export async function GET(req) {
   }
   const actions = [...latest.values()].map((i) => i.action).filter((a) => a && a !== "WAIT");
   const read = trendRead({ qqq, spy, actions, etMinutes: h * 60 + m });
+  read.breadth = breadthOf(stocks);
+  if (read.breadth.total) read.label += ` Breadth: ${read.breadth.down} of ${read.breadth.total} stocks down 1%+, ${read.breadth.up} up 1%+.`;
   const weekday = now.toLocaleDateString("en-US", { timeZone: "America/New_York", weekday: "short" });
   if (!["Sat", "Sun"].includes(weekday)) recordTrendRead(read, { date, hhmm, qqqLast: qqq.last, spyLast: spy.last });
   const out = { date, at: hhmm, ...read };

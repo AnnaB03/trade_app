@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { trendRead, TREND_FROM_ET_MIN } from "../app/api/trendDayLib.js";
+import { trendRead, TREND_FROM_ET_MIN, breadthOf } from "../app/api/trendDayLib.js";
 
 const at = (h, m) => h * 60 + m;
 
@@ -21,4 +21,9 @@ test("trend day: a big QQQ move with SPY flat or the ideas split is only a lean 
   assert.equal(trendRead({ qqq: { open: 700, last: 692 }, spy: { open: 760, last: 754 }, actions: ["PUT", "CALL"], etMinutes: at(11, 0) }).flag, "lean_down", "ideas split 1 of 2");
   assert.equal(trendRead({ qqq: { open: 700, last: 701 }, spy: { open: 760, last: 760.5 }, actions: [], etMinutes: at(11, 0) }).flag, "none");
   assert.equal(trendRead({ qqq: {}, spy: {}, etMinutes: at(11, 0) }).flag, "no_data");
+});
+
+test("breadth counts stocks 1%+ down or up since the open", () => {
+  assert.deepEqual(breadthOf([{ open: 100, last: 98 }, { open: 50, last: 50.2 }, { open: 10, last: 10.2 }, { open: 0, last: 5 }]), { total: 3, down: 1, up: 1 });
+  assert.deepEqual(breadthOf([]), { total: 0, down: 0, up: 0 });
 });

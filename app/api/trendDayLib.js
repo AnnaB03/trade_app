@@ -47,6 +47,15 @@ export function trendRead({ qqq = {}, spy = {}, actions = [], etMinutes }) {
   return { ...read, label: `No trend: ${moves}.` };
 }
 
+/* Breadth (recorded only, 2026-10-30): how many core-list stocks are 1%+ down
+   or up since the open. A real trend day tends to take nearly everything with
+   it (10-30: nothing on the list was up); QQQ's own chart cannot show that,
+   and the 3-year price-only test found no morning clue that held up. */
+export function breadthOf(stocks = []) {
+  const moves = stocks.map((q) => (q.open > 0 && q.last > 0 ? ((q.last - q.open) / q.open) * 100 : null)).filter((x) => x != null);
+  return { total: moves.length, down: moves.filter((x) => x <= -1).length, up: moves.filter((x) => x >= 1).length };
+}
+
 function readAll() {
   try { return JSON.parse(fs.readFileSync(FILE, "utf8")) || {}; } catch { return {}; }
 }
