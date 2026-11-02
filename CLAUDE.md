@@ -30,7 +30,7 @@ learn from every single contract or trade."
   - an idea carrying 3 or more different warnings at once (since 2026-10-27);
   - an option unless QQQ has moved 0.3%+ since the open in its direction (since 2026-11-02).
 - Size: options risk 1% at the stop ($250), shares 2% ($500), since 2026-11-02.
-- Profits: an option up over $40 at the bid is sold at once ($50, then $80, then $40 with half-size options on 2026-11-02) (shares keep their own exits) (since 2026-10-27, `PROFIT_TAKE_USD`); otherwise an option sells at +50% or the idea's target.
+- Profits: an option up over $80 at the bid is sold at once ($50 until 2026-10-30; kept at $80 with half-size options) (shares keep their own exits) (since 2026-10-27, `PROFIT_TAKE_USD`); otherwise an option sells at +50% or the idea's target.
 - When nothing is trading, that is the bug. Print every idea's refusal reason and fix the cause.
 - The dip playbook (`strategy: "dip"`, since 2026-10-29) buys shares of core-list stocks that are up on the day after a 1% dip from the high; sold +1%, stopped -1%, or at 15:45.
 - The agent team (`.claude/agents/`, run by `app/api/agentsLib.js`) is read-only and reports in the Team tab. The risk & market agent's trade ideas reach the Cockpit only through the server's checks (`app/api/newsIdeasLib.js`), as playbook `news`.

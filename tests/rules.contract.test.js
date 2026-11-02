@@ -504,8 +504,8 @@ test("RULE: no option under $1, in learning mode too — 2026-10-23", () => {
 });
 
 test("RULE: an option up over $80 at the bid is sold right away — 2026-10-27 at $50 ('sell whatever goes to more than +$50 right away', options only), $80 since 2026-10-30", () => {
-  assert.equal(exits.PROFIT_TAKE_USD, 40, "$50, then $80 on 2026-10-30, $40 on 2026-11-02 with options at half size");
-  assert.equal(exits.profitTakeUsd({}), 40, "on by default");
+  assert.equal(exits.PROFIT_TAKE_USD, 80, "$50, then $80 on 2026-10-30; kept at $80 with half-size options (2026-11-02)");
+  assert.equal(exits.profitTakeUsd({}), 80, "on by default");
   assert.equal(exits.profitTakeUsd({ PROFIT_TAKE_USD: "0" }), 0, "PROFIT_TAKE_USD=0 turns it off");
   const cfg = exits.exitConfig(ACCOUNT);
   const opt = { vehicle: "OPTION", closeByEod: false, entryPremium: 14.45, markNow: 14.75, gainPct: 2.1, gainUsd: 60, peakGainPct: 2.1, peakGainUsd: 60, peakMark: 14.75, profitMode: "target50", takeUsd: 50 };
