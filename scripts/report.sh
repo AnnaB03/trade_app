@@ -20,5 +20,16 @@ print("WAITING / WOULD PLACE:", "; ".join(f"{r['symbol']} {r.get('action')} {r.g
 PY
 curl -s localhost:3000/api/account | python3 -c "import json,sys; a=json.load(sys.stdin); print('ACCOUNT equity', round(a['equity']), '| can buy', round(a['available']), '| day-trade rule ok', a['pdt']['ok'])"
 curl -s localhost:3000/api/halt | python3 -c "import json,sys; d=json.load(sys.stdin); print('TODAY realized', round(d['day']['realized']), '| halted', d['halted'], d.get('reason') or '')"
+# The day's own buys apart from positions carried in from earlier days (the owner, 2026-10-29).
+(cd ~/Documents/GitHub/trade_app && python3 -c "
+import json,sqlite3,datetime as dt
+from zoneinfo import ZoneInfo
+et=lambda iso:dt.datetime.fromisoformat(iso.replace('Z','+00:00')).astimezone(ZoneInfo('America/New_York'))
+today=et(dt.datetime.now(dt.timezone.utc).isoformat()).date()
+rows=[json.loads(r[0]) for r in sqlite3.connect('data/cockpit.db').execute('select data from journal')]
+T=[r for r in rows if r.get('exitAt') and isinstance(r.get('pnl'),(int,float)) and et(r['exitAt']).date()==today and r.get('exitReasonTag') not in ('unfilled','orphaned')]
+new=[r for r in T if et(r['entryAt']).date()==today]; old=[r for r in T if r not in new]
+print(f'  of which: bought today {len(new)} trades {sum(r[\"pnl\"] for r in new):+.0f} | carried in from earlier days {len(old)} trades {sum(r[\"pnl\"] for r in old):+.0f}')
+")
 python3 scripts/shadow-report.py "$(date +%F)" | tail -4
 grep "$(date +%F)" ~/Library/Logs/cockpit-autopilot.log | tail -5

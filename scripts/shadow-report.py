@@ -19,6 +19,7 @@ or, when the contract did not trade, from the stock's move times the delta.
 A real fill could differ either way. Fees are included.
 """
 import json
+from zoneinfo import ZoneInfo
 import os
 import sys
 import urllib.parse
@@ -69,7 +70,8 @@ def bars(sym, day):
 
 
 def replay(r):
-    at = datetime.fromisoformat(r["at"].replace("Z", "+00:00")).astimezone(timezone(timedelta(hours=-4)))
+    # New York time with daylight saving (a fixed UTC-4 put every replay an hour late from 2026-11-01).
+    at = datetime.fromisoformat(r["at"].replace("Z", "+00:00")).astimezone(ZoneInfo("America/New_York"))
     day, start = at.strftime("%Y-%m-%d"), at.strftime("%H:%M")
     ask, bid = r.get("optionAsk"), r.get("optionBid")
     if not ask:
