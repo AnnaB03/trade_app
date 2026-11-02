@@ -281,7 +281,9 @@ export const PROFIT_TAKE_PCT = 50;
    quotes, the 33 option trades since the rule began: +$50 -> +$338, +$80 ->
    +$1,433 with the same wins and stops in both halves (-$361/+$699 became
    +$251/+$1,182); +$150 and up doubled the stop-outs in the first half. */
-export const PROFIT_TAKE_USD = 80;
+// $40 since 2026-11-02: options went to half size, so the quick sale halves with
+// them and triggers on the same price move as at $80 (the owner chose half size).
+export const PROFIT_TAKE_USD = 40;
 export const profitTakeUsd = (env = process.env) => {
   const v = env.PROFIT_TAKE_USD;
   return v == null || v === "" ? PROFIT_TAKE_USD : Math.max(0, Number(v) || 0);

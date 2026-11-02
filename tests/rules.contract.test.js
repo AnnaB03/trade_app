@@ -103,14 +103,14 @@ test("RULE: no new option trades from 14:00 ET — 2026-10-22", () => {
 const hoodLeg = { bid: 3.65, ask: 3.75, delta: -0.4381 };
 const qqqProfile = { up: { p90: 0.30 }, down: { p90: 0.28 } };
 
-test("RULE: contracts come from the stop that fires FIRST, inside 2% of the account — 2026-10-14, 'why only 1 option for HOOD'", () => {
-  // Flat 20% option stop (10% until 2026-10-14): $75 + $10 spread = $85 a contract;
-  // $500 of risk (2% since 2026-10-14) -> 5, the same 5 the 10% stop bought at 1%.
+test("RULE: contracts come from the stop that fires FIRST, inside the option risk budget — 2026-10-14, 'why only 1 option for HOOD'; 1% for options since 2026-11-02", () => {
+  // Flat 20% option stop: $75 + $10 spread = $85 a contract. $500 of risk (2%) bought 5;
+  // options are sized at 1% since 2026-11-02 (the owner chose half size): $250 -> 2.
   const flat = entry.sizeOptionEntry({ accountSize: ACCOUNT, leg: hoodLeg, entryPrice: 104.82, invalidation: 107.5, action: "PUT", strategy: undefined });
   assert.equal(flat.ok, true);
   assert.equal(flat.stopPct, 20);
-  assert.equal(flat.contracts, 5);
-  assert.ok(flat.riskAtStop <= 500, `risk ${flat.riskAtStop} must stay inside $500`);
+  assert.equal(flat.contracts, 2);
+  assert.ok(flat.riskAtStop <= 250, `risk ${flat.riskAtStop} must stay inside $250`);
 });
 
 /* Floor 8 -> 20 and the flat stop 10 -> 20 on 2026-10-14, the owner: "lets not
@@ -504,8 +504,8 @@ test("RULE: no option under $1, in learning mode too — 2026-10-23", () => {
 });
 
 test("RULE: an option up over $80 at the bid is sold right away — 2026-10-27 at $50 ('sell whatever goes to more than +$50 right away', options only), $80 since 2026-10-30", () => {
-  assert.equal(exits.PROFIT_TAKE_USD, 80, "raised from $50 on 2026-10-30");
-  assert.equal(exits.profitTakeUsd({}), 80, "on by default");
+  assert.equal(exits.PROFIT_TAKE_USD, 40, "$50, then $80 on 2026-10-30, $40 on 2026-11-02 with options at half size");
+  assert.equal(exits.profitTakeUsd({}), 40, "on by default");
   assert.equal(exits.profitTakeUsd({ PROFIT_TAKE_USD: "0" }), 0, "PROFIT_TAKE_USD=0 turns it off");
   const cfg = exits.exitConfig(ACCOUNT);
   const opt = { vehicle: "OPTION", closeByEod: false, entryPremium: 14.45, markNow: 14.75, gainPct: 2.1, gainUsd: 60, peakGainPct: 2.1, peakGainUsd: 60, peakMark: 14.75, profitMode: "target50", takeUsd: 50 };
@@ -580,4 +580,19 @@ test("RULE: options only with the market — QQQ 0.3%+ our way since the open, h
   assert.equal(entry.marketWithUs({ action: "CALL", qqqOpen: 697.21, qqqLast: 688.96 }).ok, false, "a call against a falling QQQ");
   assert.equal(entry.marketWithUs({ action: "PUT" }), null, "no quote: not judged here");
   assert.equal(entry.marketWithUs({ action: "BUY", qqqOpen: 700, qqqLast: 690 }), null, "shares are not affected");
+});
+
+test("RULE: options at half size — 1% at the stop ($250), shares keep 2% — 2026-11-02, 'our stop losses on options are usually $300-$400'", () => {
+  assert.equal(entry.OPTION_RISK_PCT, 1);
+  assert.equal(entry.RISK_PER_TRADE_PCT, 2, "shares unchanged");
+  const s = entry.sizeOptionEntry({ accountSize: 25000, leg: { bid: 3.1, ask: 3.15, delta: 0.45 }, entryPrice: 62, invalidation: 60, action: "PUT", learning: true });
+  assert.ok(s.riskAtStop <= 260, `about $250 at the stop, got ${s.riskAtStop}`);
+});
+
+test("BUG 2026-11-02: a dip idea is traded once, within 15 minutes of being written", () => {
+  const now = Date.parse("2026-11-02T18:20:45Z");
+  assert.equal(entry.DIP_IDEA_MAX_MIN, 15);
+  assert.match(entry.dipIdeaRefused({ createdAt: "2026-11-02T15:58:00Z", now }), /minutes old/, "SOFI: a 10:58 idea bought at 13:20");
+  assert.match(entry.dipIdeaRefused({ createdAt: "2026-11-02T18:15:00Z", now, alreadyTraded: true }), /already traded/);
+  assert.equal(entry.dipIdeaRefused({ createdAt: "2026-11-02T18:15:00Z", now }), null, "a fresh dip idea trades");
 });

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { dataMode } from "../tradier";
 import { BROKER } from "../tradeClient";
 import { accountSize } from "../accountLib";
-import { RISK_PER_TRADE_PCT, learningMode, CONFIRM_BARS, FADES_PER_SYMBOL_DAY, FLIP_WAIT_MIN, LEARNING_LAST_ENTRY_MIN, LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY } from "../order/entryRules";
+import { RISK_PER_TRADE_PCT, OPTION_RISK_PCT, learningMode, CONFIRM_BARS, FADES_PER_SYMBOL_DAY, FLIP_WAIT_MIN, LEARNING_LAST_ENTRY_MIN, LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY } from "../order/entryRules";
 import { MAX_LOSS_PCT, HARD_LOSS_PCT, PROFIT_TAKE_PCT, profitExitMode } from "../order/exitRules";
 import { DAILY_LOSS_LIMIT_PCT } from "../riskLib";
 import { STOP_FLOOR_PCT, STOP_CAP_PCT } from "../swingLib";
@@ -21,7 +21,7 @@ export async function GET() {
     // agents and the UI can check them against what was agreed (RULES.md).
     rules: {
       learningMode: learningMode(),
-      riskPerTradePct: RISK_PER_TRADE_PCT, maxLossPct: MAX_LOSS_PCT, maxLossAppliesTo: "shares only (options: the stop)", dailyLossLimitPct: DAILY_LOSS_LIMIT_PCT,
+      riskPerTradePct: RISK_PER_TRADE_PCT, optionRiskPct: OPTION_RISK_PCT, maxLossPct: MAX_LOSS_PCT, maxLossAppliesTo: "shares only (options: the stop)", dailyLossLimitPct: DAILY_LOSS_LIMIT_PCT,
       optionStopPct: { flat: HARD_LOSS_PCT.OPTION, floor: STOP_FLOOR_PCT, cap: STOP_CAP_PCT },
       profitExits: profitExitMode(), profitTakePct: PROFIT_TAKE_PCT,
       entryConfirm: process.env.ENTRY_CONFIRM || "ab", confirmBars: CONFIRM_BARS,

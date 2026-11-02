@@ -15,6 +15,12 @@ import { optionStopPct } from "../swingLib.js";
    stop had halved the contracts bought for the same $250, and this keeps the
    contract counts while the stop gives the price room. */
 export const RISK_PER_TRADE_PCT = 2;            // of the account, lost at the stop ($500 at $25K)
+/* Options at half size (owner, 2026-11-02, after a -$2,234 day: "we sell everything
+   that reaches $80 but our stop losses on options are usually $300-$400"). An
+   option is sized to OPTION_RISK_PCT at its stop ($250 at $25K); shares keep 2%.
+   Replayed on all 18 days since the restart: option results halve in both
+   halves (-$6,825 -> -$3,534), worst day -$2,740 -> -$1,370. */
+export const OPTION_RISK_PCT = 1;
 export const MIN_CONVICTION = 2;
 export const MIN_REWARD_RISK = 1.5;
 export const MAX_SYMBOL_EXPOSURE_PCT = 20;      // of the account, one underlying
@@ -256,6 +262,18 @@ export const tooEarlyToEnter = (etMinutes) => Number(etMinutes) < FIRST_ENTRY_MI
 // Stop -1% since 2026-10-29 (owner: "lets drop the stop to 1%"; it was -1.5%).
 // Tested: -1%: -$712 (46% won) then +$516 (58%); -1.5%: -$398 (54%) then +$577 (63%).
 export const DIP_PCT = 1, DIP_TARGET_PCT = 1, DIP_STOP_PCT = 1;
+/* A dip idea is traded once, within DIP_IDEA_MAX_MIN of being written (bug fix,
+   2026-11-02): after the first position closed and the 30-minute re-buy wait
+   passed, the same morning idea was bought again hours later with its old stop
+   and target, which then sat 0.06-0.32% under the new buy (SOFI 13:20 from a
+   10:58 idea, stopped in a minute; QCOM 12:39). */
+export const DIP_IDEA_MAX_MIN = 15;
+export function dipIdeaRefused({ createdAt, now = Date.now(), alreadyTraded = false } = {}) {
+  if (alreadyTraded) return "This dip idea was already traded today; a dip is bought once.";
+  const age = (now - Date.parse(createdAt)) / 60000;
+  if (Number.isFinite(age) && age > DIP_IDEA_MAX_MIN) return `This dip idea is ${Math.round(age)} minutes old; its stop and target were set at a price that has moved (a dip trades within ${DIP_IDEA_MAX_MIN} minutes).`;
+  return null;
+}
 export function dipSignal({ last, high, prevClose } = {}) {
   if (!(last > 0) || !(high > 0) || !(prevClose > 0)) return false;
   return last > prevClose && last <= high * (1 - DIP_PCT / 100);
@@ -348,7 +366,7 @@ export function sizeOptionEntry({ accountSize, leg, entryPrice, invalidation, ac
   // that is taken anyway (one contract when one is over budget).
   const overrides = [];
   // riskMult: the edge throttle (edgeLib) — 1, 0.5 or 0.25 of the 1% budget.
-  const budget = (accountSize * RISK_PER_TRADE_PCT * Math.max(0, Math.min(1, Number(riskMult) || 1))) / 100;
+  const budget = (accountSize * OPTION_RISK_PCT * Math.max(0, Math.min(1, Number(riskMult) || 1))) / 100; // options: 1% since 2026-11-02
   const delta = Math.abs(Number(leg?.delta)) || 0.6;
   const spread = Math.max(0, (Number(leg?.ask) || 0) - (Number(leg?.bid) || 0));
   const premium = Number(payPrice(leg, { atMid })) || 0;
@@ -364,7 +382,7 @@ export function sizeOptionEntry({ accountSize, leg, entryPrice, invalidation, ac
   if (contracts < 1) {
     if (SAME_DAY.has(strategy) && riskPer > budget * 1.5) {
       if (learning) overrides.push({ rule: "over_budget", reason: `One contract risks about $${riskPer.toFixed(0)} at the stop, over the $${(budget * 1.5).toFixed(0)} same-day limit; taken at one contract, the max-loss exit still caps it.` });
-      else return { ok: false, stopPct, riskPer, reason: `One contract would lose about $${riskPer.toFixed(0)} at the stop — over the $${(budget * 1.5).toFixed(0)} most a same-day trade may risk (${RISK_PER_TRADE_PCT}% of the account, with half again of leeway).` };
+      else return { ok: false, stopPct, riskPer, reason: `One contract would lose about $${riskPer.toFixed(0)} at the stop — over the $${(budget * 1.5).toFixed(0)} most a same-day trade may risk (${OPTION_RISK_PCT}% of the account, with half again of leeway).` };
     }
     contracts = 1;
   }

@@ -14,7 +14,7 @@ import {
   payPrice, sizeOptionEntry, SAME_DAY, MIN_CONVICTION, MIN_REWARD_RISK, MAX_SYMBOL_EXPOSURE_PCT,
   MAX_SPREAD_SHARE_OF_LOSS, MAX_SPREAD_PCT_OF_PREMIUM, LAST_FLAT_BY_CLOSE_ENTRY_MIN, REENTRY_COOLDOWN_MIN,
   MAX_ENTRIES_PER_SYMBOL_DAY, RISK_PER_TRADE_PCT as INTRADAY_RISK_PCT, isWatchOnly, entriesAllowed,
-  learningMode, stackedWarnings, againstMarket, marketWithUs, MARKET_WITH_US_PCT, tooEarlyToEnter, dipSignal, DIP_PCT, DIP_TARGET_PCT, DIP_STOP_PCT, lateEntryRefused, LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY, setupVoid, entryArm, confirmedBreak, CONFIRM_BARS,
+  learningMode, stackedWarnings, againstMarket, marketWithUs, dipIdeaRefused, MARKET_WITH_US_PCT, tooEarlyToEnter, dipSignal, DIP_PCT, DIP_TARGET_PCT, DIP_STOP_PCT, lateEntryRefused, LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY, setupVoid, entryArm, confirmedBreak, CONFIRM_BARS,
   fromEarlierSession, PLAYED_OUT_EXITS, countsAsEntry, etDate, expiresToday, isFade, fadeLimitReached, flipTooSoon, flipAfterStop, rebuyTooSoon, rebuyCheck, ideaCapReached, bothSidesOpen, samePlaybookPosition,
 } from "../entryRules";
 import { optionStopPct, profileFor } from "../../swingLib";
@@ -1170,6 +1170,12 @@ async function run(req) {
           const why = `Tape gate — ${idea.symbol} has already used ${t.rangeUsedPct.toFixed(0)}% of its normal daily range ($${t.dayLow}-$${t.dayHigh} against a $${t.atr14.toFixed(2)} ATR); a continuation here buys the end of the move.`;
           if (!soft("tape", why)) { results.push({ ...tag, placed: false, reason: why }); continue; }
         }
+      }
+
+      // A dip idea trades once, and only while fresh (entryRules.dipIdeaRefused).
+      if (idea.strategy === "dip") {
+        const why = dipIdeaRefused({ createdAt: rawIdea.createdAt, alreadyTraded: listJournal().some((r) => r.ideaId === idea.id && r.entryOrderId) });
+        if (why) { results.push({ ...tag, placed: false, reason: why }); continue; }
       }
 
       // Options only with the market: QQQ 0.3%+ our way since the open (entryRules.marketWithUs), hard; refused ideas go to the shadow book.
