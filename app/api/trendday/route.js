@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { tradier, asArray } from "../tradier";
 import { listIdeas } from "../store";
-import { trendRead, recordTrendRead, trendHistory, breadthOf } from "../trendDayLib";
+import { trendRead, recordTrendRead, trendHistory, breadthOf, modelActions } from "../trendDayLib";
 import { CORE_SYMBOLS } from "../watchCore";
 
 /* The trend-day read (trendDayLib.js): QQQ and SPY since the open, and which
@@ -28,14 +28,7 @@ export async function GET(req) {
     const d = await tradier(`/markets/quotes?symbols=${names.join(",")}`);
     stocks = asArray(d?.quotes?.quote).map((q) => ({ open: Number(q.open) || null, last: Number(q.last) || null }));
   } catch {}
-  // Today's latest directional read per symbol, from the model's ideas.
-  const latest = new Map();
-  for (const i of listIdeas()) {
-    if (!i.createdAt || new Date(i.createdAt).toLocaleDateString("en-CA", { timeZone: "America/New_York" }) !== date) continue;
-    const prev = latest.get(i.symbol);
-    if (!prev || i.createdAt > prev.createdAt) latest.set(i.symbol, i);
-  }
-  const actions = [...latest.values()].map((i) => i.action).filter((a) => a && a !== "WAIT");
+  const actions = modelActions(listIdeas(), date); // trendDayLib: the model's own ideas only (bug fix 2026-11-02)
   const read = trendRead({ qqq, spy, actions, etMinutes: h * 60 + m });
   read.breadth = breadthOf(stocks);
   if (read.breadth.total) read.label += ` Breadth: ${read.breadth.down} of ${read.breadth.total} stocks down 1%+, ${read.breadth.up} up 1%+.`;

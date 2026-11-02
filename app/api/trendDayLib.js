@@ -56,6 +56,24 @@ export function breadthOf(stocks = []) {
   return { total: moves.length, down: moves.filter((x) => x <= -1).length, up: moves.filter((x) => x >= 1).length };
 }
 
+/* Which side the model leans today: the latest idea per symbol and playbook,
+   from the model's own playbooks only (swing, intraday, news). The fade bets
+   against the move by design and the dip and scan rows come from prices, so
+   counting them hid the model's side (bug, 2026-11-02: a falling afternoon
+   read as 3 calls and 0 puts while the latest refresh had 10 puts). */
+const MODEL_PLAYBOOK = (i) => !i.strategy || i.strategy === "intraday" || i.strategy === "news";
+const etDay = (t) => new Date(t).toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+export function modelActions(ideas = [], date) {
+  const latest = new Map();
+  for (const i of ideas) {
+    if (!MODEL_PLAYBOOK(i) || !i.createdAt || etDay(i.createdAt) !== date) continue;
+    const key = `${i.symbol}|${i.strategy || "swing"}`;
+    const prev = latest.get(key);
+    if (!prev || i.createdAt > prev.createdAt) latest.set(key, i);
+  }
+  return [...latest.values()].map((i) => i.action).filter((a) => a && a !== "WAIT");
+}
+
 function readAll() {
   try { return JSON.parse(fs.readFileSync(FILE, "utf8")) || {}; } catch { return {}; }
 }
