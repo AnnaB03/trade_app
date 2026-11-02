@@ -27,7 +27,8 @@ learn from every single contract or trade."
   - the other side of a stock within 30 minutes of a stop-out on it;
   - a second fade of a stock in a day, the other side of a stock within 30 minutes, or the same side within 30 minutes of a sale;
   - more than 8 entries per stock per day;
-  - an idea carrying 3 or more different warnings at once (since 2026-10-27).
+  - an idea carrying 3 or more different warnings at once (since 2026-10-27);
+  - an option unless QQQ has moved 0.3%+ since the open in its direction (since 2026-11-02).
 - Profits: an option up over $80 at the bid is sold at once ($50 until 2026-10-30) (shares keep their own exits) (since 2026-10-27, `PROFIT_TAKE_USD`); otherwise an option sells at +50% or the idea's target.
 - When nothing is trading, that is the bug. Print every idea's refusal reason and fix the cause.
 - The dip playbook (`strategy: "dip"`, since 2026-10-29) buys shares of core-list stocks that are up on the day after a 1% dip from the high; sold +1%, stopped -1%, or at 15:45.

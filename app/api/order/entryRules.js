@@ -267,6 +267,23 @@ export function dipSignal({ last, high, prevClose } = {}) {
    lost -$767. A warning for now (it counts toward the 3+ refusal); a hard
    refusal once it has ~20 trades behind it. */
 export const AGAINST_MARKET_PCT = 0.3;
+/* Options only WITH the market (owner, 2026-11-02: "options are doing really
+   bad today, how can we fix this"; chose "Build it now"). An option is bought
+   only once QQQ has moved MARKET_WITH_US_PCT or more since the open in the
+   trade's direction (up for a call, down for a put); flat and against are
+   refused, in learning mode too. Of 84 same-day options with QQQ minute bars:
+   with the market +$727 (62% won) then +$221 (80%); flat -$980 then -$842;
+   against -$548 then +$47. 11-02: the 10:00 ORCL and NVDA puts (QQQ +0.03%,
+   +0.11%) lost $904. It also stops the fade playbook, which buys against the
+   move by design (-$2,384 over 14 trades). On flat days only shares trade. */
+export const MARKET_WITH_US_PCT = 0.3;
+export function marketWithUs({ action, qqqOpen, qqqLast } = {}) {
+  if (!(qqqOpen > 0) || !(qqqLast > 0)) return null;
+  const side = action === "CALL" ? 1 : action === "PUT" ? -1 : 0;
+  if (!side) return null;
+  const move = ((qqqLast - qqqOpen) / qqqOpen) * 100 * side;
+  return { move, ok: move >= MARKET_WITH_US_PCT };
+}
 export function againstMarket({ action, qqqOpen, qqqLast } = {}) {
   if (!(qqqOpen > 0) || !(qqqLast > 0)) return null;
   const move = ((qqqLast - qqqOpen) / qqqOpen) * 100;

@@ -14,7 +14,7 @@ import {
   payPrice, sizeOptionEntry, SAME_DAY, MIN_CONVICTION, MIN_REWARD_RISK, MAX_SYMBOL_EXPOSURE_PCT,
   MAX_SPREAD_SHARE_OF_LOSS, MAX_SPREAD_PCT_OF_PREMIUM, LAST_FLAT_BY_CLOSE_ENTRY_MIN, REENTRY_COOLDOWN_MIN,
   MAX_ENTRIES_PER_SYMBOL_DAY, RISK_PER_TRADE_PCT as INTRADAY_RISK_PCT, isWatchOnly, entriesAllowed,
-  learningMode, stackedWarnings, againstMarket, tooEarlyToEnter, dipSignal, DIP_PCT, DIP_TARGET_PCT, DIP_STOP_PCT, lateEntryRefused, LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY, setupVoid, entryArm, confirmedBreak, CONFIRM_BARS,
+  learningMode, stackedWarnings, againstMarket, marketWithUs, MARKET_WITH_US_PCT, tooEarlyToEnter, dipSignal, DIP_PCT, DIP_TARGET_PCT, DIP_STOP_PCT, lateEntryRefused, LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY, setupVoid, entryArm, confirmedBreak, CONFIRM_BARS,
   fromEarlierSession, PLAYED_OUT_EXITS, countsAsEntry, etDate, expiresToday, isFade, fadeLimitReached, flipTooSoon, flipAfterStop, rebuyTooSoon, rebuyCheck, ideaCapReached, bothSidesOpen, samePlaybookPosition,
 } from "../entryRules";
 import { optionStopPct, profileFor } from "../../swingLib";
@@ -356,6 +356,13 @@ async function dayQuote(symbol) {
   } catch {
     return { last: null, high: null, low: null, prevClose: null, open: null };
   }
+}
+
+// QQQ's day quote, shared by every idea in one pass (30 seconds).
+let qqqDayAt = 0, qqqDayValue = null;
+async function qqqDayCached() {
+  if (!qqqDayValue || Date.now() - qqqDayAt > 30000) { qqqDayValue = await dayQuote("QQQ"); qqqDayAt = Date.now(); }
+  return qqqDayValue;
 }
 
 async function liveQuote(symbol) {
@@ -1165,13 +1172,19 @@ async function run(req) {
         }
       }
 
-      // Against QQQ's move since the open: recorded (entryRules.againstMarket); counts toward the 3+ warnings refusal.
+      // Options only with the market: QQQ 0.3%+ our way since the open (entryRules.marketWithUs), hard; refused ideas go to the shadow book.
       if (idea.vehicle === "OPTION") {
-        const qq = await dayQuote("QQQ");
-        const mv = againstMarket({ action: idea.action, qqqOpen: qq.open, qqqLast: qq.last });
-        if (mv != null) {
-          const why = `Against the market: a ${idea.action === "CALL" ? "call" : "put"} while QQQ is ${mv > 0 ? "up" : "down"} ${Math.abs(mv).toFixed(2)}% since the open.`;
-          if (!soft("against_market", why)) { results.push({ ...tag, placed: false, reason: why }); continue; }
+        const qq = await qqqDayCached();
+        const mw = marketWithUs({ action: idea.action, qqqOpen: qq.open, qqqLast: qq.last });
+        if (mw && !mw.ok) {
+          const row = dryRun ? null : recordShadowEntry({
+            playbook: idea.strategy || "swing", blockedBy: "market_flat", ideaId: idea.id, symbol: idea.symbol, action: idea.action,
+            occ: idea.leg?.occ ?? null, strike: idea.leg?.strike ?? null, expiration: idea.expiration ?? null,
+            contracts: Math.max(1, Number(idea.sizing?.contracts) || 1), optionBid: idea.leg?.bid ?? null, optionAsk: idea.leg?.ask ?? null, delta: idea.leg?.delta ?? null,
+            underlying: idea.entryPrice ?? null, invalidation: idea.invalidation ?? null, target: idea.target ?? null, catalyst: idea.catalyst ?? null,
+          });
+          results.push({ ...tag, placed: false, blockedBy: "market_flat", recorded: Boolean(row), reason: `Options only with the market: QQQ is ${mw.move >= 0 ? "+" : ""}${mw.move.toFixed(2)}% since the open in a ${idea.action === "CALL" ? "call" : "put"}'s direction, under the ${MARKET_WITH_US_PCT}% needed. Flat or against-the-market options lost in both halves.` });
+          continue;
         }
       }
 

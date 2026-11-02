@@ -571,3 +571,13 @@ test("RULE: an option bought against QQQ's move since the open is recorded as a 
   assert.equal(entry.againstMarket({ action: "CALL", qqqOpen: 700, qqqLast: 701 }), null, "under 0.3% is flat");
   assert.equal(entry.againstMarket({ action: "PUT" }), null, "no quote, no warning");
 });
+
+test("RULE: options only with the market — QQQ 0.3%+ our way since the open, hard, fades included — 2026-11-02, 'options are doing really bad today, how can we fix this'", () => {
+  assert.equal(entry.MARKET_WITH_US_PCT, 0.3);
+  assert.equal(entry.marketWithUs({ action: "PUT", qqqOpen: 700, qqqLast: 700.21 }).ok, false, "11-02 10:00 ORCL put: QQQ +0.03%");
+  assert.equal(entry.marketWithUs({ action: "CALL", qqqOpen: 700, qqqLast: 703.92 }).ok, true, "11-02 10:27 OKLO call: QQQ +0.56%");
+  assert.equal(entry.marketWithUs({ action: "PUT", qqqOpen: 697.21, qqqLast: 688.96 }).ok, true, "10-30: puts with QQQ falling");
+  assert.equal(entry.marketWithUs({ action: "CALL", qqqOpen: 697.21, qqqLast: 688.96 }).ok, false, "a call against a falling QQQ");
+  assert.equal(entry.marketWithUs({ action: "PUT" }), null, "no quote: not judged here");
+  assert.equal(entry.marketWithUs({ action: "BUY", qqqOpen: 700, qqqLast: 690 }), null, "shares are not affected");
+});
