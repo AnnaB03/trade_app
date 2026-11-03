@@ -364,6 +364,11 @@ async function qqqDayCached() {
   if (!qqqDayValue || Date.now() - qqqDayAt > 30000) { qqqDayValue = await dayQuote("QQQ"); qqqDayAt = Date.now(); }
   return qqqDayValue;
 }
+let spyDayAt = 0, spyDayValue = null;
+async function spyDayCached() {
+  if (!spyDayValue || Date.now() - spyDayAt > 30000) { spyDayValue = await dayQuote("SPY"); spyDayAt = Date.now(); }
+  return spyDayValue;
+}
 
 async function liveQuote(symbol) {
   try {
@@ -1180,7 +1185,11 @@ async function run(req) {
 
       // Options only with the market: QQQ 0.3%+ our way since the open (entryRules.marketWithUs), hard; refused ideas go to the shadow book.
       if (idea.vehicle === "OPTION") {
-        const qq = await qqqDayCached();
+        // SPY is the backup when QQQ's quote is missing (2026-11-03): without it
+        // a failed quote let options through unfiltered. On 69 trades SPY sorted
+        // them about as well as QQQ (allowed -0.06R/+0.00R, refused -0.10R/-0.36R).
+        let qq = await qqqDayCached(), idx = "QQQ";
+        if (!(qq.open > 0) || !(qq.last > 0)) { qq = await spyDayCached(); idx = "SPY"; }
         const mw = marketWithUs({ action: idea.action, qqqOpen: qq.open, qqqLast: qq.last });
         if (mw && !mw.ok) {
           const row = dryRun ? null : recordShadowEntry({
@@ -1189,7 +1198,7 @@ async function run(req) {
             contracts: Math.max(1, Number(idea.sizing?.contracts) || 1), optionBid: idea.leg?.bid ?? null, optionAsk: idea.leg?.ask ?? null, delta: idea.leg?.delta ?? null,
             underlying: idea.entryPrice ?? null, invalidation: idea.invalidation ?? null, target: idea.target ?? null, catalyst: idea.catalyst ?? null,
           });
-          results.push({ ...tag, placed: false, blockedBy: "market_flat", recorded: Boolean(row), reason: `Options only with the market: QQQ is ${mw.move >= 0 ? "+" : ""}${mw.move.toFixed(2)}% since the open in a ${idea.action === "CALL" ? "call" : "put"}'s direction, under the ${MARKET_WITH_US_PCT}% needed. Flat or against-the-market options lost in both halves.` });
+          results.push({ ...tag, placed: false, blockedBy: "market_flat", recorded: Boolean(row), reason: `Options only with the market: ${idx} is ${mw.move >= 0 ? "+" : ""}${mw.move.toFixed(2)}% since the open in a ${idea.action === "CALL" ? "call" : "put"}'s direction, under the ${MARKET_WITH_US_PCT}% needed. Flat or against-the-market options lost in both halves.` });
           continue;
         }
       }
