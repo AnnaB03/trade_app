@@ -14,7 +14,7 @@ import {
   payPrice, sizeOptionEntry, SAME_DAY, MIN_CONVICTION, MIN_REWARD_RISK, MAX_SYMBOL_EXPOSURE_PCT,
   MAX_SPREAD_SHARE_OF_LOSS, MAX_SPREAD_PCT_OF_PREMIUM, LAST_FLAT_BY_CLOSE_ENTRY_MIN, REENTRY_COOLDOWN_MIN,
   MAX_ENTRIES_PER_SYMBOL_DAY, RISK_PER_TRADE_PCT as INTRADAY_RISK_PCT, isWatchOnly, entriesAllowed,
-  learningMode, stackedWarnings, againstMarket, marketWithUs, dipIdeaRefused, MARKET_WITH_US_PCT, tooEarlyToEnter, dipSignal, DIP_PCT, DIP_TARGET_PCT, DIP_STOP_PCT, lateEntryRefused, LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY, setupVoid, entryArm, confirmedBreak, CONFIRM_BARS,
+  learningMode, stackedWarnings, againstMarket, marketWithUs, dipIdeaRefused, tooEarlyForOption, MARKET_WITH_US_PCT, tooEarlyToEnter, dipSignal, DIP_PCT, DIP_TARGET_PCT, DIP_STOP_PCT, lateEntryRefused, LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY, setupVoid, entryArm, confirmedBreak, CONFIRM_BARS,
   fromEarlierSession, PLAYED_OUT_EXITS, countsAsEntry, etDate, expiresToday, isFade, fadeLimitReached, flipTooSoon, flipAfterStop, rebuyTooSoon, rebuyCheck, ideaCapReached, bothSidesOpen, samePlaybookPosition,
 } from "../entryRules";
 import { optionStopPct, profileFor } from "../../swingLib";
@@ -1181,6 +1181,18 @@ async function run(req) {
       if (idea.strategy === "dip") {
         const why = dipIdeaRefused({ createdAt: rawIdea.createdAt, alreadyTraded: listJournal().some((r) => r.ideaId === idea.id && r.entryOrderId) });
         if (why) { results.push({ ...tag, placed: false, reason: why }); continue; }
+      }
+
+      // Options from 10:30 (entryRules.tooEarlyForOption); refused ones go to the shadow book.
+      if (idea.vehicle === "OPTION" && tooEarlyForOption(etNowMinutes())) {
+        const row = dryRun ? null : recordShadowEntry({
+          playbook: idea.strategy || "swing", blockedBy: "before_1030", ideaId: idea.id, symbol: idea.symbol, action: idea.action,
+          occ: idea.leg?.occ ?? null, strike: idea.leg?.strike ?? null, expiration: idea.expiration ?? null,
+          contracts: Math.max(1, Number(idea.sizing?.contracts) || 1), optionBid: idea.leg?.bid ?? null, optionAsk: idea.leg?.ask ?? null, delta: idea.leg?.delta ?? null,
+          underlying: idea.entryPrice ?? null, invalidation: idea.invalidation ?? null, target: idea.target ?? null, catalyst: idea.catalyst ?? null,
+        });
+        results.push({ ...tag, placed: false, blockedBy: "before_1030", recorded: Boolean(row), reason: "No option buys before 10:30 ET: options bought 10:00-10:29 lost in both halves of the record (-$1,453, then -$3,306)." });
+        continue;
       }
 
       // Options only with the market: QQQ 0.3%+ our way since the open (entryRules.marketWithUs), hard; refused ideas go to the shadow book.

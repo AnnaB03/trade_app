@@ -596,3 +596,11 @@ test("BUG 2026-11-02: a dip idea is traded once, within 15 minutes of being writ
   assert.match(entry.dipIdeaRefused({ createdAt: "2026-11-02T18:15:00Z", now, alreadyTraded: true }), /already traded/);
   assert.equal(entry.dipIdeaRefused({ createdAt: "2026-11-02T18:15:00Z", now }), null, "a fresh dip idea trades");
 });
+
+test("RULE: no option buys before 10:30 ET; shares still from 10:00 — 2026-11-03, 'Options from 10:30'", () => {
+  assert.equal(entry.OPTION_FIRST_ENTRY_MIN, 10 * 60 + 30);
+  assert.equal(entry.tooEarlyForOption(10 * 60), true, "11-02 10:00 ORCL put");
+  assert.equal(entry.tooEarlyForOption(10 * 60 + 29), true);
+  assert.equal(entry.tooEarlyForOption(10 * 60 + 30), false);
+  assert.equal(entry.tooEarlyToEnter(10 * 60), false, "shares (and everything else) still start at 10:00");
+});

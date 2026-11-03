@@ -257,6 +257,12 @@ export function stackedWarnings(overrides = []) {
    open, into its widest spreads and swings. */
 export const FIRST_ENTRY_MIN = 10 * 60;
 export const tooEarlyToEnter = (etMinutes) => Number(etMinutes) < FIRST_ENTRY_MIN;
+/* Options from 10:30 (owner, 2026-11-03, choosing "Options from 10:30"). On 20
+   days of minute-price reviews (scripts/trade-review.py), options bought
+   10:00-10:29 lost in both halves: -$1,453 (7 of 18 won), then -$3,306 (4 of
+   13); 11:00-11:59 made money in both (+$142, +$551). Shares still start at 10:00. */
+export const OPTION_FIRST_ENTRY_MIN = 10 * 60 + 30;
+export const tooEarlyForOption = (etMinutes) => Number(etMinutes) < OPTION_FIRST_ENTRY_MIN;
 /* The dip buy (shares, owner 2026-10-29, "buy stocks on dips and sell rising").
    A stock up on the day that has fallen DIP_PCT below today's high. */
 // Stop -1% since 2026-10-29 (owner: "lets drop the stop to 1%"; it was -1.5%).
