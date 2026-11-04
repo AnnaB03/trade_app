@@ -280,6 +280,17 @@ export function dipIdeaRefused({ createdAt, now = Date.now(), alreadyTraded = fa
   if (Number.isFinite(age) && age > DIP_IDEA_MAX_MIN) return `This dip idea is ${Math.round(age)} minutes old; its stop and target were set at a price that has moved (a dip trades within ${DIP_IDEA_MAX_MIN} minutes).`;
   return null;
 }
+/* No dip buys while QQQ is DIP_QQQ_OFF_HIGH_PCT or more below its day's high
+   (owner, 2026-11-04, "no dip buys while QQQ is 0.5%+ below its high"). On 32
+   days of 5-minute bars, dips bought while QQQ was that far off its high lost
+   in both halves: -$442, then -$341 (162 trades); 11/04's dips went 3 for 10.
+   SPY stands in when QQQ's quote is missing. Returns null when it cannot tell. */
+export const DIP_QQQ_OFF_HIGH_PCT = 0.5;
+export function dipMarketOffHigh({ indexLast, indexHigh } = {}) {
+  if (!(indexLast > 0) || !(indexHigh > 0)) return null;
+  const offPct = (indexHigh - indexLast) / indexHigh * 100;
+  return { offPct, refused: offPct >= DIP_QQQ_OFF_HIGH_PCT };
+}
 export function dipSignal({ last, high, prevClose } = {}) {
   if (!(last > 0) || !(high > 0) || !(prevClose > 0)) return false;
   return last > prevClose && last <= high * (1 - DIP_PCT / 100);

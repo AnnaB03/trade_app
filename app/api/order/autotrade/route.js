@@ -14,7 +14,7 @@ import {
   payPrice, sizeOptionEntry, SAME_DAY, MIN_CONVICTION, MIN_REWARD_RISK, MAX_SYMBOL_EXPOSURE_PCT,
   MAX_SPREAD_SHARE_OF_LOSS, MAX_SPREAD_PCT_OF_PREMIUM, LAST_FLAT_BY_CLOSE_ENTRY_MIN, REENTRY_COOLDOWN_MIN,
   MAX_ENTRIES_PER_SYMBOL_DAY, RISK_PER_TRADE_PCT as INTRADAY_RISK_PCT, isWatchOnly, entriesAllowed,
-  learningMode, stackedWarnings, againstMarket, marketWithUs, dipIdeaRefused, tooEarlyForOption, MARKET_WITH_US_PCT, tooEarlyToEnter, dipSignal, DIP_PCT, DIP_TARGET_PCT, DIP_STOP_PCT, lateEntryRefused, LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY, setupVoid, entryArm, confirmedBreak, CONFIRM_BARS,
+  learningMode, stackedWarnings, againstMarket, marketWithUs, dipIdeaRefused, dipMarketOffHigh, DIP_QQQ_OFF_HIGH_PCT, tooEarlyForOption, MARKET_WITH_US_PCT, tooEarlyToEnter, dipSignal, DIP_PCT, DIP_TARGET_PCT, DIP_STOP_PCT, lateEntryRefused, LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY, setupVoid, entryArm, confirmedBreak, CONFIRM_BARS,
   fromEarlierSession, PLAYED_OUT_EXITS, countsAsEntry, etDate, expiresToday, isFade, fadeLimitReached, flipTooSoon, flipAfterStop, rebuyTooSoon, rebuyCheck, ideaCapReached, bothSidesOpen, samePlaybookPosition,
 } from "../entryRules";
 import { optionStopPct, profileFor } from "../../swingLib";
@@ -1181,6 +1181,14 @@ async function run(req) {
       if (idea.strategy === "dip") {
         const why = dipIdeaRefused({ createdAt: rawIdea.createdAt, alreadyTraded: listJournal().some((r) => r.ideaId === idea.id && r.entryOrderId) });
         if (why) { results.push({ ...tag, placed: false, reason: why }); continue; }
+        // No dip buys while QQQ is 0.5%+ under its day's high (entryRules.dipMarketOffHigh); SPY is the backup.
+        let qq = await qqqDayCached(), idx = "QQQ";
+        if (!(qq.high > 0) || !(qq.last > 0)) { qq = await spyDayCached(); idx = "SPY"; }
+        const off = dipMarketOffHigh({ indexLast: qq.last, indexHigh: qq.high });
+        if (off?.refused) {
+          results.push({ ...tag, placed: false, blockedBy: "market_off_high", reason: `No dip buys while ${idx} is ${DIP_QQQ_OFF_HIGH_PCT}%+ below its day's high (it is ${off.offPct.toFixed(2)}% under $${qq.high}): those dips lost in both halves of the record (-$442, then -$341).` });
+          continue;
+        }
       }
 
       // Options from 10:30 (entryRules.tooEarlyForOption); refused ones go to the shadow book.

@@ -597,6 +597,15 @@ test("BUG 2026-11-02: a dip idea is traded once, within 15 minutes of being writ
   assert.equal(entry.dipIdeaRefused({ createdAt: "2026-11-02T18:15:00Z", now }), null, "a fresh dip idea trades");
 });
 
+test("RULE: no dip buys while QQQ is 0.5%+ below its day's high — 2026-11-04, owner: 'no dip buys while QQQ is 0.5%+ below its high'", () => {
+  assert.equal(entry.DIP_QQQ_OFF_HIGH_PCT, 0.5);
+  assert.equal(entry.dipMarketOffHigh({ indexLast: 99.5, indexHigh: 100 }).refused, true, "exactly 0.5% off the high is refused");
+  assert.equal(entry.dipMarketOffHigh({ indexLast: 99.6, indexHigh: 100 }).refused, false, "0.4% off the high may buy dips");
+  assert.equal(entry.dipMarketOffHigh({ indexLast: 99, indexHigh: null }), null, "no quote: cannot tell");
+  const src = fs.readFileSync(path.join(process.cwd(), "app/api/order/autotrade/route.js"), "utf8");
+  assert.match(src, /dipMarketOffHigh\(\{ indexLast: qq\.last, indexHigh: qq\.high \}\)/, "the dip block checks it, with SPY as the backup");
+});
+
 test("RULE: no option buys before 10:30 ET; shares still from 10:00 — 2026-11-03, 'Options from 10:30'", () => {
   assert.equal(entry.OPTION_FIRST_ENTRY_MIN, 10 * 60 + 30);
   assert.equal(entry.tooEarlyForOption(10 * 60), true, "11-02 10:00 ORCL put");
