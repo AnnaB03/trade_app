@@ -16,5 +16,5 @@ test("Time Machine record: once a weekday after 16:10, never during the session 
 test("Time Machine record only records: the job never imports trading code", () => {
   const src = fs.readFileSync(path.join(process.cwd(), "app/api/timeMachineJob.js"), "utf8");
   assert.doesNotMatch(src, /from "\.\.?\/(order|store|tradier|sim)/, "no trading, journal or broker imports");
-  assert.match(src, /timemachine\.py", "journal", dateET, "--save"/);
+  assert.match(src, /"scripts\/backtest\/timemachine\.py", "journal", dateET, "--save"\], \["scripts\/backtest\/tournament\.py", "--save"\]/, "the odds first, then the tournament that reads them");
 });
