@@ -34,6 +34,7 @@ learn from every single contract or trade."
 - When nothing is trading, that is the bug. Print every idea's refusal reason and fix the cause.
 - The dip playbook (`strategy: "dip"`, since 2026-10-29) buys shares of core-list stocks that are up on the day after a 1% dip from the high; sold +1%, stopped -1%, or at 15:45; no dip buy while QQQ is 0.5%+ below its day's high (since 2026-11-04).
 - The agent team (`.claude/agents/`, run by `app/api/agentsLib.js`) is read-only and reports in the Team tab. The risk & market agent's trade ideas reach the Cockpit only through the server's checks (`app/api/newsIdeasLib.js`), as playbook `news`.
+- The Time Machine (`scripts/backtest/timemachine.py`) records each trade's target-first / stop-first odds after the close (the server runs it at 16:10, `app/api/timeMachineJob.js`, into `data/timemachine/`). It only records; `timemachine.py score` judges it at the rule review. Its odds are never a learning warning (a new warning would push ideas to 3+ and refuse them).
 - Every agreed rule is in `RULES.md` and pinned by `tests/rules.contract.test.js`. Never push
   red tests; the pre-push hook enforces this.
 - Paper only. No live orders, and nothing touches real money.

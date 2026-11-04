@@ -16,6 +16,8 @@ that opens through the stop fills at its open (a gap is worse than -1R).
     python3 scripts/backtest/timemachine.py plan AMZN --entry 268.45 --stop 265.77 --target 271.13 --at 11:30
     python3 scripts/backtest/timemachine.py plan TSLA --entry 388 --stop 392 --target 380 --at 13:00 --side short
     python3 scripts/backtest/timemachine.py journal [2026-11-04]      # every trade bought that day, odds vs what happened
+    python3 scripts/backtest/timemachine.py journal --save            # also saves data/timemachine/<date>.json (the server runs this at 16:10)
+    python3 scripts/backtest/timemachine.py score                     # every saved day: did the odds sort the trades? (both halves)
     python3 scripts/backtest/timemachine.py rule --target-pct 1 --stop-pct 1 --at 11:00 [--dip] [SYM ...]
 
 Options are judged on the stock's own levels (the idea's target and
@@ -26,6 +28,7 @@ from zoneinfo import ZoneInfo
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
 BARS = os.path.join(ROOT, "data", "backtest", "bars")
+SAVED = os.path.join(ROOT, "data", "timemachine")          # one file per day, written by `journal --save`
 ET = ZoneInfo("America/New_York")
 SLOTS = 78                                                   # 9:30 to 15:55, five minutes each
 CORE = ["SPY", "QQQ", "NVDA", "TSLA", "AMD", "MU", "INTC", "QCOM", "ORCL", "AMZN", "GOOGL",
@@ -158,7 +161,7 @@ def show(r):
     print("  " + verdict(r))
 
 
-def journal(day):
+def journal(day, save=False):
     rows = [json.loads(x[0]) for x in sqlite3.connect(os.path.join(ROOT, "data", "cockpit.db")).execute("select data from journal")]
     et = lambda iso: dt.datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(ET)
     todays = sorted([r for r in rows if r.get("entryFillPrice") and r.get("entryAt") and et(r["entryAt"]).date().isoformat() == day
@@ -184,11 +187,41 @@ def journal(day):
               f"{v['mc']['target']:5.1f}/{v['mc']['stop']:5.1f}/{v['mc']['open']:5.1f}      {h['target'] / hn * 100:3.0f}/{h['stop'] / hn * 100:3.0f}/{h['open'] / hn * 100:3.0f}   {v['mc_avg_r']:+.2f}  "
               f"| {r.get('exitReasonTag') or 'open'} {pnl if isinstance(pnl, (int, float)) else 0:+.0f}")
         out.append((v, r))
+    if save:
+        os.makedirs(SAVED, exist_ok=True)
+        json.dump([{"id": r.get("id"), "symbol": r["symbol"], "vehicle": r.get("vehicle"), "playbook": r.get("strategy") or "swing",
+                    "bought": et(r["entryAt"]).strftime("%H:%M"), "entry": v["entry"], "stop": v["stop"], "target": v["target"],
+                    "mc": v["mc"], "mc_avg_r": v["mc_avg_r"], "history": v["history"], "history_n": v["history_n"], "history_avg_r": v["history_avg_r"],
+                    "sessions": v["sessions"], "exit": r.get("exitReasonTag"), "pnl": r.get("pnl") if isinstance(r.get("pnl"), (int, float)) else None}
+                   for v, r in out], open(os.path.join(SAVED, f"{day}.json"), "w"), indent=1)
+        print(f"saved data/timemachine/{day}.json ({len(out)} trades)")
     if out:
         exp_t = sum(v["mc"]["target"] for v, _ in out) / 100
         got_t = sum(1 for _, r in out if (r.get("exitReasonTag") or "").startswith(("target", "take_profit")))
         print(f"\nThe replays expected about {exp_t:.1f} of {len(out)} to reach the target first; {got_t} sold at a target or profit-take.")
         print(f"Average expected R across the day's plans: {statistics.mean(v['mc_avg_r'] for v, _ in out):+.2f}R (above 0 means the plans had an edge on a normal day).")
+
+
+def score():
+    import glob
+    rows = []
+    for f in sorted(glob.glob(os.path.join(SAVED, "*.json"))):
+        day = os.path.basename(f)[:10]
+        rows += [dict(t, day=day) for t in json.load(open(f)) if t.get("pnl") is not None]
+    if not rows:
+        print("no saved days yet (data/timemachine/)"); return
+    rows.sort(key=lambda t: t["day"]); mid = rows[len(rows) // 2]["day"]
+    print(f"{len(rows)} finished trades on {len({t['day'] for t in rows})} days; halves split at {mid}")
+    def line(name, x):
+        if x: print(f"  {name:36} {len(x):3} trades  won {sum(t['pnl'] > 0 for t in x) * 100 // len(x):3}%  net {sum(t['pnl'] for t in x):+7.0f}")
+        else: print(f"  {name:36} none")
+    for kind, f in (("all", lambda t: True), ("options", lambda t: t["vehicle"] == "OPTION"), ("shares", lambda t: t["vehicle"] != "OPTION")):
+        for part, g in (("first half", lambda t: t["day"] < mid), ("second half", lambda t: t["day"] >= mid)):
+            x = [t for t in rows if f(t) and g(t)]
+            print(f"{kind}, {part}:")
+            line("odds said edge (R > +0.05)", [t for t in x if t["mc_avg_r"] > 0.05])
+            line("about even", [t for t in x if -0.05 <= t["mc_avg_r"] <= 0.05])
+            line("odds said no edge (R < -0.05)", [t for t in x if t["mc_avg_r"] < -0.05])
 
 
 def main():
@@ -197,7 +230,8 @@ def main():
     p = sub.add_parser("plan"); p.add_argument("symbol"); p.add_argument("--entry", type=float, required=True); p.add_argument("--stop", type=float, required=True)
     p.add_argument("--target", type=float, required=True); p.add_argument("--at", required=True); p.add_argument("--until", default="15:45"); p.add_argument("--date")
     p.add_argument("--replays", type=int, default=10000); p.add_argument("--seed", type=int, default=7); p.add_argument("--side", choices=("long", "short"))
-    j = sub.add_parser("journal"); j.add_argument("date", nargs="?", default=dt.datetime.now(ET).date().isoformat())
+    j = sub.add_parser("journal"); j.add_argument("date", nargs="?", default=dt.datetime.now(ET).date().isoformat()); j.add_argument("--save", action="store_true")
+    sub.add_parser("score")
     u = sub.add_parser("rule"); u.add_argument("symbols", nargs="*"); u.add_argument("--target-pct", type=float, default=1); u.add_argument("--stop-pct", type=float, default=1)
     u.add_argument("--at", default="11:00"); u.add_argument("--until", default="15:45"); u.add_argument("--short", action="store_true"); u.add_argument("--dip", action="store_true")
     u.add_argument("--replays", type=int, default=4000)
@@ -207,7 +241,9 @@ def main():
             raise SystemExit("--side does not match the target's direction")
         show(run(a.symbol.upper(), a.entry, a.stop, a.target, a.at, a.until, a.date, a.replays, a.seed))
     elif a.cmd == "journal":
-        journal(a.date)
+        journal(a.date, a.save)
+    elif a.cmd == "score":
+        score()
     else:
         sgn = -1 if a.short else 1
         print(f"Rule: {'short' if a.short else 'long'} at {a.at}, target {a.target_pct}%, stop {a.stop_pct}%, until {a.until}"

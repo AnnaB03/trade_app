@@ -14,6 +14,7 @@ import { shortDatedContract } from "../contractLib";
 import { tradier, asArray } from "../tradier";
 import { appendIdea } from "../store";
 import { accountSize } from "../accountLib";
+import { runTimeMachine } from "../timeMachineJob";
 
 // News ideas are same-day, so none are taken from a report written after 15:00 ET.
 const NEWS_IDEAS_UNTIL_MIN = 15 * 60;
@@ -68,6 +69,8 @@ export async function GET(req) {
   if (q.get("tick")) {
     if (!local(req)) return NextResponse.json({ error: "local only" }, { status: 403 });
     const t = etParts();
+    // After the close: record the Time Machine's odds for every trade bought today (timeMachineJob.js).
+    try { runTimeMachine(t); } catch (e) { console.error("[timemachine]", e); }
     const state = kvGet(DONE_KEY);
     const done = new Set(state?.day === t.dateET ? state.keys : []);
     let macroToday = [];
