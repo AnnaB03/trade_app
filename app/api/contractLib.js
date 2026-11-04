@@ -34,6 +34,51 @@ export async function shortDatedContract(symbol, type, { accountSize, dteMin = 1
   return null;
 }
 
+/* ---------- Near-term at the money (owner, 2026-11-04) ----------
+   Every option idea buys the nearest expiry 1-5 days out, at the strike
+   closest to the stock price, instead of the model's own contract. Every
+   option is sold by 15:45, so a longer expiry only adds a wider spread, and
+   the spread was most of the loss ($10,118 of $17,041 since 10/07,
+   scripts/backtest/spread_cost.py). Replayed on 118 real trades at the same
+   minute and sizing (scripts/backtest/contract_choice.py), it beat our own
+   contract in both halves for both playbooks: swing +$824 vs +$574, then
+   +$558 vs +$139; intraday +$416 vs -$89, then +$115 vs -$12; better on 9 of
+   14 days. Its median spread was 1.4%, against 2.3% for ours. The owner:
+   "lets test and build it if it would make sense". NEAR_ATM_CONTRACTS=false
+   restores the old choice. */
+export const NEAR_DTE_MIN = 1, NEAR_DTE_MAX = 5, NEAR_MAX_SPREAD_PCT = 10, NEAR_MIN_MID = 1;
+// At the money means near it: on a cheap stock whose at-the-money options are under $1 (AAL at $13.63),
+// the nearest that fits was a $12.50 call with a 0.96 delta. Beyond NEAR_MAX_AWAY_PCT it falls back.
+export const NEAR_MAX_AWAY_PCT = 3;
+export const nearAtmEnabled = () => process.env.NEAR_ATM_CONTRACTS !== "false";
+// Pure. options: a Tradier chain for one expiry. The listed strike nearest the price that fits.
+export function pickNearAtm(options, { type, price, maxCost }) {
+  if (!(price > 0)) return null;
+  const fits = asArray(options)
+    .filter((o) => o.option_type === type)
+    .map((o) => { const bid = Number(o.bid), ask = Number(o.ask); return { o, bid, ask, mid: bid > 0 && ask > 0 ? (bid + ask) / 2 : 0 }; })
+    .filter((c) => Math.abs(Number(c.o.strike) - price) / price * 100 <= NEAR_MAX_AWAY_PCT)
+    .filter((c) => c.mid >= NEAR_MIN_MID && ((c.ask - c.bid) / c.mid) * 100 <= NEAR_MAX_SPREAD_PCT && (!(maxCost > 0) || c.ask * 100 <= maxCost))
+    .sort((a, b) => Math.abs(Number(a.o.strike) - price) - Math.abs(Number(b.o.strike) - price));
+  return fits[0] || null;
+}
+export async function nearAtmContract(symbol, type, { price, accountSize }) {
+  try {
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+    const dte = (e) => Math.round((Date.parse(e + "T00:00:00Z") - Date.parse(today + "T00:00:00Z")) / 86400000);
+    const ex = await tradier(`/markets/options/expirations?symbol=${encodeURIComponent(symbol)}&includeAllRoots=true`, { timeoutMs: 8000 });
+    // Nearest first: the replay bought the first expiry 1+ days out.
+    const exps = asArray(ex?.expirations?.date).filter((e) => dte(e) >= NEAR_DTE_MIN && dte(e) <= NEAR_DTE_MAX).sort();
+    for (const exp of exps) {
+      const cd = await tradier(`/markets/options/chains?symbol=${encodeURIComponent(symbol)}&expiration=${encodeURIComponent(exp)}&greeks=true`, { timeoutMs: 9000 });
+      const c = pickNearAtm(cd?.options?.option, { type, price, maxCost: accountSize * OPTION_HARD_PCT });
+      if (c) return { expiration: exp, dte: dte(exp), strike: Number(c.o.strike),
+        leg: { occ: c.o.symbol, strike: Number(c.o.strike), bid: c.bid, ask: c.ask, mid: c.mid, delta: c.o.greeks?.delta != null ? Number(c.o.greeks.delta) : null } };
+    }
+  } catch {}
+  return null;
+}
+
 /* ---------- Switching to a liquid contract (2026-10-15) ----------
    An idea names one contract. When its spread is wide, the same bet usually
    exists in a liquid one: MU's Oct 21 $885 call was 15.8% wide (71 open),

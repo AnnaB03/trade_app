@@ -597,6 +597,27 @@ test("BUG 2026-11-02: a dip idea is traded once, within 15 minutes of being writ
   assert.equal(entry.dipIdeaRefused({ createdAt: "2026-11-02T18:15:00Z", now }), null, "a fresh dip idea trades");
 });
 
+test("RULE: every option idea buys the nearest 1-5 day expiry at the money — 2026-11-04, owner: 'lets test and build it if it would make sense'", async () => {
+  const c = await import("../app/api/contractLib.js");
+  assert.equal(c.NEAR_DTE_MIN, 1); assert.equal(c.NEAR_DTE_MAX, 5);
+  const chain = [
+    { option_type: "call", strike: 85, bid: 4.0, ask: 4.1, symbol: "C85" },
+    { option_type: "call", strike: 88, bid: 2.2, ask: 2.3, symbol: "C88" },
+    { option_type: "call", strike: 90, bid: 1.2, ask: 1.25, symbol: "C90" },
+    { option_type: "put", strike: 88, bid: 2.0, ask: 2.1, symbol: "P88" },
+    { option_type: "call", strike: 87.5, bid: 1.0, ask: 3.0, symbol: "WIDE" },
+  ];
+  assert.equal(c.pickNearAtm(chain, { type: "call", price: 87.8, maxCost: 3750 }).o.symbol, "C88", "the strike nearest the price, skipping a wide quote");
+  assert.equal(c.pickNearAtm(chain, { type: "put", price: 87.8, maxCost: 3750 }).o.symbol, "P88");
+  assert.equal(c.pickNearAtm(chain, { type: "call", price: 87.8, maxCost: 200 }).o.symbol, "C90", "one contract must fit the 15% cap");
+  assert.equal(c.pickNearAtm([{ option_type: "call", strike: 88, bid: 0.5, ask: 0.55 }], { type: "call", price: 88, maxCost: 3750 }), null, "never a contract under $1 (it would be refused)");
+  assert.equal(c.NEAR_MAX_AWAY_PCT, 3);
+  assert.equal(c.pickNearAtm([{ option_type: "call", strike: 13.5, bid: 0.3, ask: 0.35 }, { option_type: "call", strike: 12.5, bid: 1.09, ask: 1.2 }], { type: "call", price: 13.63, maxCost: 3750 }), null,
+    "AAL 11/04: nothing near the money fits, so no deep in-the-money stand-in; the old choice is used");
+  const route = fs.readFileSync(path.join(process.cwd(), "app/api/suggestions/route.js"), "utf8");
+  assert.match(route, /nearAtmEnabled\(\) && idea\.vehicle === "OPTION"[\s\S]{0,200}nearAtmContract\(idea\.symbol/, "every option idea goes through it first");
+});
+
 test("RULE: no dip buys while QQQ is 0.5%+ below its day's high — 2026-11-04, owner: 'no dip buys while QQQ is 0.5%+ below its high'", () => {
   assert.equal(entry.DIP_QQQ_OFF_HIGH_PCT, 0.5);
   assert.equal(entry.dipMarketOffHigh({ indexLast: 99.5, indexHigh: 100 }).refused, true, "exactly 0.5% off the high is refused");

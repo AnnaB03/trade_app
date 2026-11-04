@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { nearAtmContract, nearAtmEnabled } from "../contractLib";
 import { markActivity } from "../activityLib";
 import { CORE_SYMBOLS } from "../watchCore";
 import { accountSize } from "../accountLib";
@@ -721,6 +722,20 @@ action is one of BUY, SELL, CALL, PUT, WAIT (BUY/SELL pair with vehicle SHARES; 
       const { sizing, affordable: fits } = sizeIdea(idea, account);
       idea.sizing = sizing;
       idea.affordable = fits;
+      // Every option idea takes the nearest 1-5 day contract at the money
+      // (contractLib.nearAtmContract, 2026-11-04); the old choice below is the fallback.
+      if (nearAtmEnabled() && idea.vehicle === "OPTION" && (idea.action === "CALL" || idea.action === "PUT")) {
+        const near = await nearAtmContract(idea.symbol, idea.action === "CALL" ? "call" : "put", { price: idea.entryPrice, accountSize: account });
+        if (near) {
+          idea.nearAtm = { fromExpiration: idea.expiration, fromStrike: idea.strike, dte: near.dte };
+          idea.expiration = near.expiration; idea.strike = near.strike; idea.leg = near.leg;
+          idea.flatByClose = true;
+          const re = sizeIdea(idea, account);
+          idea.sizing = re.sizing; idea.affordable = re.affordable;
+          if (idea.sizing) idea.sizing.note = `NEAR-TERM AT THE MONEY ${near.expiration} (${near.dte}d) $${near.strike} instead of ${idea.nearAtm.fromExpiration ?? "the model's"} $${idea.nearAtm.fromStrike ?? "?"}: ${idea.sizing.note}`;
+          continue;
+        }
+      }
       // An intraday idea always takes the 1-3 day contract when one qualifies,
       // whether or not the model's own choice happened to fit.
       if (idea.vehicle === "OPTION" && (fits === false || idea.strategy === "intraday") && (idea.action === "CALL" || idea.action === "PUT")) {
@@ -757,7 +772,7 @@ action is one of BUY, SELL, CALL, PUT, WAIT (BUY/SELL pair with vehicle SHARES; 
           risk: idea.risk ?? null, why_pro: idea.why_pro ?? null, why_plain: idea.why_plain ?? idea.why ?? null,
           leg: idea.leg ?? null,
           sizing: idea.sizing ?? null, affordable: idea.affordable ?? null, accountSize: account,
-          shortDated: idea.shortDated ?? null, flatByClose: idea.flatByClose ?? false,
+          shortDated: idea.shortDated ?? null, nearAtm: idea.nearAtm ?? null, flatByClose: idea.flatByClose ?? false,
           horizon: idea.horizon ?? "swing", ...(idea.strategy ? { strategy: idea.strategy } : {}),
           todayChangePct: idea.todayChangePct ?? null,
           entryPrice: lastBySym[idea.symbol] ?? pennyPriceBySym[idea.symbol] ?? null,
