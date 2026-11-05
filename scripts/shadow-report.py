@@ -45,6 +45,22 @@ def account_size():
 # (exitRules.PROFIT_TAKE_PCT / HARD_LOSS_PCT, entryRules.RISK_PER_TRADE_PCT); also the
 # idea's target and invalidation, and flat at 15:45.
 TARGET_PCT, STOP_PCT, MAX_LOSS = 50.0, 20.0, account_size() * 0.02
+# Since 2026-11-05 a blocked trade is scored the way a placed one would really
+# be handled (bug fix): the +$80 quick sale at the bid (exitRules.PROFIT_TAKE_USD,
+# since 10/27) and today's option size, 1% of the account at the 20% stop
+# (entryRules.OPTION_RISK_PCT, since 11/02), at most 15% of the account in one
+# position. Before, winners ran to +50% at the idea's own (2%) contract count:
+# 11/05's blocked puts scored +$1,500 to +$3,200 each where the live rules
+# would have sold them near +$80.
+PROFIT_TAKE_USD, OPTION_RISK_PCT, POSITION_CAP_PCT = 80.0, 1.0, 15.0
+
+
+def live_contracts(ask, bid):
+    spread = max(0.0, ask - (bid or ask))
+    per = (ask * STOP_PCT / 100 + spread) * 100
+    n = int(account_size() * OPTION_RISK_PCT / 100 // per) if per > 0 else 1
+    cap = int(account_size() * POSITION_CAP_PCT / 100 // (ask * 100)) if ask > 0 else 1
+    return max(1, min(n, max(1, cap)))
 
 
 def token():
@@ -77,7 +93,7 @@ def replay(r):
     if not ask:
         return day, start, None, "no entry price recorded", None
     half = max(0.0, (ask - (bid or ask)) / 2)
-    n = r.get("contracts") or 1
+    n = live_contracts(ask, bid)
     delta = abs(r.get("delta") or 0.5)
     put = r["action"] == "PUT"
     ob, ub = bars(r["occ"], day), bars(r["symbol"], day)
@@ -110,7 +126,9 @@ def replay(r):
         pnl = (est_bid - ask) * 100 * n - 2 * FEE * n
         last_pnl = pnl
         why = None
-        if est_bid >= ask * (1 + TARGET_PCT / 100):
+        if pnl > PROFIT_TAKE_USD:
+            why = "take_profit_usd"
+        elif est_bid >= ask * (1 + TARGET_PCT / 100):
             why = "take_profit"
         elif est_bid <= ask * (1 - STOP_PCT / 100):
             why = "stop"
@@ -131,11 +149,12 @@ want = sys.argv[1] if len(sys.argv) > 1 else None
 tot = wins = n = 0
 print("RECORDED, NOT PLACED (watch-only, or blocked by a rule) — estimated outcomes")
 for r in rows:
-    day, start, pnl, why, when = replay(r)
-    if want and day != want:
+    # filter by the New York date before replaying: replaying every row first took minutes
+    if want and datetime.fromisoformat(r["at"].replace("Z", "+00:00")).astimezone(ZoneInfo("America/New_York")).strftime("%Y-%m-%d") != want:
         continue
+    day, start, pnl, why, when = replay(r)
     label = f"blocked: {r['blockedBy']}" if r.get("blockedBy") else (r.get("playbook") or "")
-    head = f"  {day} {start}  {r['symbol']:5} {r['action']:4} x{r.get('contracts') or 1} {r.get('occ') or '':22} in @{r.get('optionAsk')}  [{label}]"
+    head = f"  {day} {start}  {r['symbol']:5} {r['action']:4} x{live_contracts(r['optionAsk'], r.get('optionBid')) if r.get('optionAsk') else 1} {r.get('occ') or '':22} in @{r.get('optionAsk')}  [{label}]"
     if pnl is None:
         print(f"{head}  -> {why}")
         continue

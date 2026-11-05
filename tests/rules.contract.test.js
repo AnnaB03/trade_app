@@ -597,6 +597,12 @@ test("BUG 2026-11-02: a dip idea is traded once, within 15 minutes of being writ
   assert.equal(entry.dipIdeaRefused({ createdAt: "2026-11-02T18:15:00Z", now }), null, "a fresh dip idea trades");
 });
 
+test("BUG 2026-11-05: an option refused after 14:00 is filed under the 14:00 cut-off, not market_flat", () => {
+  const src = fs.readFileSync(path.join(process.cwd(), "app/api/order/autotrade/route.js"), "utf8");
+  assert.match(src, /const lateOptionAnyway = idea\.vehicle === "OPTION"[\s\S]{0,200}lateEntryRefused\(/);
+  assert.match(src, /if \(idea\.vehicle === "OPTION" && !lateOptionAnyway\) \{[\s\S]{0,800}marketWithUs\(/, "the with-the-market check is skipped when 14:00 refuses anyway");
+});
+
 test("BUG 2026-11-05: a stale delta does not size an at-the-money option — NVDA's $187.50 put showed -0.07 at $185.95", () => {
   assert.equal(entry.saneDelta({ delta: -0.0742, strike: 187.5, price: 185.95, action: "PUT" }), -0.5, "in the money: at least 0.5");
   assert.equal(entry.saneDelta({ delta: -0.2663, strike: 300, price: 299.82, action: "PUT" }), -0.5, "AVGO $300 put at $299.82 is just in the money");

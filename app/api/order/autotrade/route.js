@@ -1204,7 +1204,11 @@ async function run(req) {
       }
 
       // Options only with the market: QQQ 0.3%+ our way since the open (entryRules.marketWithUs), hard; refused ideas go to the shadow book.
-      if (idea.vehicle === "OPTION") {
+      // Not checked once the 14:00 cut-off refuses the option anyway (bug fix, 2026-11-05): it ran first,
+      // so options refused after 14:00 were filed as market_flat and the two rules' scores were mixed.
+      const lateOptionAnyway = idea.vehicle === "OPTION" && (idea.flatByClose || !carryOvernight())
+        && lateEntryRefused({ flatByClose: true, etMinutes: etNowMinutes(), learning: LEARN });
+      if (idea.vehicle === "OPTION" && !lateOptionAnyway) {
         // SPY is the backup when QQQ's quote is missing (2026-11-03): without it
         // a failed quote let options through unfiltered. On 69 trades SPY sorted
         // them about as well as QQQ (allowed -0.06R/+0.00R, refused -0.10R/-0.36R).
