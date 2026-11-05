@@ -597,6 +597,20 @@ test("BUG 2026-11-02: a dip idea is traded once, within 15 minutes of being writ
   assert.equal(entry.dipIdeaRefused({ createdAt: "2026-11-02T18:15:00Z", now }), null, "a fresh dip idea trades");
 });
 
+test("BUG 2026-11-05: a stale delta does not size an at-the-money option — NVDA's $187.50 put showed -0.07 at $185.95", () => {
+  assert.equal(entry.saneDelta({ delta: -0.0742, strike: 187.5, price: 185.95, action: "PUT" }), -0.5, "in the money: at least 0.5");
+  assert.equal(entry.saneDelta({ delta: -0.2663, strike: 300, price: 299.82, action: "PUT" }), -0.5, "AVGO $300 put at $299.82 is just in the money");
+  assert.equal(entry.saneDelta({ delta: -0.2, strike: 297.5, price: 299.82, action: "PUT" }), -0.4, "just out of the money, within 3%: at least 0.4");
+  assert.equal(entry.saneDelta({ delta: 0.59, strike: 53, price: 53.3, action: "CALL" }), 0.59, "a sensible delta is kept");
+  assert.equal(entry.saneDelta({ delta: 0.12, strike: 110, price: 100, action: "CALL" }), 0.12, "far out of the money: left alone");
+  const before = entry.sizeOptionEntry({ accountSize: 25000, leg: { bid: 4.45, ask: 4.55, delta: -0.0742 }, entryPrice: 185.95, invalidation: 191.3, action: "PUT", strategy: "ai" });
+  const after = entry.sizeOptionEntry({ accountSize: 25000, leg: { bid: 4.45, ask: 4.55, delta: entry.saneDelta({ delta: -0.0742, strike: 187.5, price: 185.95, action: "PUT" }) }, entryPrice: 185.95, invalidation: 191.3, action: "PUT", strategy: "ai" });
+  assert.ok(after.contracts < before.contracts, `fewer contracts once the delta is sane (${before.contracts} -> ${after.contracts})`);
+  assert.ok(after.contracts * after.riskPer <= 250 + 1 || after.contracts === 1, "inside the $250 option budget");
+  const src = fs.readFileSync(path.join(process.cwd(), "app/api/order/autotrade/route.js"), "utf8");
+  assert.match(src, /saneDelta\(\{ delta: idea\.leg\.delta[\s\S]{0,900}sizeOptionEntry\(\{/, "fixed before sizing, and the resting stop reads the same leg");
+});
+
 test("RULE: every option idea buys the nearest 1-5 day expiry at the money — 2026-11-04, owner: 'lets test and build it if it would make sense'", async () => {
   const c = await import("../app/api/contractLib.js");
   assert.equal(c.NEAR_DTE_MIN, 1); assert.equal(c.NEAR_DTE_MAX, 5);

@@ -371,6 +371,27 @@ export function payPrice(leg, { atMid = process.env.ENTRY_AT_MID === "true" } = 
   return ask > 0 ? ask : (Number(leg?.mid) || null);
 }
 
+/* A delta that fits the contract (bug fix, 2026-11-05). Early in the session
+   Tradier's greeks still come from the previous close, so after a gap a
+   contract that is at the money NOW carries yesterday's far-from-the-money
+   delta: NVDA's 11/06 $187.50 put showed -0.07 with NVDA at $185.95. Sizing
+   turned the stock stop into a premium stop with it, so it bought 5
+   contracts instead of about 2, and the resting stop sat 9% under the buy;
+   it filled in a minute for -$328 against the $250 budget. A contract within
+   ATM_BAND_PCT of the price is given at least ATM_MIN_DELTA, and one in the
+   money at least ITM_MIN_DELTA. The sign follows the option (puts negative). */
+export const ATM_BAND_PCT = 3, ATM_MIN_DELTA = 0.4, ITM_MIN_DELTA = 0.5;
+export function saneDelta({ delta, strike, price, action }) {
+  const d = Math.abs(Number(delta));
+  const k = Number(strike), p = Number(price);
+  const sign = action === "PUT" || Number(delta) < 0 ? -1 : 1;
+  if (!(k > 0) || !(p > 0)) return Number.isFinite(d) && d > 0 ? sign * d : (delta ?? null);
+  const itm = action === "PUT" ? k > p : k < p;
+  let floor = Math.abs(k - p) / p * 100 <= ATM_BAND_PCT ? ATM_MIN_DELTA : 0;
+  if (itm) floor = Math.max(floor, ITM_MIN_DELTA);
+  const out = Math.max(Number.isFinite(d) ? d : 0, floor);
+  return out > 0 ? sign * out : (delta ?? null);
+}
 /* How many contracts, and whether to take the trade at all.
    Risk per contract is the loss at whichever stop fires FIRST: the idea's own
    invalidation (delta x distance) or the option's own stop (its stock's

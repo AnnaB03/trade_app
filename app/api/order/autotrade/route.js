@@ -14,7 +14,7 @@ import {
   payPrice, sizeOptionEntry, SAME_DAY, MIN_CONVICTION, MIN_REWARD_RISK, MAX_SYMBOL_EXPOSURE_PCT,
   MAX_SPREAD_SHARE_OF_LOSS, MAX_SPREAD_PCT_OF_PREMIUM, LAST_FLAT_BY_CLOSE_ENTRY_MIN, REENTRY_COOLDOWN_MIN,
   MAX_ENTRIES_PER_SYMBOL_DAY, RISK_PER_TRADE_PCT as INTRADAY_RISK_PCT, isWatchOnly, entriesAllowed,
-  learningMode, stackedWarnings, againstMarket, marketWithUs, dipIdeaRefused, dipMarketOffHigh, DIP_QQQ_OFF_HIGH_PCT, tooEarlyForOption, MARKET_WITH_US_PCT, tooEarlyToEnter, dipSignal, DIP_PCT, DIP_TARGET_PCT, DIP_STOP_PCT, lateEntryRefused, LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY, setupVoid, entryArm, confirmedBreak, CONFIRM_BARS,
+  learningMode, stackedWarnings, againstMarket, marketWithUs, saneDelta, dipIdeaRefused, dipMarketOffHigh, DIP_QQQ_OFF_HIGH_PCT, tooEarlyForOption, MARKET_WITH_US_PCT, tooEarlyToEnter, dipSignal, DIP_PCT, DIP_TARGET_PCT, DIP_STOP_PCT, lateEntryRefused, LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY, setupVoid, entryArm, confirmedBreak, CONFIRM_BARS,
   fromEarlierSession, PLAYED_OUT_EXITS, countsAsEntry, etDate, expiresToday, isFade, fadeLimitReached, flipTooSoon, flipAfterStop, rebuyTooSoon, rebuyCheck, ideaCapReached, bothSidesOpen, samePlaybookPosition,
 } from "../entryRules";
 import { optionStopPct, profileFor } from "../../swingLib";
@@ -1269,6 +1269,12 @@ async function run(req) {
          before that level is reached. Only same-day trades are refused outright
          when one contract is too much. */
       if (idea.vehicle === "OPTION") {
+        // A delta that fits the contract before it sizes anything or sets the
+        // resting stop (entryRules.saneDelta): early greeks are yesterday's.
+        if (idea.leg) {
+          const fixed = saneDelta({ delta: idea.leg.delta, strike: idea.leg.strike, price: idea.entryPrice, action: idea.action });
+          if (fixed != null && Number(fixed) !== Number(idea.leg.delta)) idea.leg = { ...idea.leg, quotedDelta: idea.leg.delta ?? null, delta: fixed };
+        }
         // entryRules.sizeOptionEntry: contracts from the stop that fires first,
         // the 15% position cap, and the spread checks. Tested on its own.
         const sz = sizeOptionEntry({
