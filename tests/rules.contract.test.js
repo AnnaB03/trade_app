@@ -616,6 +616,18 @@ test("RULE: an option bought with QQQ 0.5%+ and SPY 0.25%+ our way skips the +$8
   assert.match(exitSrc, /letRun: Boolean\(pos\.letRun\)/, "read back by the exit check");
 });
 
+test("BUG 2026-11-06 (QA): stale greeks no longer choose contracts in the liquid switch or the fade/news picker", () => {
+  const auto = fs.readFileSync(path.join(process.cwd(), "app/api/order/autotrade/route.js"), "utf8");
+  const lib = fs.readFileSync(path.join(process.cwd(), "app/api/contractLib.js"), "utf8");
+  const agents = fs.readFileSync(path.join(process.cwd(), "app/api/agents/route.js"), "utf8");
+  assert.match(auto, /sp > \(nearIdea \? NEAR_MAX_SPREAD_PCT : SWITCH_SPREAD_PCT\)/, "a near-ATM contract is kept up to a 10% spread");
+  assert.match(auto, /nearIdea \? await nearAtmContract\(idea\.symbol, type, \{ price: idea\.entryPrice/, "and re-picked at the money, never switched out to a week or more");
+  assert.match(auto, /targetDelta: Math\.abs\(Number\(saneDelta\(/, "other switches aim at a sane delta");
+  assert.match(auto, /fadeContract = \(symbol, type, price = null\) => shortDatedContract\([^)]*price \}\)/, "fades pass the stock price");
+  assert.match(agents, /shortDatedContract\(sym, type, \{ accountSize: acct, price: await lastPrice\(sym\)/, "news ideas pass the stock price");
+  assert.match(lib, /if \(Number\(price\) > 0\) \{\s*const c = pickNearAtm\(/, "with a price, the strike nearest the money within 3%");
+});
+
 test("BUG 2026-11-05: an option refused after 14:00 is filed under the 14:00 cut-off, not market_flat", () => {
   const src = fs.readFileSync(path.join(process.cwd(), "app/api/order/autotrade/route.js"), "utf8");
   assert.match(src, /const lateOptionAnyway = idea\.vehicle === "OPTION"[\s\S]{0,200}lateEntryRefused\(/);

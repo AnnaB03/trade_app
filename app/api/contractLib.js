@@ -7,7 +7,13 @@
 import { tradier, asArray } from "./tradier.js";
 import { OPTION_HARD_PCT } from "./sizingLib.js";
 
-export async function shortDatedContract(symbol, type, { accountSize, dteMin = 1, dteMax = 4, targetDelta = 0.6 } = {}) {
+/* With `price` (bug fix, 2026-11-06 QA): the delta filter read the chain's
+   greeks, which early in the session are the previous close's, so after a gap
+   it chose 6-10% out-of-the-money contracts recorded at "0.6 delta" (11/05
+   fades: NVDA $197.50 call at $186.40, MU $785 at $710.90). Given the stock
+   price it takes the strike nearest the money within NEAR_MAX_AWAY_PCT,
+   like nearAtmContract, and ignores the greeks. */
+export async function shortDatedContract(symbol, type, { accountSize, dteMin = 1, dteMax = 4, targetDelta = 0.6, price = null } = {}) {
   try {
     const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
     const dte = (e) => Math.round((Date.parse(e + "T00:00:00Z") - Date.parse(today + "T00:00:00Z")) / 86400000);
@@ -16,6 +22,12 @@ export async function shortDatedContract(symbol, type, { accountSize, dteMin = 1
     const exps = asArray(ex?.expirations?.date).filter((e) => dte(e) >= dteMin && dte(e) <= dteMax).sort().reverse();
     for (const exp of exps) {
       const cd = await tradier(`/markets/options/chains?symbol=${encodeURIComponent(symbol)}&expiration=${encodeURIComponent(exp)}&greeks=true`, { timeoutMs: 9000 });
+      if (Number(price) > 0) {
+        const c = pickNearAtm(cd?.options?.option, { type, price: Number(price), maxCost: accountSize * OPTION_HARD_PCT });
+        if (c) return { expiration: exp, dte: dte(exp), strike: Number(c.o.strike),
+          leg: { occ: c.o.symbol, strike: Number(c.o.strike), bid: c.bid, ask: c.ask, mid: c.mid, delta: c.o.greeks?.delta != null ? Number(c.o.greeks.delta) : null } };
+        continue;
+      }
       const fits = asArray(cd?.options?.option)
         .filter((o) => o.option_type === type)
         .map((o) => {

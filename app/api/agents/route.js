@@ -33,7 +33,7 @@ async function takeNewsIdeas({ body, header, file, mode, nowMin }) {
     const acct = accountSize();
     const r = await ingestNewsIdeas(body, {
       quote: lastPrice, appendIdea, accountSize: acct, source: `risk-market-analyst ${mode}`,
-      pickContract: (sym, type) => shortDatedContract(sym, type, { accountSize: acct }),
+      pickContract: async (sym, type) => shortDatedContract(sym, type, { accountSize: acct, price: await lastPrice(sym).catch(() => null) }),
     });
     note = [
       `Ideas for the Cockpit: ${r.accepted.length} accepted${r.accepted.length ? ` (${r.accepted.map((a) => `${a.symbol} ${a.action} ${a.occ}`).join("; ")})` : ""}.`,

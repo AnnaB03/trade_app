@@ -23,7 +23,7 @@ import { appendIdea } from "../../store";
 import { selectionVerdict } from "../../selectionLib";
 import { markActivity } from "../../activityLib";
 import { recordShadowEntry } from "../../shadowLib";
-import { shortDatedContract, liquidAlternative, spreadPct, SWITCH_SPREAD_PCT } from "../../contractLib";
+import { shortDatedContract, liquidAlternative, spreadPct, SWITCH_SPREAD_PCT, nearAtmContract, nearAtmEnabled, NEAR_MAX_SPREAD_PCT } from "../../contractLib";
 import { tradingHalt } from "../../riskLib";
 import { accountSize } from "../../accountLib";
 import { closedTrades, playbookVerdicts, edgeRiskMultiplier } from "../../edgeLib";
@@ -598,7 +598,7 @@ async function placeShares(idea, { dryRun }) {
 const FADE_DTE_MIN = 1, FADE_DTE_MAX = 4, FADE_TARGET_DELTA = 0.6;
 
 // The picker is shared with the news playbook (contractLib.js).
-const fadeContract = (symbol, type) => shortDatedContract(symbol, type, { accountSize: ACCOUNT_SIZE, dteMin: FADE_DTE_MIN, dteMax: FADE_DTE_MAX, targetDelta: FADE_TARGET_DELTA });
+const fadeContract = (symbol, type, price = null) => shortDatedContract(symbol, type, { accountSize: ACCOUNT_SIZE, dteMin: FADE_DTE_MIN, dteMax: FADE_DTE_MAX, targetDelta: FADE_TARGET_DELTA, price });
 
 async function deriveFades(now = Date.now()) {
   const made = [];
@@ -1004,11 +1004,22 @@ async function run(req) {
            The ban would have blocked +$2,201 of winners since the restart
            (ORCL Oct 16 put +$1,182, INTC Oct 16 put +$751, ORCL +$268) to save
            one $481 loss. The owner: "Undo the expiry-day ban". */
-        if (sp != null && sp > SWITCH_SPREAD_PCT) {
-          const alt = await liquidAlternative(idea.symbol, idea.action === "CALL" ? "call" : "put", {
-            targetDelta: idea.leg.delta ?? 0.55, currentSpreadPct: sp, ideaExpiration: idea.expiration,
-            minDte: idea.flatByClose ? 1 : 2, accountSize: ACCOUNT_SIZE,
-          });
+        /* Bug fix (2026-11-06, QA): the switch aimed at the stale quoted delta and
+           allowed expiries up to 7 days past the idea's, undoing the near-term
+           at-the-money choice for any spread of 6-10%. A near-ATM idea keeps its
+           contract up to NEAR_MAX_SPREAD_PCT and above it re-picks at the money at
+           the live price (1-5 days); other ideas aim at a sane delta. */
+        const nearIdea = Boolean(rawIdea.nearAtm) && nearAtmEnabled();
+        if (sp != null && sp > (nearIdea ? NEAR_MAX_SPREAD_PCT : SWITCH_SPREAD_PCT)) {
+          const type = idea.action === "CALL" ? "call" : "put";
+          const near = nearIdea ? await nearAtmContract(idea.symbol, type, { price: idea.entryPrice, accountSize: ACCOUNT_SIZE }) : null;
+          const alt = near && near.leg.occ !== idea.leg.occ
+            ? { occ: near.leg.occ, strike: near.strike, expiration: near.expiration, bid: near.leg.bid, ask: near.leg.ask, delta: near.leg.delta, spreadPct: spreadPct(near.leg.bid, near.leg.ask) }
+            : nearIdea ? null : await liquidAlternative(idea.symbol, type, {
+              targetDelta: Math.abs(Number(saneDelta({ delta: idea.leg.delta, strike: idea.leg.strike, price: idea.entryPrice, action: idea.action }))) || 0.55,
+              currentSpreadPct: sp, ideaExpiration: idea.expiration,
+              minDte: idea.flatByClose ? 1 : 2, accountSize: ACCOUNT_SIZE,
+            });
           if (alt) {
             idea = { ...idea, expiration: alt.expiration, strike: alt.strike,
               leg: { occ: alt.occ, strike: alt.strike, bid: alt.bid, ask: alt.ask, mid: (alt.bid + alt.ask) / 2, delta: alt.delta },

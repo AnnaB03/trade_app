@@ -730,6 +730,8 @@ action is one of BUY, SELL, CALL, PUT, WAIT (BUY/SELL pair with vehicle SHARES; 
           idea.nearAtm = { fromExpiration: idea.expiration, fromStrike: idea.strike, dte: near.dte };
           idea.expiration = near.expiration; idea.strike = near.strike; idea.leg = near.leg;
           idea.flatByClose = true;
+          // The model's text still describes its own contract (QA, 2026-11-05): say which one is bought.
+          idea.why_pro = `${idea.why_pro ?? ""} [Contract: ${near.expiration} $${near.strike} ${idea.action === "CALL" ? "call" : "put"}, the nearest 1-5 day at the money, replacing the model's ${idea.nearAtm.fromExpiration ?? "?"} $${idea.nearAtm.fromStrike ?? "?"}; sold by 15:45.]`.trim();
           const re = sizeIdea(idea, account);
           idea.sizing = re.sizing; idea.affordable = re.affordable;
           if (idea.sizing) idea.sizing.note = `NEAR-TERM AT THE MONEY ${near.expiration} (${near.dte}d) $${near.strike} instead of ${idea.nearAtm.fromExpiration ?? "the model's"} $${idea.nearAtm.fromStrike ?? "?"}: ${idea.sizing.note}`;
