@@ -371,6 +371,21 @@ export function payPrice(leg, { atMid = process.env.ENTRY_AT_MID === "true" } = 
   return ask > 0 ? ask : (Number(leg?.mid) || null);
 }
 
+/* Let it run (owner, 2026-11-05: "when market moves this much we remove the
+   +80 rule and let it rock"). An option bought while QQQ is LET_RUN_QQQ_PCT and
+   SPY LET_RUN_SPY_PCT or more our way since the open skips the +$80 quick sale
+   (exitRules.decideProfitExit); it still sells at +50%, the idea's target, the
+   20% stop or 15:45. Replayed on 226 real option trades (ThetaData minute
+   quotes): +$80 always -$4,355 / -$3,678 by half; this -$689 / -$220 (96 trades
+   flagged); the stricter trend-day line (1% / 0.5%) -$3,278 / -$3,967. Decided
+   once, at the buy, and saved on the row as letRun. */
+export const LET_RUN_QQQ_PCT = 0.5, LET_RUN_SPY_PCT = 0.25;
+export function letItRun({ action, qqqOpen, qqqLast, spyOpen, spyLast } = {}) {
+  if (!(qqqOpen > 0) || !(qqqLast > 0) || !(spyOpen > 0) || !(spyLast > 0)) return { ok: false, qqqMove: null, spyMove: null };
+  const dir = action === "PUT" ? -1 : 1;
+  const qqqMove = ((qqqLast - qqqOpen) / qqqOpen) * 100 * dir, spyMove = ((spyLast - spyOpen) / spyOpen) * 100 * dir;
+  return { ok: qqqMove >= LET_RUN_QQQ_PCT && spyMove >= LET_RUN_SPY_PCT, qqqMove, spyMove };
+}
 /* A delta that fits the contract (bug fix, 2026-11-05). Early in the session
    Tradier's greeks still come from the previous close, so after a gap a
    contract that is at the money NOW carries yesterday's far-from-the-money

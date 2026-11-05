@@ -295,6 +295,8 @@ export function decideProfitExit(cfg, {
   vehicle, closeByEod = false, eod = false, nowEtMinutes = etMinutes(),
   gainPct, gainUsd, peakGainPct, peakGainUsd, peakMark, entryPremium, markNow,
   stopPct = null, profitMode = profitExitMode(), carry = carryOvernight(), takeUsd = profitTakeUsd(),
+  // letRun: bought with the market moving our way (entryRules.letItRun): no +$80 quick sale.
+  letRun = false,
   // The loss rules read these when given: the gain at the option's MID
   // (2026-10-15). Profit rules keep reading gainPct/gainUsd, at the bid.
   lossGainPct = gainPct, lossGainUsd = gainUsd,
@@ -357,7 +359,7 @@ export function decideProfitExit(cfg, {
   if (gainPct != null && gainPct >= hardBar) {
     exit = { tag: "take_profit", detail: `Up ${gainPct.toFixed(0)}% ($${entryPremium} to $${markNow}) — past the ${hardBar}% ${target50 ? "profit take" : "ceiling"}, banking it outright` };
   }
-  if (!exit && vehicle === "OPTION" && takeUsd > 0 && gainUsd != null && gainUsd > takeUsd) {
+  if (!exit && vehicle === "OPTION" && !letRun && takeUsd > 0 && gainUsd != null && gainUsd > takeUsd) {
     exit = { tag: "take_profit_usd", detail: `Up $${gainUsd.toFixed(0)} at the bid${gainPct != null ? ` (${gainPct.toFixed(1)}%)` : ""} — over the $${takeUsd.toFixed(0)} quick profit, sold right away` };
   }
   /* Trailing take-profit: armed once the position has been up at least

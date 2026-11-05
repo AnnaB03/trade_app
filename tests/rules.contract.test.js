@@ -597,6 +597,25 @@ test("BUG 2026-11-02: a dip idea is traded once, within 15 minutes of being writ
   assert.equal(entry.dipIdeaRefused({ createdAt: "2026-11-02T18:15:00Z", now }), null, "a fresh dip idea trades");
 });
 
+test("RULE: an option bought with QQQ 0.5%+ and SPY 0.25%+ our way skips the +$80 sale — 2026-11-05, owner: 'when market moves this much we remove the +80 rule and let it rock'", () => {
+  assert.equal(entry.LET_RUN_QQQ_PCT, 0.5); assert.equal(entry.LET_RUN_SPY_PCT, 0.25);
+  assert.equal(entry.letItRun({ action: "PUT", qqqOpen: 688.43, qqqLast: 658.8, spyOpen: 765.5, spyLast: 747.13 }).ok, true, "11/05: QQQ -4.3%, SPY -2.4%, a put lets it run");
+  assert.equal(entry.letItRun({ action: "CALL", qqqOpen: 688.43, qqqLast: 658.8, spyOpen: 765.5, spyLast: 747.13 }).ok, false, "a call on that day does not");
+  assert.equal(entry.letItRun({ action: "CALL", qqqOpen: 100, qqqLast: 100.6, spyOpen: 100, spyLast: 100.2 }).ok, false, "QQQ +0.6% but SPY only +0.2%");
+  assert.equal(entry.letItRun({ action: "CALL", qqqOpen: 100, qqqLast: 100.5, spyOpen: 100, spyLast: 100.25 }).ok, true, "exactly at both lines");
+  assert.equal(entry.letItRun({ action: "CALL", qqqOpen: null, qqqLast: 100, spyOpen: 100, spyLast: 101 }).ok, false, "no quote: the +$80 sale stays");
+  const cfg = exits.exitConfig(ACCOUNT);
+  const up = { vehicle: "OPTION", closeByEod: false, entryPremium: 7.15, markNow: 8.15, gainPct: 14, gainUsd: 99, peakGainPct: 14, peakGainUsd: 99, peakMark: 8.15, profitMode: "target50", takeUsd: 80 };
+  assert.equal(exits.decideProfitExit(cfg, up).tag, "take_profit_usd", "AVGO 11/05 +$99: sold by the quick sale");
+  assert.notEqual(exits.decideProfitExit(cfg, { ...up, letRun: true })?.tag, "take_profit_usd", "let run: no quick sale");
+  assert.equal(exits.decideProfitExit(cfg, { ...up, letRun: true, gainPct: -21, lossGainPct: -21, gainUsd: -150, lossGainUsd: -150 }).tag, "premium_stop", "the 20% stop still applies");
+  const auto = fs.readFileSync(path.join(process.cwd(), "app/api/order/autotrade/route.js"), "utf8");
+  const exitSrc = fs.readFileSync(path.join(process.cwd(), "app/api/order/autoexit/route.js"), "utf8");
+  assert.match(auto, /idea\.letRun = letItRun\(\{ action: idea\.action, qqqOpen: qd\.open, qqqLast: qd\.last, spyOpen: sd\.open, spyLast: sd\.last \}\)/);
+  assert.match(auto, /letRun: idea\.letRun \?\? null/, "saved on the journal row at the buy");
+  assert.match(exitSrc, /letRun: Boolean\(pos\.letRun\)/, "read back by the exit check");
+});
+
 test("BUG 2026-11-05: an option refused after 14:00 is filed under the 14:00 cut-off, not market_flat", () => {
   const src = fs.readFileSync(path.join(process.cwd(), "app/api/order/autotrade/route.js"), "utf8");
   assert.match(src, /const lateOptionAnyway = idea\.vehicle === "OPTION"[\s\S]{0,200}lateEntryRefused\(/);

@@ -6,7 +6,8 @@ same trades, side by side, instead of one rule at a time live.
 The candidates are the option trades the Cockpit really bought (same idea,
 same contract, same minute, same price). The bots change what happens next:
 
-  now        today's rules: stop 20% at the mid, +$80 at the bid, +50%, sold 15:45
+  now        the rules to 11/05: stop 20% at the mid, +$80 at the bid, +50%, sold 15:45
+  let_run    live since 11/05: as now, but no +$80 sale when QQQ 0.5%+ and SPY 0.25%+ were our way at the buy
   pct10      sell at +10% at the bid instead of +$80 / +50%
   breakeven  today's rules, and once the bid is 15%+ up the stop moves to the buy
   tm_filter  today's rules, skipping trades the Time Machine called "no edge" (R < -0.05)
@@ -34,7 +35,7 @@ ROOT = sc.ROOT
 OUT = os.path.join(ROOT, "data", "tournament")
 BARS1 = os.path.join(ROOT, "data", "backtest", "bars1m")
 FEE = 0.35
-BOTS = ("now", "pct10", "breakeven", "tm_filter", "qqq_size", "tm_exit", "shares")
+BOTS = ("now", "let_run", "pct10", "breakeven", "tm_filter", "qqq_size", "tm_exit", "shares")
 
 
 def minutes(t0, t1="15:45"):
@@ -96,7 +97,7 @@ def main(save=False):
     for f in os.listdir(os.path.join(ROOT, "data", "timemachine")) if os.path.isdir(os.path.join(ROOT, "data", "timemachine")) else []:
         for t in json.load(open(os.path.join(ROOT, "data", "timemachine", f))):
             tmsaved[t.get("id")] = t
-    qqq = tm.sessions("QQQ")
+    qqq = tm.sessions("QQQ"); spy = tm.sessions("SPY")
     pools = {}
     res = {b: [] for b in BOTS}; calib = []
     for r in trades:
@@ -115,6 +116,12 @@ def main(save=False):
         res["now"].append(dict(base, pnl=pnl(px), why=why))
         if (r.get("exitAt") or "")[:10] == r["entryAt"][:10] and isinstance(r.get("pnl"), (int, float)):
             calib.append((pnl(px), r["pnl"]))
+        sq = spy.get(day); qs0 = qqq.get(day)
+        if sq and qs0:
+            i0 = max(0, tm.slot(t0) - 1); sgn = -1 if put else 1
+            run_ = (qs0[i0][3] / qs0[0][0] - 1) * 100 * sgn >= 0.5 and (sq[i0][3] / sq[0][0] - 1) * 100 * sgn >= 0.25
+            pr, wr, _ = option_exit(q, entry, qty, t0, stop_pct=stop_pct, take_usd=1e9) if run_ else (px, why, None)
+            res["let_run"].append(dict(base, pnl=pnl(pr), why=wr))
         px2, why2, _ = option_exit(q, entry, qty, t0, stop_pct=stop_pct, pct10=True)
         res["pct10"].append(dict(base, pnl=pnl(px2), why=why2))
         px3, why3, _ = option_exit(q, entry, qty, t0, stop_pct=stop_pct, breakeven=True)

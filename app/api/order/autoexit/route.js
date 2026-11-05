@@ -425,6 +425,7 @@ async function run(req) {
         vehicle: pos.vehicle, closeByEod: pos.closeByEod, eod,
         gainPct, gainUsd, peakGainPct, peakGainUsd, peakMark, entryPremium, markNow,
         stopPct: pos.stopPct ?? null, lossGainPct: lossFig.gainPct, lossGainUsd: lossFig.gainUsd,
+        letRun: Boolean(pos.letRun), // bought with the market our way: no +$80 quick sale (entryRules.letItRun)
         carry: carriesOvernight(pos), // exitRules: off since 2026-10-29, every option is sold from 15:45
       });
       if (profitExit && (!exit || profitExit.tag === "take_profit")) exit = profitExit;

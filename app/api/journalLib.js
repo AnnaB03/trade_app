@@ -56,7 +56,7 @@ export function planGrade(entry, underlyingPriceAtClose) {
 // invalidation, target, conviction, catalyst, regime, the spot price the
 // idea was generated against) is pulled automatically when ideaId is given;
 // a manual (non-idea) open supplies its own short `thesis` instead.
-export function journalOpen({ ideaId, thesis, vehicle, symbol, occ, strike, optionType, expiration, side, quantity, limitPrice, order, closeByEod, stopPct, learningOverrides, entryStyle, entryUnderlying, entryDelta, switchedFrom, rebuyExempt }) {
+export function journalOpen({ ideaId, thesis, vehicle, symbol, occ, strike, optionType, expiration, side, quantity, limitPrice, order, closeByEod, stopPct, learningOverrides, entryStyle, entryUnderlying, entryDelta, switchedFrom, rebuyExempt, letRun = null }) {
   const idea = ideaId ? listIdeas().find((i) => i.id === ideaId) : null;
   return appendJournalEntry({
     ideaId: idea?.id ?? null,
@@ -89,6 +89,7 @@ export function journalOpen({ ideaId, thesis, vehicle, symbol, occ, strike, opti
     switchedFrom: switchedFrom ?? null,
     // Bought straight after an option-price stop under the re-buy exemption (once per idea per day).
     rebuyExempt: Boolean(rebuyExempt),
+    letRun: letRun?.ok === true, letRunMoves: letRun ? { qqq: letRun.qqqMove, spy: letRun.spyMove } : null,
     entryPriceAtIdea: idea?.entryPrice ?? null,
     ideaAction: idea?.action ?? null,
     // A short-dated fallback contract decays ~25% of its price a day, so it is

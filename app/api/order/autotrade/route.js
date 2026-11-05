@@ -14,7 +14,7 @@ import {
   payPrice, sizeOptionEntry, SAME_DAY, MIN_CONVICTION, MIN_REWARD_RISK, MAX_SYMBOL_EXPOSURE_PCT,
   MAX_SPREAD_SHARE_OF_LOSS, MAX_SPREAD_PCT_OF_PREMIUM, LAST_FLAT_BY_CLOSE_ENTRY_MIN, REENTRY_COOLDOWN_MIN,
   MAX_ENTRIES_PER_SYMBOL_DAY, RISK_PER_TRADE_PCT as INTRADAY_RISK_PCT, isWatchOnly, entriesAllowed,
-  learningMode, stackedWarnings, againstMarket, marketWithUs, saneDelta, dipIdeaRefused, dipMarketOffHigh, DIP_QQQ_OFF_HIGH_PCT, tooEarlyForOption, MARKET_WITH_US_PCT, tooEarlyToEnter, dipSignal, DIP_PCT, DIP_TARGET_PCT, DIP_STOP_PCT, lateEntryRefused, LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY, setupVoid, entryArm, confirmedBreak, CONFIRM_BARS,
+  learningMode, stackedWarnings, againstMarket, marketWithUs, letItRun, saneDelta, dipIdeaRefused, dipMarketOffHigh, DIP_QQQ_OFF_HIGH_PCT, tooEarlyForOption, MARKET_WITH_US_PCT, tooEarlyToEnter, dipSignal, DIP_PCT, DIP_TARGET_PCT, DIP_STOP_PCT, lateEntryRefused, LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY, setupVoid, entryArm, confirmedBreak, CONFIRM_BARS,
   fromEarlierSession, PLAYED_OUT_EXITS, countsAsEntry, etDate, expiresToday, isFade, fadeLimitReached, flipTooSoon, flipAfterStop, rebuyTooSoon, rebuyCheck, ideaCapReached, bothSidesOpen, samePlaybookPosition,
 } from "../entryRules";
 import { optionStopPct, profileFor } from "../../swingLib";
@@ -533,6 +533,7 @@ async function placeOption(idea, { dryRun, openOccs }) {
       stopPct: idea.stopPct ?? null,
       learningOverrides: idea.learningOverrides ?? null, entryStyle: idea.entryStyle ?? null, switchedFrom: idea.switchedFrom ?? null, rebuyExempt: Boolean(idea.rebuyExempt),
       entryUnderlying: Number(idea.entryPrice) || null, entryDelta: idea.leg?.delta != null ? Number(idea.leg.delta) : null,
+      letRun: idea.letRun ?? null,
     });
   } catch (e) {
     console.error("Autotrade journal write failed (order was still placed):", e);
@@ -1225,6 +1226,9 @@ async function run(req) {
           results.push({ ...tag, placed: false, blockedBy: "market_flat", recorded: Boolean(row), reason: `Options only with the market: ${idx} is ${mw.move >= 0 ? "+" : ""}${mw.move.toFixed(2)}% since the open in a ${idea.action === "CALL" ? "call" : "put"}'s direction, under the ${MARKET_WITH_US_PCT}% needed. Flat or against-the-market options lost in both halves.` });
           continue;
         }
+        // Let it run: QQQ and SPY both moving our way, no +$80 quick sale (entryRules.letItRun), saved on the row.
+        const qd = await qqqDayCached(), sd = await spyDayCached();
+        idea.letRun = letItRun({ action: idea.action, qqqOpen: qd.open, qqqLast: qd.last, spyOpen: sd.open, spyLast: sd.last });
       }
 
       // No new buy before 10:00 ET (entryRules.tooEarlyToEnter); blocked options go to the shadow book.
