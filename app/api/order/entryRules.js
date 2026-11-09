@@ -291,6 +291,19 @@ export function dipMarketOffHigh({ indexLast, indexHigh } = {}) {
   const offPct = (indexHigh - indexLast) / indexHigh * 100;
   return { offPct, refused: offPct >= DIP_QQQ_OFF_HIGH_PCT };
 }
+/* A cap on the dip playbook (owner, 2026-11-09: "yes" to capping it). On
+   11/02, 11/03, 11/06 and 11/09 it bought 7-9 share positions in one sweep at
+   10:00 (or the first tick after the Mac woke) and filled the account; on 11/09
+   that left $2,937 for calls on a +2% QQQ day. The playbook is -$556 over 56
+   trades. At most DIP_MAX_OPEN open dip positions and DIP_MAX_PCT of the
+   account in them. */
+export const DIP_MAX_OPEN = 3, DIP_MAX_PCT = 40;
+export function dipCapRefused({ openDips = 0, dipDeployed = 0, adding = 0, accountSize } = {}) {
+  if (openDips >= DIP_MAX_OPEN) return `Already ${openDips} dip positions open (at most ${DIP_MAX_OPEN}), so cash stays free for the other playbooks.`;
+  const cap = (Number(accountSize) || 0) * DIP_MAX_PCT / 100;
+  if (cap > 0 && dipDeployed + adding > cap) return `Dip positions would reach $${Math.round(dipDeployed + adding)}, over ${DIP_MAX_PCT}% of the account ($${Math.round(cap)}).`;
+  return null;
+}
 export function dipSignal({ last, high, prevClose } = {}) {
   if (!(last > 0) || !(high > 0) || !(prevClose > 0)) return false;
   return last > prevClose && last <= high * (1 - DIP_PCT / 100);

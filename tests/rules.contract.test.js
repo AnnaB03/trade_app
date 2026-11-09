@@ -616,6 +616,16 @@ test("RULE: an option bought with QQQ 0.5%+ and SPY 0.25%+ our way skips the +$8
   assert.match(exitSrc, /letRun: Boolean\(pos\.letRun\)/, "read back by the exit check");
 });
 
+test("RULE: at most 3 open dip positions and 40% of the account in them — 2026-11-09, owner: yes to capping the dip playbook", () => {
+  assert.equal(entry.DIP_MAX_OPEN, 3); assert.equal(entry.DIP_MAX_PCT, 40);
+  assert.equal(entry.dipCapRefused({ openDips: 2, dipDeployed: 7000, adding: 3000, accountSize: 25000 }), null, "a third dip within 40% is bought");
+  assert.match(entry.dipCapRefused({ openDips: 3, dipDeployed: 9000, adding: 500, accountSize: 25000 }), /at most 3/, "a fourth is refused");
+  assert.match(entry.dipCapRefused({ openDips: 1, dipDeployed: 8000, adding: 3000, accountSize: 25000 }), /over 40%/, "$11,000 is over the $10,000 line");
+  const src = fs.readFileSync(path.join(process.cwd(), "app/api/order/autotrade/route.js"), "utf8");
+  assert.match(src, /if \(idea\.strategy === "dip"\) \{\s*const dips = live\.filter\(\(r\) => r\.strategy === "dip"\);\s*const why = dipCapRefused\(\{ openDips: dips\.length \+ dipsThisRun/, "counts open rows and this pass's buys");
+  assert.match(src, /dipsThisRun \+= 1; dipCostThisRun \+=/);
+});
+
 test("BUG 2026-11-06 (QA): stale greeks no longer choose contracts in the liquid switch or the fade/news picker", () => {
   const auto = fs.readFileSync(path.join(process.cwd(), "app/api/order/autotrade/route.js"), "utf8");
   const lib = fs.readFileSync(path.join(process.cwd(), "app/api/contractLib.js"), "utf8");

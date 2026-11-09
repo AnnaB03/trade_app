@@ -14,7 +14,7 @@ import {
   payPrice, sizeOptionEntry, SAME_DAY, MIN_CONVICTION, MIN_REWARD_RISK, MAX_SYMBOL_EXPOSURE_PCT,
   MAX_SPREAD_SHARE_OF_LOSS, MAX_SPREAD_PCT_OF_PREMIUM, LAST_FLAT_BY_CLOSE_ENTRY_MIN, REENTRY_COOLDOWN_MIN,
   MAX_ENTRIES_PER_SYMBOL_DAY, RISK_PER_TRADE_PCT as INTRADAY_RISK_PCT, isWatchOnly, entriesAllowed,
-  learningMode, stackedWarnings, againstMarket, marketWithUs, letItRun, saneDelta, dipIdeaRefused, dipMarketOffHigh, DIP_QQQ_OFF_HIGH_PCT, tooEarlyForOption, MARKET_WITH_US_PCT, tooEarlyToEnter, dipSignal, DIP_PCT, DIP_TARGET_PCT, DIP_STOP_PCT, lateEntryRefused, LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY, setupVoid, entryArm, confirmedBreak, CONFIRM_BARS,
+  learningMode, stackedWarnings, againstMarket, marketWithUs, letItRun, dipCapRefused, saneDelta, dipIdeaRefused, dipMarketOffHigh, DIP_QQQ_OFF_HIGH_PCT, tooEarlyForOption, MARKET_WITH_US_PCT, tooEarlyToEnter, dipSignal, DIP_PCT, DIP_TARGET_PCT, DIP_STOP_PCT, lateEntryRefused, LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY, setupVoid, entryArm, confirmedBreak, CONFIRM_BARS,
   fromEarlierSession, PLAYED_OUT_EXITS, countsAsEntry, etDate, expiresToday, isFade, fadeLimitReached, flipTooSoon, flipAfterStop, rebuyTooSoon, rebuyCheck, ideaCapReached, bothSidesOpen, samePlaybookPosition,
 } from "../entryRules";
 import { optionStopPct, profileFor } from "../../swingLib";
@@ -827,6 +827,7 @@ async function run(req) {
 
     const results = [];
     let deployedThisRun = 0; // cost placed earlier in this same pass, which journal rows don't show yet
+    let dipsThisRun = 0, dipCostThisRun = 0; // the dip cap (entryRules.dipCapRefused) counts this pass too
     for (const rawIdea of batch) {
       const tag = { symbol: rawIdea.symbol, action: rawIdea.action, vehicle: rawIdea.vehicle, risk: rawIdea.risk, ideaId: rawIdea.id };
       /* Learning mode (entryRules.learningMode): a SOFT rule that would refuse
@@ -1380,6 +1381,12 @@ async function run(req) {
           continue;
         }
         idea.__addingCost = adding;
+        // The dip cap: at most 3 open dip positions and 40% of the account in them (entryRules.dipCapRefused).
+        if (idea.strategy === "dip") {
+          const dips = live.filter((r) => r.strategy === "dip");
+          const why = dipCapRefused({ openDips: dips.length + dipsThisRun, dipDeployed: dips.reduce((s2, r) => s2 + costOf(r), 0) + dipCostThisRun, adding, accountSize: ACCOUNT_SIZE });
+          if (why) { results.push({ ...tag, placed: false, blockedBy: "dip_cap", reason: why }); continue; }
+        }
       }
 
       /* Watch-only playbooks stop here: every gate above has passed, so this is
@@ -1419,6 +1426,7 @@ async function run(req) {
       else if (idea.vehicle === "SHARES") r = await placeShares(idea, { dryRun });
       else r = { placed: false, reason: `Unhandled vehicle: ${idea.vehicle}` };
       if (r?.placed && !dryRun) deployedThisRun += Number(idea.__addingCost) || 0;
+      if (r?.placed && !dryRun && idea.strategy === "dip") { dipsThisRun += 1; dipCostThisRun += Number(idea.__addingCost) || 0; }
       /* Say "bought" only for an order that FILLED. Entries now rest at the mid
          (payPrice), so placed and filled are different events: the AMZN put
          placed at 15:55 on 2026-10-13 never filled, and the phone was told it
