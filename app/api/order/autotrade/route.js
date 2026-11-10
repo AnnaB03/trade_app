@@ -1305,13 +1305,13 @@ async function run(req) {
         idea.stopPct = sz.stopPct;
         if (!sz.ok) {
           // Recorded to the shadow book, so the under-$1 rule is scored like the other hard rules.
-          const row = sz.hard === "under_1" && !dryRun ? recordShadowEntry({
-            playbook: idea.strategy || "swing", blockedBy: "under_1", ideaId: idea.id, symbol: idea.symbol, action: idea.action,
+          const row = (sz.hard === "under_1" || sz.hard === "over_budget") && !dryRun ? recordShadowEntry({
+            playbook: idea.strategy || "swing", blockedBy: sz.hard, ideaId: idea.id, symbol: idea.symbol, action: idea.action,
             occ: idea.leg?.occ ?? null, strike: idea.leg?.strike ?? null, expiration: idea.expiration ?? null,
             contracts: 1, optionBid: idea.leg?.bid ?? null, optionAsk: idea.leg?.ask ?? null, delta: idea.leg?.delta ?? null,
             underlying: idea.entryPrice ?? null, invalidation: idea.invalidation ?? null, target: idea.target ?? null, catalyst: idea.catalyst ?? null,
           }) : null;
-          results.push({ ...tag, placed: false, ...(sz.hard === "under_1" ? { blockedBy: "under_1", recorded: Boolean(row) } : {}), reason: sz.reason });
+          results.push({ ...tag, placed: false, ...(sz.hard ? { blockedBy: sz.hard, recorded: Boolean(row) } : {}), reason: sz.reason });
           continue;
         }
         overrides.push(...(sz.overrides || []));

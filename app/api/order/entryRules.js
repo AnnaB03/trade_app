@@ -427,6 +427,7 @@ export function saneDelta({ delta, strike, price, action }) {
    out. Contracts = the 1% budget / that risk, never more than the 15%
    position cap, at least one — except a same-day trade is refused when one
    contract would risk more than 1.5x the budget. Then the spread checks. */
+export const OPTION_ONE_CONTRACT_MAX_X = 1.5;
 export function sizeOptionEntry({ accountSize, leg, entryPrice, invalidation, action, strategy, profile = null, atMid, riskMult = 1, learning = false }) {
   // learning: the over-budget and spread refusals become overrides on a trade
   // that is taken anyway (one contract when one is over budget).
@@ -472,6 +473,18 @@ export function sizeOptionEntry({ accountSize, leg, entryPrice, invalidation, ac
   if (spreadCost > budget * MAX_SPREAD_SHARE_OF_LOSS) {
     if (learning) overrides.push({ rule: "spread", reason: `Spread costs $${spreadCost.toFixed(0)} on arrival, over ${(MAX_SPREAD_SHARE_OF_LOSS * 100).toFixed(0)}% of the $${budget.toFixed(0)} a trade may lose.` });
     else return { ok: false, stopPct, riskPer, contracts, reason: `Spread too wide: buying at $${leg?.ask} against a $${leg?.bid} bid costs $${spreadCost.toFixed(0)} on arrival — over ${(MAX_SPREAD_SHARE_OF_LOSS * 100).toFixed(0)}% of the $${budget.toFixed(0)} a trade may lose.` };
+  }
+  /* One contract too big for the budget (owner, 2026-11-10, after MU's 11/11 $712.50
+     put lost $456: "you proposed a fix so we dont loose as much as MU just lost").
+     Every option is sold by 15:45 since 10-29, but the over-budget refusal below
+     only covered the playbooks still listed as same-day, so a swing idea took one
+     contract whatever it risked (AMD 11/09 ~$330, MU 11/10 ~$430). Judged at the
+     option's own stop against the FULL budget (not the throttled one): since 10-07,
+     contracts risking over 1.5x lost in both halves (17 trades, -$1,863 / -$1,799,
+     -$215 a trade). A hard refusal, not a learning override. */
+  const fullBudget = (accountSize * OPTION_RISK_PCT) / 100;
+  if (premium > 0 && Number.isFinite(optionStopRisk) && optionStopRisk > fullBudget * OPTION_ONE_CONTRACT_MAX_X) {
+    return { ok: false, hard: "over_budget", stopPct, riskPer, reason: `One contract risks about $${optionStopRisk.toFixed(0)} at its ${stopPct}% stop, over the $${(fullBudget * OPTION_ONE_CONTRACT_MAX_X).toFixed(0)} most (${OPTION_ONE_CONTRACT_MAX_X}x the $${fullBudget.toFixed(0)} option budget). Contracts this large lost in both halves of the record.` };
   }
   return { ok: true, contracts, riskPer, stopPct, riskAtStop: Math.round(riskPer * contracts), budget, overrides };
 }

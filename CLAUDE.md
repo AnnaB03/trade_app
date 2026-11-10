@@ -28,7 +28,8 @@ learn from every single contract or trade."
   - a second fade of a stock in a day, the other side of a stock within 30 minutes, or the same side within 30 minutes of a sale;
   - more than 8 entries per stock per day;
   - an idea carrying 3 or more different warnings at once (since 2026-10-27);
-  - an option unless QQQ has moved 0.3%+ since the open in its direction (since 2026-11-02).
+  - an option unless QQQ has moved 0.3%+ since the open in its direction (since 2026-11-02);
+  - an option where one contract risks more than $375 at its own stop, 1.5x the option budget (since 2026-11-10).
 - Contract: every option idea buys the nearest 1-5 day expiry at the money (since 2026-11-04, `contractLib.nearAtmContract`; `NEAR_ATM_CONTRACTS=false` restores the old choice).
 - Size: options risk 1% at the stop ($250), shares 2% ($500), since 2026-11-02.
 - Profits: an option up over $80 at the bid is sold at once ($50 until 2026-10-30; kept at $80 with half-size options) (shares keep their own exits) (since 2026-10-27, `PROFIT_TAKE_USD`); otherwise an option sells at +50% or the idea's target. An option bought while QQQ is 0.5%+ and SPY 0.25%+ our way since the open skips the +$80 sale and runs to +50%, the target, the stop or 15:45 (since 2026-11-05, `entryRules.letItRun`).

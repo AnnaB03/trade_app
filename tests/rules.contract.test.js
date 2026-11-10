@@ -130,14 +130,14 @@ test("RULE: never more than the 15% position cap, however cheap the risk", () =>
   assert.ok(cheap.contracts * 10.0 * 100 <= ACCOUNT * 0.15 + 1e-6, `${cheap.contracts} contracts at $1,000 exceeds $3,750`);
 });
 
-test("RULE: a same-day trade is refused when one contract risks more than 1.5x the budget; a multi-day one takes one contract", () => {
+test("RULE: an option is refused when one contract risks more than 1.5x the budget — same-day and multi-day alike since 2026-11-10 (owner: 'you proposed a fix so we dont loose as much as MU just lost'; every option is sold by 15:45 since 10-29)", () => {
   const big = { bid: 39.9, ask: 40.0, delta: 0.9 };
-  // $40 contract, delta 0.9, $12 to the stop: about $1,090 a contract, over 1.5x the $500 budget.
+  // $40 contract, delta 0.9, $12 to the stop: about $1,090 a contract, over 1.5x the budget.
   const sameDay = entry.sizeOptionEntry({ accountSize: ACCOUNT, leg: big, entryPrice: 500, invalidation: 488, action: "CALL", strategy: "intraday" });
   assert.equal(sameDay.ok, false);
   const multiDay = entry.sizeOptionEntry({ accountSize: ACCOUNT, leg: big, entryPrice: 500, invalidation: 488, action: "CALL" });
-  assert.equal(multiDay.ok, true);
-  assert.equal(multiDay.contracts, 1);
+  assert.equal(multiDay.ok, false, "a multi-day idea no longer takes one contract whatever it risks (it did until 2026-11-10)");
+  assert.equal(multiDay.hard, "over_budget");
 });
 
 test("RULE: no entry with a spread over 6% of the premium, or one that spends 40% of the loss limit on arrival", () => {
@@ -614,6 +614,19 @@ test("RULE: an option bought with QQQ 0.5%+ and SPY 0.25%+ our way skips the +$8
   assert.match(auto, /idea\.letRun = letItRun\(\{ action: idea\.action, qqqOpen: qd\.open, qqqLast: qd\.last, spyOpen: sd\.open, spyLast: sd\.last \}\)/);
   assert.match(auto, /letRun: idea\.letRun \?\? null/, "saved on the journal row at the buy");
   assert.match(exitSrc, /letRun: Boolean\(pos\.letRun\)/, "read back by the exit check");
+});
+
+test("RULE: no option where one contract risks over 1.5x the option budget at its own stop — 2026-11-10, owner, after MU lost $456", () => {
+  assert.equal(entry.OPTION_ONE_CONTRACT_MAX_X, 1.5);
+  const mu = entry.sizeOptionEntry({ accountSize: 25000, leg: { bid: 21.1, ask: 21.35, delta: -0.52 }, entryPrice: 701.97, invalidation: 712, action: "PUT", strategy: "ai", learning: true });
+  assert.equal(mu.ok, false, "MU 11/10: about $430 at the 20% stop");
+  assert.equal(mu.hard, "over_budget", "a hard refusal, even in learning mode");
+  const amd = entry.sizeOptionEntry({ accountSize: 25000, leg: { bid: 16.3, ask: 16.45, delta: 0.5 }, entryPrice: 505.21, invalidation: 495, action: "CALL", strategy: "ai", learning: true, riskMult: 0.5 });
+  assert.notEqual(amd.hard, "over_budget", "AMD 11/09 at about $330 is under $375; judged on the full budget, not the throttled one");
+  const qqq = entry.sizeOptionEntry({ accountSize: 25000, leg: { bid: 5.5, ask: 5.54, delta: -0.5 }, entryPrice: 670.51, invalidation: 675.5, action: "PUT", strategy: "intraday", learning: true });
+  assert.equal(qqq.ok, true, "a $5.54 contract is fine");
+  const src = fs.readFileSync(path.join(process.cwd(), "app/api/order/autotrade/route.js"), "utf8");
+  assert.match(src, /\(sz\.hard === "under_1" \|\| sz\.hard === "over_budget"\) && !dryRun \? recordShadowEntry/, "refused ones go to the shadow book");
 });
 
 test("RULE: at most 3 open dip positions and 40% of the account in them — 2026-11-09, owner: yes to capping the dip playbook", () => {
