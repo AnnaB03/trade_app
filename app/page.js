@@ -82,7 +82,7 @@ function RealityPanel({ data, symbol }) {
   const { volume: v, news: n, halt: h } = data;
   const toneCls = (t) => t === "warn" ? "down" : t === "ok" || t === "strong" ? "up" : t === "weak" ? "down" : "muted";
   const Row = ({ label, children }) => (
-    <div style={{ display: "grid", gridTemplateColumns: "96px 1fr", gap: 10, padding: "6px 0", alignItems: "baseline" }}>
+    <div style={{ display: "grid", gridTemplateColumns: "96px minmax(0, 1fr)", gap: 10, padding: "6px 0", alignItems: "baseline" }}>
       <span className="label" style={{ margin: 0 }}>{label}</span>
       <div className="mono" style={{ fontSize: 12.5, lineHeight: 1.6 }}>{children}</div>
     </div>
@@ -328,7 +328,7 @@ function Watchlist({ onPick }) {
             : <>{clock.state === "premarket" ? "Premarket" : "After hours"} — regular session closed. Stock quotes may reflect extended trading; option quotes are stale until the open.</>}
         </div>
       )}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
         <span className="label" style={{ margin: 0 }}>
           <span className="live" style={clock?.state === "closed" ? { background: "var(--faint)" } : undefined} />
           {clock?.state === "closed" ? "Market closed · polling paused" : "Live · refreshes every 30s"}
