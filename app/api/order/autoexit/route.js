@@ -8,7 +8,7 @@ import { dailyBars } from "../../historyCache";
 import { markActivity } from "../../activityLib";
 import { accountSize } from "../../accountLib";
 import { notifySold } from "../../notifyLib";
-import { exitConfig, directionOf, heldQuantity, intrinsicAtExpiry, updatePeak, gainFigures, decideProfitExit, decideLevelExit, decideReversalExit, isExpired, carriesOvernight } from "../exitRules";
+import { exitConfig, directionOf, heldQuantity, intrinsicAtExpiry, updatePeak, gainFigures, decideProfitExit, decideLevelExit, decideReversalExit, decideMarketTurnExit, isExpired, carriesOvernight } from "../exitRules";
 
 /* Paper-only auto-EXIT — the other half of autotrade.js. That route only
    ever opens a position; until now, the only thing that could close one was
@@ -67,6 +67,19 @@ async function underlyingDayRange(symbol) {
   } catch {
     return null;
   }
+}
+
+// QQQ's open and last, once per run (the market-turn exit).
+let qqqDayAt = 0, qqqDayValue = null;
+async function qqqDayForExits() {
+  if (qqqDayValue && Date.now() - qqqDayAt < 20000) return qqqDayValue;
+  try {
+    const d = await tradier(`/markets/quotes?symbols=QQQ`);
+    const q = asArray(d?.quotes?.quote)[0];
+    qqqDayValue = { open: Number(q?.open) || null, last: Number(q?.last) || null };
+  } catch { qqqDayValue = { open: null, last: null }; }
+  qqqDayAt = Date.now();
+  return qqqDayValue;
 }
 
 async function optionQuote(occ) {
@@ -429,6 +442,12 @@ async function run(req) {
         carry: carriesOvernight(pos), // exitRules: off since 2026-10-29, every option is sold from 15:45
       });
       if (profitExit && (!exit || profitExit.tag === "take_profit")) exit = profitExit;
+
+      // 1c. The market turned: QQQ back across today's open against an option (exitRules.decideMarketTurnExit).
+      if (!exit && pos.vehicle === "OPTION") {
+        const qd = await qqqDayForExits();
+        exit = decideMarketTurnExit({ vehicle: pos.vehicle, optionType: pos.optionType, qqqOpen: qd.open, qqqLast: qd.last });
+      }
 
       // 2-3. The plan's own target and invalidation. 4. Thesis reversed.
       if (!exit) exit = decideLevelExit({ dir, target: pos.target, invalidation: pos.invalidation, strategy: pos.strategy, underlyingPx, favorableExtreme });

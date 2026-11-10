@@ -519,3 +519,23 @@ export function isExpired(expiration, now = Date.now()) {
   const exp = String(expiration).slice(0, 10);
   return exp < today || (exp === today && mins >= 16 * 60);
 }
+
+/* The market turned (owner, 2026-11-10: "options like INTC we should sell if
+   market turns as soon as possible ... we should automatically sell"). An
+   option is sold at the bid the minute QQQ is back across today's open against
+   it: a call with QQQ under its open, a put with QQQ over it. Every option is
+   bought with QQQ 0.3%+ its way (entryRules.marketWithUs), so this means the
+   whole move it was bought on is gone. Replayed on the real option trades:
+   checked every 5 minutes, -$352 / -$590 by half became +$714 / +$1,192 (234
+   trades); checked every minute on 1-minute QQQ bars, -$3,544 / +$2,712 became
+   +$475 / +$3,076 (218 trades). A pullback test (QQQ 0.3% worse than at the buy)
+   was worse than doing nothing. MARKET_TURN_EXIT=false turns it off. */
+export const marketTurnExitOn = (env = process.env) => env.MARKET_TURN_EXIT !== "false";
+export function decideMarketTurnExit({ vehicle, optionType, qqqOpen, qqqLast, on = marketTurnExitOn() } = {}) {
+  if (!on || vehicle !== "OPTION" || !(qqqOpen > 0) || !(qqqLast > 0)) return null;
+  const move = ((qqqLast - qqqOpen) / qqqOpen) * 100;
+  const turned = optionType === "put" ? move > 0 : move < 0;
+  if (!turned) return null;
+  return { tag: "market_turned", detail: `The market turned: QQQ is ${move >= 0 ? "+" : ""}${move.toFixed(2)}% since the open, back across it against this ${optionType}. Sold at the bid before the loss grows.` };
+}
+

@@ -616,6 +616,19 @@ test("RULE: an option bought with QQQ 0.5%+ and SPY 0.25%+ our way skips the +$8
   assert.match(exitSrc, /letRun: Boolean\(pos\.letRun\)/, "read back by the exit check");
 });
 
+test("RULE: an option is sold when QQQ is back across today's open against it — 2026-11-10, owner: 'we should sell if market turns as soon as possible'", () => {
+  const f = (optionType, qqqOpen, qqqLast) => exits.decideMarketTurnExit({ vehicle: "OPTION", optionType, qqqOpen, qqqLast, on: true });
+  assert.equal(f("put", 668, 671.3)?.tag, "market_turned", "INTC 11/10: a put with QQQ back above its open");
+  assert.equal(f("put", 672, 670), null, "a put while QQQ is still under its open is held");
+  assert.equal(f("call", 662.64, 661)?.tag, "market_turned", "a call with QQQ under its open");
+  assert.equal(f("call", 662.64, 675), null);
+  assert.equal(exits.decideMarketTurnExit({ vehicle: "SHARES", optionType: null, qqqOpen: 668, qqqLast: 671, on: true }), null, "options only");
+  assert.equal(exits.decideMarketTurnExit({ vehicle: "OPTION", optionType: "put", qqqOpen: null, qqqLast: 671, on: true }), null, "no quote: no exit");
+  assert.equal(exits.marketTurnExitOn({ MARKET_TURN_EXIT: "false" }), false);
+  const src = fs.readFileSync(path.join(process.cwd(), "app/api/order/autoexit/route.js"), "utf8");
+  assert.match(src, /if \(!exit && pos\.vehicle === "OPTION"\) \{\s*const qd = await qqqDayForExits\(\);\s*exit = decideMarketTurnExit\(/, "checked every minute after the stops and profit sales");
+});
+
 test("RULE: no option where one contract risks over 1.5x the option budget at its own stop — 2026-11-10, owner, after MU lost $456", () => {
   assert.equal(entry.OPTION_ONE_CONTRACT_MAX_X, 1.5);
   const mu = entry.sizeOptionEntry({ accountSize: 25000, leg: { bid: 21.1, ask: 21.35, delta: -0.52 }, entryPrice: 701.97, invalidation: 712, action: "PUT", strategy: "ai", learning: true });
