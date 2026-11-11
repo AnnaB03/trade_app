@@ -59,6 +59,16 @@ function relinkCancelledClose(matchFn, newOrderId) {
   return true;
 }
 
+/* A hand sale that has not filled stays OPEN with the sale pending (bug fix,
+   2026-11-11): the TSLA 11/13 call was sold by hand at a $5.30 limit above the
+   bid, the row was marked closed with no price, and the broker kept the
+   position with nothing watching it, so it would have been carried overnight.
+   autoexit's pendingExitOrderId check books the fill when it comes, and at
+   15:45 cancels a still-resting sale and sells at the bid. */
+function markPendingHandSale(entry, orderId, body) {
+  updateJournalEntry(entry.id, { pendingExitOrderId: orderId, pendingExitTag: body?.outcome_tag ?? "manual", pendingExitReason: body?.outcome_note || "Sold by hand", pendingSince: new Date().toISOString() });
+}
+
 export async function POST(req) {
   let body;
   try { body = await req.json(); } catch { return NextResponse.json({ error: "JSON body required" }, { status: 400 }); }
@@ -109,7 +119,10 @@ export async function POST(req) {
             // Book the broker's confirmed fill, never the limit we submitted.
             const got = await confirmOrderFill(orderResult?.id ?? null);
             const exitPx = got?.filled ? got.price : null;
-            journalClose(entry, {
+            // Not filled yet (bug fix, 2026-11-11, TSLA): keep the row open with the sale pending,
+            // so autoexit books the real fill, or cancels it and sells at the bid at 15:45.
+            if (exitPx == null && orderResult?.id) { markPendingHandSale(entry, orderResult.id, body); }
+            else journalClose(entry, {
               exitOrderId: orderResult?.id ?? null, exitOrderStatus: got?.filled ? "filled" : (orderResult?.status ?? null),
               exitQuantity: got?.quantity || vet.computed.quantity, exitFillPrice: exitPx,
               exitReason: exitPx != null ? body.outcome_note : `${body.outcome_note} [submitted at $${vet.computed.price} but no fill confirmed yet — P&L left uncomputed rather than booked against the limit]`,
@@ -139,7 +152,8 @@ export async function POST(req) {
             // Book the broker's confirmed fill, never the limit we submitted.
             const got = await confirmOrderFill(orderResult?.id ?? null);
             const exitPx = got?.filled ? got.price : null;
-            journalClose(entry, {
+            if (exitPx == null && orderResult?.id) { markPendingHandSale(entry, orderResult.id, body); }
+            else journalClose(entry, {
               exitOrderId: orderResult?.id ?? null, exitOrderStatus: got?.filled ? "filled" : (orderResult?.status ?? null),
               exitQuantity: got?.quantity || Number(leg.qty) || entry.entryQuantity, exitFillPrice: exitPx,
               exitReason: exitPx != null ? body.outcome_note : `${body.outcome_note} [submitted at $${vet.computed.price} but no fill confirmed yet — P&L left uncomputed rather than booked against the limit]`,

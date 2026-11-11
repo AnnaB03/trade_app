@@ -616,6 +616,15 @@ test("RULE: an option bought with QQQ 0.5%+ and SPY 0.25%+ our way skips the +$8
   assert.match(exitSrc, /letRun: Boolean\(pos\.letRun\)/, "read back by the exit check");
 });
 
+test("BUG 2026-11-11 (TSLA): a hand sale that has not filled keeps the trade open; at 15:45 a resting sale is cancelled and the position sold", () => {
+  const place = fs.readFileSync(path.join(process.cwd(), "app/api/order/place/route.js"), "utf8");
+  const auto = fs.readFileSync(path.join(process.cwd(), "app/api/order/autoexit/route.js"), "utf8");
+  assert.equal((place.match(/if \(exitPx == null && orderResult\?\.id\) \{ markPendingHandSale\(entry, orderResult\.id, body\); \}\s*else journalClose\(entry/g) || []).length, 2, "shares and options alike");
+  assert.match(place, /pendingExitOrderId: orderId/);
+  assert.match(auto, /if \(outcome && !outcome\.dead && !eod\) \{/, "during the day it waits on the fill");
+  assert.match(auto, /if \(outcome && !outcome\.dead && eod && !dryRun\) \{\s*try \{ await tradeFetch\(`\/accounts\/\$\{await accountId\(\)\}\/orders\/\$\{pos\.pendingExitOrderId\}`, \{ method: "DELETE" \}\)/, "from 15:45 it cancels and falls through to the sale");
+});
+
 test("RULE: from 14:00 an option is sold once QQQ is 0.3% off its day's extreme against it — 2026-11-11, owner: 'all needs to be sold if market starts going the other way'", () => {
   assert.equal(exits.FADE_EXIT_FROM_MIN, 14 * 60); assert.equal(exits.FADE_OFF_EXTREME_PCT, 0.3);
   const f = (o) => exits.decideAfternoonFadeExit({ vehicle: "OPTION", on: true, ...o });

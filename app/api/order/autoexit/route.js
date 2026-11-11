@@ -284,9 +284,14 @@ async function run(req) {
           results.push({ symbol: pos.symbol, closed: true, tag: pos.pendingExitTag || "closed", detail: `Close filled at $${outcome.price}`, exitPrice: outcome.price, pnl: booked?.pnl ?? null, instrument: pos.occ ?? pos.symbol, quantity: heldQuantity(pos) });
           continue;
         }
-        if (outcome && !outcome.dead) {
+        if (outcome && !outcome.dead && !eod) {
           results.push({ symbol: pos.symbol, closed: false, reason: `close order ${pos.pendingExitOrderId} still ${outcome.status} — waiting on the fill, not re-submitting` });
           continue;
+        }
+        // From 15:45 a sale that is still resting (a hand sale above the bid) is cancelled,
+        // and the end-of-day check below sells at the bid: nothing is carried by accident (2026-11-11).
+        if (outcome && !outcome.dead && eod && !dryRun) {
+          try { await tradeFetch(`/accounts/${await accountId()}/orders/${pos.pendingExitOrderId}`, { method: "DELETE" }); } catch {}
         }
         // Order died without filling — clear it and let the checks below
         // decide again from scratch.
