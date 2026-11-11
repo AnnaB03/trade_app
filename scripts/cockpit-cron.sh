@@ -26,6 +26,13 @@ ACCOUNT_SIZE="${ACCOUNT_SIZE:-10000}"
 # halts itself; this script only says when the app CANNOT — server down,
 # clock unreadable, health failing — which is the one case the app can't
 # report. At most once per 30 minutes, so a dead afternoon is one message.
+# The topic is kept in ~/.cockpit/ntfy.topic (bug fix, 2026-11-11): this script
+# runs from ~/.cockpit, so "$HERE/../.env.local" pointed at ~/.env.local, which
+# does not exist, and no "dark" alert was ever sent. launchd cannot read the repo
+# under ~/Documents, so the topic is copied here (scripts/install-launchd.sh).
+if [ -z "${NTFY_TOPIC:-}" ] && [ -f "$HERE/ntfy.topic" ]; then
+  NTFY_TOPIC=$(head -1 "$HERE/ntfy.topic" | tr -d '"'"'"' \n')
+fi
 if [ -z "${NTFY_TOPIC:-}" ] && [ -f "$HERE/../.env.local" ]; then
   NTFY_TOPIC=$(grep -E '^NTFY_TOPIC=' "$HERE/../.env.local" | head -1 | cut -d= -f2- | tr -d '"'"'"' ')
 fi
@@ -40,6 +47,9 @@ LOG="${COCKPIT_LOG:-$HOME/Library/Logs/cockpit-autopilot.log}"
 mkdir -p "$(dirname "$LOG")"
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
 log() { echo "$(ts) $*" >> "$LOG"; }
+# "dark <text>": the tick found a gap (the Mac slept or was off). Logged and
+# sent to the phone, whatever the market clock says.
+if [ "${1:-}" = "dark" ]; then log "DARK ${2:-}"; alert "${2:-The Cockpit was dark}"; exit 0; fi
 
 # Only trade while the regular session is open. The broker's own clock decides,
 # not this machine's, so holidays and half-days need no special casing here.

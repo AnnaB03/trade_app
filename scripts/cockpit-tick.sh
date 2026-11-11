@@ -42,6 +42,18 @@ if [ "$now" -ge $((8 * 60 + 40)) ]; then
 fi
 [ "$now" -ge $((9 * 60 + 20)) ] && [ "$now" -lt $((16 * 60)) ] || exit 0
 
+# Was the Cockpit dark? (owner, 2026-11-11: yes to a phone alert.) Each tick in
+# the session notes the time; a gap of more than 3 minutes since the last one
+# means the Mac slept (lid closed on battery, 11/09 and 11/11) or was off, and
+# open positions went unwatched. A sleeping Mac cannot send anything, so the
+# alert goes out on the first tick after it wakes.
+epoch=$(date +%s); last=$(cat "$STATE/lasttick" 2>/dev/null || echo 0)
+echo "$epoch" > "$STATE/lasttick"
+if [ "$now" -ge $((9 * 60 + 31)) ] && [ "$last" -gt 0 ] && [ $((epoch - last)) -gt 180 ] && [ $((epoch - last)) -lt 86400 ]; then
+  gap=$(( (epoch - last) / 60 )); from=$(date -r "$last" '+%H:%M')
+  nohup "$RUN" dark "The Cockpit was dark for $gap minutes ($from to $(date '+%H:%M') ET): the Mac was asleep or off, so open positions were not watched. Keep it plugged in with the lid open." >/dev/null 2>&1 &
+fi
+
 # due <name> <grace-minutes> <slot-minute-of-day>...  -> true once per slot
 due() {
   local name="$1" grace="$2" best=-1 s; shift 2

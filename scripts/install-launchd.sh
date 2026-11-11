@@ -25,6 +25,9 @@ case "${1:-}" in
     mkdir -p "$DEST" "$HOME/Library/LaunchAgents"
     cp "$HERE/cockpit-cron.sh" "$HERE/cockpit-tick.sh" "$HERE/summarize.py" "$DEST/"
     chmod +x "$DEST/cockpit-cron.sh" "$DEST/cockpit-tick.sh"
+    # The phone-alert topic, where launchd can read it (it cannot read ~/Documents).
+    t=$(grep -E '^NTFY_TOPIC=' "$HERE/../.env.local" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"'"'"' ')
+    [ -n "$t" ] && { printf '%s\n' "$t" > "$DEST/ntfy.topic"; chmod 600 "$DEST/ntfy.topic"; }
     cat > "$PLIST" <<PL
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
