@@ -40,6 +40,11 @@ fi
 if [ "$now" -ge $((8 * 60 + 40)) ]; then
   ( r=$(curl -s -m 30 "http://localhost:3000/api/agents?tick=1"); case "$r" in *'"started":["'*) echo "$(date '+%F %T') agents $r" >> "$HOME/Library/Logs/cockpit-autopilot.log";; esac ) &
 fi
+# The public live record (scripts/publish-scoreboard.sh): every 5 minutes from
+# 9:30 to 16:10, so the 15:45 sales and the close are in it. Detached.
+if [ "$now" -ge $((9 * 60 + 30)) ] && [ "$now" -le $((16 * 60 + 10)) ] && [ $((now % 5)) -eq 0 ] && [ -x "$HERE/publish-scoreboard.sh" ]; then
+  nohup "$HERE/publish-scoreboard.sh" >/dev/null 2>&1 &
+fi
 [ "$now" -ge $((9 * 60 + 20)) ] && [ "$now" -lt $((16 * 60)) ] || exit 0
 
 # Was the Cockpit dark? (owner, 2026-11-11: yes to a phone alert.) Each tick in

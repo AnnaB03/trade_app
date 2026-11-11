@@ -23,8 +23,8 @@ ACCT="${ACCT:-10000}"
 case "${1:-}" in
   --install)
     mkdir -p "$DEST" "$HOME/Library/LaunchAgents"
-    cp "$HERE/cockpit-cron.sh" "$HERE/cockpit-tick.sh" "$HERE/summarize.py" "$DEST/"
-    chmod +x "$DEST/cockpit-cron.sh" "$DEST/cockpit-tick.sh"
+    cp "$HERE/cockpit-cron.sh" "$HERE/cockpit-tick.sh" "$HERE/summarize.py" "$HERE/publish-scoreboard.sh" "$DEST/"
+    chmod +x "$DEST/cockpit-cron.sh" "$DEST/cockpit-tick.sh" "$DEST/publish-scoreboard.sh"
     # The phone-alert topic, where launchd can read it (it cannot read ~/Documents).
     t=$(grep -E '^NTFY_TOPIC=' "$HERE/../.env.local" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"'"'"' ')
     [ -n "$t" ] && { printf '%s\n' "$t" > "$DEST/ntfy.topic"; chmod 600 "$DEST/ntfy.topic"; }
