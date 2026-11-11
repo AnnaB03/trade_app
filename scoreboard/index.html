@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cockpit AI Record</title>
+<meta name="description" content="A live, complete record of an AI paper-trading options and stocks: every trade, wins and losses.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500&family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;600&display=swap">
+<style>
+:root{
+  --ground:#EEEBE3; --card:#F8F6F1; --ink:#1A1D1F; --muted:#666B6E; --faint:#9A9C98; --line:#D9D5CB;
+  --accent:#1F4A5C; --up:#2F6B47; --down:#A2412F; --warn-bg:#F3E7C8; --warn-ink:#6B5113;
+  --serif:'Fraunces',Georgia,serif; --sans:'IBM Plex Sans',system-ui,-apple-system,sans-serif; --mono:'IBM Plex Mono',ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --ground:#141719; --card:#1C2023; --ink:#ECEAE4; --muted:#A3A7A8; --faint:#6F7477; --line:#2D3235;
+  --accent:#7FB3C8; --up:#6CC08F; --down:#E58A74; --warn-bg:#3A3220; --warn-ink:#E8CF8E; } }
+:root[data-theme="dark"]{
+  --ground:#141719; --card:#1C2023; --ink:#ECEAE4; --muted:#A3A7A8; --faint:#6F7477; --line:#2D3235;
+  --accent:#7FB3C8; --up:#6CC08F; --down:#E58A74; --warn-bg:#3A3220; --warn-ink:#E8CF8E; }
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);line-height:1.5}
+.wrap{max-width:760px;margin:0 auto;padding-block:28px 64px;padding-inline:16px;display:flex;flex-direction:column;gap:18px}
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
+h1{font-family:var(--serif);font-weight:500;font-size:clamp(28px,6vw,40px);line-height:1.1;margin:4px 0 0;text-wrap:balance}
+.notice{background:var(--warn-bg);color:var(--warn-ink);border-radius:6px;padding:10px 14px;font-size:13.5px}
+.big{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:12px 14px}
+.stat .k{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint)}
+.stat .v{font-family:var(--mono);font-size:22px;font-weight:600;margin-top:2px;font-variant-numeric:tabular-nums}
+.up{color:var(--up)} .down{color:var(--down)} .muted{color:var(--muted)}
+section h2{font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);font-weight:600;margin:6px 0 8px}
+.chart{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:10px}
+.chart svg{display:block;width:100%;height:auto}
+.list{background:var(--card);border:1px solid var(--line);border-radius:6px}
+.row{display:grid;grid-template-columns:1fr auto;gap:4px 12px;padding:10px 14px;border-bottom:1px solid var(--line)}
+.row:last-child{border-bottom:0}
+.row .t{font-weight:600} .row .d{font-family:var(--mono);font-size:12.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+.row .p{font-family:var(--mono);font-weight:600;font-variant-numeric:tabular-nums;text-align:right;align-self:center}
+.empty{padding:14px;color:var(--muted);font-size:14px}
+footer{font-size:12.5px;color:var(--faint)}
+</style>
+</head>
+<body>
+<main class="wrap">
+  <header>
+    <div class="eyebrow">Live record · updated every few minutes in market hours</div>
+    <h1>Cockpit AI</h1>
+  </header>
+  <div class="notice" id="notice">Paper trading: simulated money at real market prices. Not real trades, and not investment advice.</div>
+  <div class="big" id="big"></div>
+  <section><h2>Account balance</h2><div class="chart" id="chart"></div></section>
+  <section><h2 id="todayh">Today</h2><div class="list" id="today"></div></section>
+  <section><h2>Open now</h2><div class="list" id="open"></div></section>
+  <section><h2>Every day</h2><div class="list" id="days"></div></section>
+  <footer id="foot"></footer>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const usd = (x, sign) => (sign && x > 0 ? "+" : x < 0 ? "−" : "") + "$" + Math.abs(x).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+const cls = (x) => (x > 0 ? "up" : x < 0 ? "down" : "muted");
+const nice = (d) => new Date(d + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
+function row(title, detail, pnl) {
+  return `<div class="row"><div><div class="t">${title}</div><div class="d">${detail}</div></div><div class="p ${pnl == null ? "muted" : cls(pnl)}">${pnl == null ? "open" : usd(pnl, true)}</div></div>`;
+}
+function chart(b) {
+  const pts = [{ day: b.start, balance: b.startBalance }, ...b.days];
+  const W = 700, H = 200, P = { l: 54, r: 12, t: 12, b: 26 };
+  const ys = pts.map((p) => p.balance), lo = Math.min(...ys, b.startBalance), hi = Math.max(...ys, b.startBalance);
+  const pad = Math.max(50, (hi - lo) * 0.15), y0 = lo - pad, y1 = hi + pad;
+  const x = (i) => P.l + (pts.length < 2 ? 0 : (i * (W - P.l - P.r)) / (pts.length - 1));
+  const y = (v) => P.t + (H - P.t - P.b) * (1 - (v - y0) / (y1 - y0));
+  const line = pts.map((p, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(p.balance).toFixed(1)}`).join("");
+  const area = `${line}L${x(pts.length - 1).toFixed(1)},${(H - P.b).toFixed(1)}L${P.l},${(H - P.b).toFixed(1)}Z`;
+  const ticks = [y0 + pad, (y0 + y1) / 2, y1 - pad].map((v) => `<line x1="${P.l}" x2="${W - P.r}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)"/><text x="${P.l - 6}" y="${y(v) + 4}" text-anchor="end" font-size="11" fill="var(--faint)" font-family="var(--mono)">${usd(v)}</text>`).join("");
+  const base = `<line x1="${P.l}" x2="${W - P.r}" y1="${y(b.startBalance)}" y2="${y(b.startBalance)}" stroke="var(--faint)" stroke-dasharray="4 4"/>`;
+  const last = pts[pts.length - 1], up = last.balance >= b.startBalance;
+  const labels = [0, pts.length - 1].filter((v, i, a) => a.indexOf(v) === i).map((i) => `<text x="${x(i)}" y="${H - 6}" text-anchor="${i ? "end" : "start"}" font-size="11" fill="var(--faint)" font-family="var(--mono)">${nice(pts[i].day)}</text>`).join("");
+  $("chart").innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Account balance by day">${ticks}${base}<path d="${area}" fill="${up ? "var(--up)" : "var(--down)"}" opacity=".12"/><path d="${line}" fill="none" stroke="${up ? "var(--up)" : "var(--down)"}" stroke-width="2.2"/><circle cx="${x(pts.length - 1)}" cy="${y(last.balance)}" r="4" fill="${up ? "var(--up)" : "var(--down)"}"/>${labels}</svg>`;
+}
+function render(b) {
+  const change = b.balance - b.startBalance, pct = (change / b.startBalance) * 100;
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+  const td = b.days.find((d) => d.day === today);
+  $("big").innerHTML = [
+    ["Balance", usd(b.balance), ""],
+    [`Since ${nice(b.start)}`, `${usd(change, true)} <span style="font-size:14px">(${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%)</span>`, cls(change)],
+    ["Today", td ? usd(td.pnl, true) : "$0", td ? cls(td.pnl) : "muted"],
+    ["Win rate", b.closedTrades ? `${Math.round((b.won / b.closedTrades) * 100)}% <span style="font-size:14px" class="muted">of ${b.closedTrades}</span>` : "–", ""],
+  ].map(([k, v, c]) => `<div class="stat"><div class="k">${k}</div><div class="v ${c}">${v}</div></div>`).join("");
+  chart(b);
+  const what = (t) => `${t.symbol} ${t.kind === "shares" ? "shares" : t.kind}`;
+  const detail = (t) => `${t.kind === "shares" ? `${t.quantity} sh` : `${t.quantity}× ${t.contract}`} · bought ${t.bought} at $${Number(t.buyPrice).toFixed(2)}` + (t.open ? "" : ` · sold ${t.sold} at $${Number(t.sellPrice).toFixed(2)} (${t.why})`);
+  const todays = b.trades.filter((t) => !t.open && t.soldDay === today);
+  $("todayh").textContent = td ? `Today · ${td.trades} trades · ${td.won} won` : "Today";
+  $("today").innerHTML = todays.length ? todays.map((t) => row(what(t), detail(t), t.pnl)).join("") : `<div class="empty">No closed trades yet today.</div>`;
+  const open = b.trades.filter((t) => t.open);
+  $("open").innerHTML = open.length ? open.map((t) => row(what(t), detail(t), null)).join("") : `<div class="empty">Nothing open.</div>`;
+  $("days").innerHTML = b.days.length ? [...b.days].reverse().map((d) => row(nice(d.day), `${d.trades} trades · ${d.won} won · balance ${usd(d.balance)}`, d.pnl)).join("") : `<div class="empty">No trades yet.</div>`;
+  $("notice").textContent = b.note;
+  $("foot").textContent = `Started ${nice(b.start)} with ${usd(b.startBalance)} of paper money. Every trade is listed, wins and losses. Last update ${new Date(b.generatedAt).toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })} ET.`;
+}
+async function load() {
+  try { const r = await fetch("data.json?t=" + Date.now(), { cache: "no-store" }); render(await r.json()); }
+  catch { $("big").innerHTML = `<div class="stat">The record could not be loaded. Try again in a minute.</div>`; }
+}
+load(); setInterval(load, 120000);
+</script>
+</body>
+</html>
