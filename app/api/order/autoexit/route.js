@@ -7,8 +7,8 @@ import { journalClose } from "../../journalLib";
 import { dailyBars } from "../../historyCache";
 import { markActivity } from "../../activityLib";
 import { accountSize } from "../../accountLib";
-import { notifySold } from "../../notifyLib";
-import { exitConfig, directionOf, heldQuantity, intrinsicAtExpiry, updatePeak, gainFigures, decideProfitExit, decideLevelExit, decideReversalExit, decideMarketTurnExit, isExpired, carriesOvernight } from "../exitRules";
+import { notifySold, notify } from "../../notifyLib";
+import { exitConfig, directionOf, heldQuantity, intrinsicAtExpiry, updatePeak, gainFigures, decideProfitExit, decideLevelExit, decideReversalExit, decideMarketTurnExit, decideAfternoonFadeExit, isExpired, carriesOvernight } from "../exitRules";
 
 /* Paper-only auto-EXIT — the other half of autotrade.js. That route only
    ever opens a position; until now, the only thing that could close one was
@@ -69,6 +69,15 @@ async function underlyingDayRange(symbol) {
   }
 }
 
+// One loud phone alert per side per day when the afternoon fade starts selling (each sale also gets its own).
+const fadeAlerted = new Set();
+function alertFadeOnce(optionType, detail) {
+  const key = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" }) + ":" + optionType;
+  if (fadeAlerted.has(key)) return;
+  fadeAlerted.add(key);
+  notify(`Market turning: selling ${optionType === "put" ? "puts" : "calls"}`, detail, { priority: "high", tags: ["warning"] }).catch(() => {});
+}
+
 // QQQ's open and last, once per run (the market-turn exit).
 let qqqDayAt = 0, qqqDayValue = null;
 async function qqqDayForExits() {
@@ -76,7 +85,7 @@ async function qqqDayForExits() {
   try {
     const d = await tradier(`/markets/quotes?symbols=QQQ`);
     const q = asArray(d?.quotes?.quote)[0];
-    qqqDayValue = { open: Number(q?.open) || null, last: Number(q?.last) || null };
+    qqqDayValue = { open: Number(q?.open) || null, last: Number(q?.last) || null, high: Number(q?.high) || null, low: Number(q?.low) || null };
   } catch { qqqDayValue = { open: null, last: null }; }
   qqqDayAt = Date.now();
   return qqqDayValue;
@@ -447,6 +456,12 @@ async function run(req) {
       if (!exit && pos.vehicle === "OPTION") {
         const qd = await qqqDayForExits();
         exit = decideMarketTurnExit({ vehicle: pos.vehicle, optionType: pos.optionType, qqqOpen: qd.open, qqqLast: qd.last });
+        // 1d. The afternoon fade: from 14:00, QQQ 0.3% off its day's extreme against the option (exitRules.decideAfternoonFadeExit).
+        if (!exit) {
+          const etNow = new Date().toLocaleTimeString("en-GB", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit" }).split(":").map(Number);
+          exit = decideAfternoonFadeExit({ vehicle: pos.vehicle, optionType: pos.optionType, nowEtMinutes: etNow[0] * 60 + etNow[1], qqqHigh: qd.high, qqqLow: qd.low, qqqLast: qd.last });
+          if (exit && !dryRun) alertFadeOnce(pos.optionType, exit.detail);
+        }
       }
 
       // 2-3. The plan's own target and invalidation. 4. Thesis reversed.

@@ -539,3 +539,23 @@ export function decideMarketTurnExit({ vehicle, optionType, qqqOpen, qqqLast, on
   return { tag: "market_turned", detail: `The market turned: QQQ is ${move >= 0 ? "+" : ""}${move.toFixed(2)}% since the open, back across it against this ${optionType}. Sold at the bid before the loss grows.` };
 }
 
+/* The afternoon fade (owner, 2026-11-11, after selling every call by hand as
+   the market slipped: "we need to have some kind of alert to identify that all
+   needs to be sold if market starts going the other way"). From 14:00 ET an
+   option is sold at the bid once QQQ is FADE_OFF_EXTREME_PCT off its day's
+   extreme against it: a call with QQQ that far under its high, a put that far
+   over its low. Replayed minute by minute on 221 real option trades on top of
+   the live rules: +$1,312 / +$1,680 by half became +$1,355 / +$4,774. The same
+   line all day was worse (-$4,787 / +$4,425): a morning pullback is noise, an
+   afternoon one tends to run into the close. AFTERNOON_FADE_EXIT=false turns it off. */
+export const FADE_EXIT_FROM_MIN = 14 * 60, FADE_OFF_EXTREME_PCT = 0.3;
+export const afternoonFadeExitOn = (env = process.env) => env.AFTERNOON_FADE_EXIT !== "false";
+export function decideAfternoonFadeExit({ vehicle, optionType, nowEtMinutes, qqqHigh, qqqLow, qqqLast, on = afternoonFadeExitOn() } = {}) {
+  if (!on || vehicle !== "OPTION" || !(nowEtMinutes >= FADE_EXIT_FROM_MIN) || !(qqqLast > 0)) return null;
+  const off = optionType === "put"
+    ? (qqqLow > 0 ? ((qqqLast - qqqLow) / qqqLow) * 100 : null)
+    : (qqqHigh > 0 ? ((qqqHigh - qqqLast) / qqqHigh) * 100 : null);
+  if (!(off >= FADE_OFF_EXTREME_PCT)) return null;
+  return { tag: "afternoon_fade", detail: `Afternoon fade: QQQ is ${off.toFixed(2)}% off its day's ${optionType === "put" ? "low" : "high"} after 14:00, so this ${optionType} is sold before the slide runs into the close.` };
+}
+

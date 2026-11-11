@@ -616,6 +616,20 @@ test("RULE: an option bought with QQQ 0.5%+ and SPY 0.25%+ our way skips the +$8
   assert.match(exitSrc, /letRun: Boolean\(pos\.letRun\)/, "read back by the exit check");
 });
 
+test("RULE: from 14:00 an option is sold once QQQ is 0.3% off its day's extreme against it — 2026-11-11, owner: 'all needs to be sold if market starts going the other way'", () => {
+  assert.equal(exits.FADE_EXIT_FROM_MIN, 14 * 60); assert.equal(exits.FADE_OFF_EXTREME_PCT, 0.3);
+  const f = (o) => exits.decideAfternoonFadeExit({ vehicle: "OPTION", on: true, ...o });
+  assert.equal(f({ optionType: "call", nowEtMinutes: 14 * 60 + 6, qqqHigh: 695.57, qqqLow: 687, qqqLast: 693.4 })?.tag, "afternoon_fade", "11/11 14:06: QQQ 0.31% under its high");
+  assert.equal(f({ optionType: "call", nowEtMinutes: 13 * 60 + 50, qqqHigh: 695.57, qqqLow: 687, qqqLast: 693.4 }), null, "not before 14:00");
+  assert.equal(f({ optionType: "call", nowEtMinutes: 14 * 60 + 30, qqqHigh: 695.57, qqqLow: 687, qqqLast: 694.5 }), null, "0.15% off is held");
+  assert.equal(f({ optionType: "put", nowEtMinutes: 14 * 60 + 30, qqqHigh: 680, qqqLow: 670, qqqLast: 672.1 })?.tag, "afternoon_fade", "a put with QQQ 0.31% over its low");
+  assert.equal(exits.decideAfternoonFadeExit({ vehicle: "SHARES", optionType: null, nowEtMinutes: 900, qqqHigh: 700, qqqLow: 690, qqqLast: 690, on: true }), null, "options only");
+  assert.equal(exits.afternoonFadeExitOn({ AFTERNOON_FADE_EXIT: "false" }), false);
+  const src = fs.readFileSync(path.join(process.cwd(), "app/api/order/autoexit/route.js"), "utf8");
+  assert.match(src, /exit = decideAfternoonFadeExit\(\{ vehicle: pos\.vehicle, optionType: pos\.optionType, nowEtMinutes:/);
+  assert.match(src, /alertFadeOnce\(pos\.optionType, exit\.detail\)/, "one loud phone alert when it starts");
+});
+
 test("RULE: an option is sold when QQQ is back across today's open against it — 2026-11-10, owner: 'we should sell if market turns as soon as possible'", () => {
   const f = (optionType, qqqOpen, qqqLast) => exits.decideMarketTurnExit({ vehicle: "OPTION", optionType, qqqOpen, qqqLast, on: true });
   assert.equal(f("put", 668, 671.3)?.tag, "market_turned", "INTC 11/10: a put with QQQ back above its open");
