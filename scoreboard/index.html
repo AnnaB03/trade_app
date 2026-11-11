@@ -24,6 +24,7 @@ body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
 .wrap{max-width:760px;margin:0 auto;padding-block:28px 64px;padding-inline:16px;display:flex;flex-direction:column;gap:18px}
 .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
 h1{font-family:var(--serif);font-weight:500;font-size:clamp(28px,6vw,40px);line-height:1.1;margin:4px 0 0;text-wrap:balance}
+.about{color:var(--muted);font-size:15px;margin:10px 0 0;max-width:62ch}
 .notice{background:var(--warn-bg);color:var(--warn-ink);border-radius:6px;padding:10px 14px;font-size:13.5px}
 .big{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
 .stat{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:12px 14px}
@@ -47,6 +48,7 @@ footer{font-size:12.5px;color:var(--faint)}
   <header>
     <div class="eyebrow">Live record · updated every few minutes in market hours</div>
     <h1>Cockpit AI</h1>
+    <p class="about">An AI trading experiment. Each day an AI reads the market and the news and picks trades in options and stocks; tested rules decide when to buy and when to sell. Every trade appears here as it happens, wins and losses alike.</p>
   </header>
   <div class="notice" id="notice">Paper trading: simulated money at real market prices. Not real trades, and not investment advice.</div>
   <div class="big" id="big"></div>
