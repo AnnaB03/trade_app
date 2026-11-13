@@ -707,6 +707,16 @@ test("BUG 2026-11-05: a stale delta does not size an at-the-money option — NVD
   assert.match(src, /saneDelta\(\{ delta: idea\.leg\.delta[\s\S]{0,900}sizeOptionEntry\(\{/, "fixed before sizing, and the resting stop reads the same leg");
 });
 
+test("RULE: with no expiry 1-5 days out (a Friday for weekly-only stocks), the nearest up to 7 days — 2026-11-13, owner: yes", async () => {
+  const c = await import("../app/api/contractLib.js");
+  assert.equal(c.NEAR_DTE_FALLBACK_MAX, 7);
+  const today = "2026-11-13";
+  const dte = (e) => Math.round((Date.parse(e + "T00:00:00Z") - Date.parse(today + "T00:00:00Z")) / 86400000);
+  assert.deepEqual(c.nearExpiryOrder(["2026-11-13", "2026-11-20", "2026-11-27", "2026-12-04"], dte), ["2026-11-20"], "HOOD on a Friday: next Friday, not 12/04");
+  assert.deepEqual(c.nearExpiryOrder(["2026-11-13", "2026-11-16", "2026-11-18", "2026-11-20"], dte), ["2026-11-16", "2026-11-18"], "QQQ: the 1-5 day ones only");
+  assert.deepEqual(c.nearExpiryOrder(["2026-11-13", "2026-12-04"], dte), [], "nothing within a week: the old choice");
+});
+
 test("RULE: every option idea buys the nearest 1-5 day expiry at the money — 2026-11-04, owner: 'lets test and build it if it would make sense'", async () => {
   const c = await import("../app/api/contractLib.js");
   assert.equal(c.NEAR_DTE_MIN, 1); assert.equal(c.NEAR_DTE_MAX, 5);

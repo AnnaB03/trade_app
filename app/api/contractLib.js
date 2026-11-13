@@ -74,13 +74,24 @@ export function pickNearAtm(options, { type, price, maxCost }) {
     .sort((a, b) => Math.abs(Number(a.o.strike) - price) - Math.abs(Number(b.o.strike) - price));
   return fits[0] || null;
 }
+/* Fridays (owner, 2026-11-13: yes): a stock with only Friday options has none
+   1-5 days out on a Friday (today's are excluded and the next is 7 days away),
+   so the rule fell back to the model's own 3-4 week contract (HOOD 12/11 $81,
+   MRVL and QCOM 12/04, 11/13). The 1-5 day expiries come first; when there are
+   none, the nearest up to NEAR_DTE_FALLBACK_MAX days. */
+export const NEAR_DTE_FALLBACK_MAX = 7;
+export function nearExpiryOrder(expirations, dte) {
+  const all = [...new Set(expirations || [])].sort();
+  const near = all.filter((e) => dte(e) >= NEAR_DTE_MIN && dte(e) <= NEAR_DTE_MAX);
+  return near.length ? near : all.filter((e) => dte(e) > NEAR_DTE_MAX && dte(e) <= NEAR_DTE_FALLBACK_MAX);
+}
 export async function nearAtmContract(symbol, type, { price, accountSize }) {
   try {
     const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
     const dte = (e) => Math.round((Date.parse(e + "T00:00:00Z") - Date.parse(today + "T00:00:00Z")) / 86400000);
     const ex = await tradier(`/markets/options/expirations?symbol=${encodeURIComponent(symbol)}&includeAllRoots=true`, { timeoutMs: 8000 });
-    // Nearest first: the replay bought the first expiry 1+ days out.
-    const exps = asArray(ex?.expirations?.date).filter((e) => dte(e) >= NEAR_DTE_MIN && dte(e) <= NEAR_DTE_MAX).sort();
+    // Nearest first: the replay bought the first expiry 1+ days out (nearExpiryOrder).
+    const exps = nearExpiryOrder(asArray(ex?.expirations?.date), dte);
     for (const exp of exps) {
       const cd = await tradier(`/markets/options/chains?symbol=${encodeURIComponent(symbol)}&expiration=${encodeURIComponent(exp)}&greeks=true`, { timeoutMs: 9000 });
       const c = pickNearAtm(cd?.options?.option, { type, price, maxCost: accountSize * OPTION_HARD_PCT });
