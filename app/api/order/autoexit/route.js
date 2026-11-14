@@ -8,7 +8,7 @@ import { dailyBars } from "../../historyCache";
 import { markActivity } from "../../activityLib";
 import { accountSize } from "../../accountLib";
 import { notifySold, notify } from "../../notifyLib";
-import { exitConfig, directionOf, heldQuantity, intrinsicAtExpiry, updatePeak, gainFigures, decideProfitExit, decideLevelExit, decideReversalExit, decideMarketTurnExit, decideAfternoonFadeExit, isExpired, carriesOvernight } from "../exitRules";
+import { exitConfig, directionOf, heldQuantity, intrinsicAtExpiry, updatePeak, gainFigures, decideProfitExit, decideLevelExit, decideReversalExit, decideMarketTurnExit, decideAfternoonFadeExit, letRunOn, isExpired, carriesOvernight } from "../exitRules";
 
 /* Paper-only auto-EXIT — the other half of autotrade.js. That route only
    ever opens a position; until now, the only thing that could close one was
@@ -452,7 +452,7 @@ async function run(req) {
         vehicle: pos.vehicle, closeByEod: pos.closeByEod, eod,
         gainPct, gainUsd, peakGainPct, peakGainUsd, peakMark, entryPremium, markNow,
         stopPct: pos.stopPct ?? null, lossGainPct: lossFig.gainPct, lossGainUsd: lossFig.gainUsd,
-        letRun: Boolean(pos.letRun), // bought with the market our way: no +$80 quick sale (entryRules.letItRun)
+        letRun: letRunOn() && Boolean(pos.letRun), // let it run: off since 2026-11-13 (exitRules.letRunOn); every option takes the +$80 sale
         carry: carriesOvernight(pos), // exitRules: off since 2026-10-29, every option is sold from 15:45
       });
       if (profitExit && (!exit || profitExit.tag === "take_profit")) exit = profitExit;

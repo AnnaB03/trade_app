@@ -597,6 +597,13 @@ test("BUG 2026-11-02: a dip idea is traded once, within 15 minutes of being writ
   assert.equal(entry.dipIdeaRefused({ createdAt: "2026-11-02T18:15:00Z", now }), null, "a fresh dip idea trades");
 });
 
+test("RULE: let it run is OFF — every option takes the +$80 sale again — 2026-11-13, owner: 'Lets turn it off, I agree'", () => {
+  assert.equal(exits.letRunOn({}), false, "off by default");
+  assert.equal(exits.letRunOn({ LET_RUN: "true" }), true, "LET_RUN=true brings it back");
+  const src = fs.readFileSync(path.join(process.cwd(), "app/api/order/autoexit/route.js"), "utf8");
+  assert.match(src, /letRun: letRunOn\(\) && Boolean\(pos\.letRun\)/);
+});
+
 test("RULE: an option bought with QQQ 0.5%+ and SPY 0.25%+ our way skips the +$80 sale — 2026-11-05, owner: 'when market moves this much we remove the +80 rule and let it rock'", () => {
   assert.equal(entry.LET_RUN_QQQ_PCT, 0.5); assert.equal(entry.LET_RUN_SPY_PCT, 0.25);
   assert.equal(entry.letItRun({ action: "PUT", qqqOpen: 688.43, qqqLast: 658.8, spyOpen: 765.5, spyLast: 747.13 }).ok, true, "11/05: QQQ -4.3%, SPY -2.4%, a put lets it run");
@@ -613,7 +620,7 @@ test("RULE: an option bought with QQQ 0.5%+ and SPY 0.25%+ our way skips the +$8
   const exitSrc = fs.readFileSync(path.join(process.cwd(), "app/api/order/autoexit/route.js"), "utf8");
   assert.match(auto, /idea\.letRun = letItRun\(\{ action: idea\.action, qqqOpen: qd\.open, qqqLast: qd\.last, spyOpen: sd\.open, spyLast: sd\.last \}\)/);
   assert.match(auto, /letRun: idea\.letRun \?\? null/, "saved on the journal row at the buy");
-  assert.match(exitSrc, /letRun: Boolean\(pos\.letRun\)/, "read back by the exit check");
+  assert.match(exitSrc, /letRun: letRunOn\(\) && Boolean\(pos\.letRun\)/, "read back by the exit check, only while LET_RUN=true");
 });
 
 test("BUG 2026-11-11 (TSLA): a hand sale that has not filled keeps the trade open; at 15:45 a resting sale is cancelled and the position sold", () => {

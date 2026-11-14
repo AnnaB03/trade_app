@@ -291,6 +291,14 @@ export const profitTakeUsd = (env = process.env) => {
 };
 export const profitExitMode = (env = process.env) => (env.PROFIT_EXITS === "legacy" ? "legacy" : "target50");
 
+/* Let it run is OFF since 2026-11-13 (owner: "Lets turn it off, I agree").
+   Live, the 26 let-run option trades since 11/05 made -$1,365 under the rules
+   against +$76 with the plain +$80 sale (better or equal on 5 of 6 days; the
+   performance analyst found the same, 17 trades -11.9R vs +1.3R). The October
+   replay that favoured it was chosen in hindsight. The flag is still decided
+   and saved on each row (entryRules.letItRun) so it can be scored; it no
+   longer skips the +$80 sale unless LET_RUN=true. */
+export const letRunOn = (env = process.env) => env.LET_RUN === "true";
 export function decideProfitExit(cfg, {
   vehicle, closeByEod = false, eod = false, nowEtMinutes = etMinutes(),
   gainPct, gainUsd, peakGainPct, peakGainUsd, peakMark, entryPremium, markNow,
