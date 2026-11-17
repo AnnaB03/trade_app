@@ -268,6 +268,14 @@ export const tooEarlyForOption = (etMinutes) => Number(etMinutes) < OPTION_FIRST
 // Stop -1% since 2026-10-29 (owner: "lets drop the stop to 1%"; it was -1.5%).
 // Tested: -1%: -$712 (46% won) then +$516 (58%); -1.5%: -$398 (54%) then +$577 (63%).
 export const DIP_PCT = 1, DIP_TARGET_PCT = 1, DIP_STOP_PCT = 1;
+/* The dip's stop and target, from the price actually paid (bug fix, 2026-11-17):
+   they were set at the idea's price, and an order that went in lower kept them,
+   so MARA (idea $6.80, bought $6.76) had its -1% stop 0.4% under the buy. */
+export function dipLevels(paid) {
+  const p = Number(paid);
+  if (!(p > 0)) return null;
+  return { stop: Math.round(p * (1 - DIP_STOP_PCT / 100) * 100) / 100, target: Math.round(p * (1 + DIP_TARGET_PCT / 100) * 100) / 100 };
+}
 /* A dip idea is traded once, within DIP_IDEA_MAX_MIN of being written (bug fix,
    2026-11-02): after the first position closed and the 30-minute re-buy wait
    passed, the same morning idea was bought again hours later with its old stop
@@ -284,12 +292,16 @@ export function dipIdeaRefused({ createdAt, now = Date.now(), alreadyTraded = fa
    (owner, 2026-11-04, "no dip buys while QQQ is 0.5%+ below its high"). On 32
    days of 5-minute bars, dips bought while QQQ was that far off its high lost
    in both halves: -$442, then -$341 (162 trades); 11/04's dips went 3 for 10.
-   SPY stands in when QQQ's quote is missing. Returns null when it cannot tell. */
-export const DIP_QQQ_OFF_HIGH_PCT = 0.5;
-export function dipMarketOffHigh({ indexLast, indexHigh } = {}) {
+   SPY stands in when QQQ's quote is missing. Returns null when it cannot tell.
+   Bug fix (2026-11-17): SPY moves about two-thirds as far as QQQ, so the same
+   0.5% let SPCX's dip through at 10:10 with QQQ 0.64-0.73% off its high (SPY
+   0.39-0.46%). SPY's line is DIP_SPY_OFF_HIGH_PCT. */
+export const DIP_QQQ_OFF_HIGH_PCT = 0.5, DIP_SPY_OFF_HIGH_PCT = 0.35;
+export function dipMarketOffHigh({ indexLast, indexHigh, index = "QQQ" } = {}) {
   if (!(indexLast > 0) || !(indexHigh > 0)) return null;
   const offPct = (indexHigh - indexLast) / indexHigh * 100;
-  return { offPct, refused: offPct >= DIP_QQQ_OFF_HIGH_PCT };
+  const limitPct = index === "SPY" ? DIP_SPY_OFF_HIGH_PCT : DIP_QQQ_OFF_HIGH_PCT;
+  return { offPct, limitPct, index, refused: offPct >= limitPct };
 }
 /* A cap on the dip playbook (owner, 2026-11-09: "yes" to capping it). On
    11/02, 11/03, 11/06 and 11/09 it bought 7-9 share positions in one sweep at

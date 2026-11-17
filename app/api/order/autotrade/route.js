@@ -14,7 +14,7 @@ import {
   payPrice, sizeOptionEntry, SAME_DAY, MIN_CONVICTION, MIN_REWARD_RISK, MAX_SYMBOL_EXPOSURE_PCT,
   MAX_SPREAD_SHARE_OF_LOSS, MAX_SPREAD_PCT_OF_PREMIUM, LAST_FLAT_BY_CLOSE_ENTRY_MIN, REENTRY_COOLDOWN_MIN,
   MAX_ENTRIES_PER_SYMBOL_DAY, RISK_PER_TRADE_PCT as INTRADAY_RISK_PCT, isWatchOnly, entriesAllowed,
-  learningMode, stackedWarnings, againstMarket, marketWithUs, letItRun, dipCapRefused, saneDelta, dipIdeaRefused, dipMarketOffHigh, DIP_QQQ_OFF_HIGH_PCT, tooEarlyForOption, MARKET_WITH_US_PCT, tooEarlyToEnter, dipSignal, DIP_PCT, DIP_TARGET_PCT, DIP_STOP_PCT, lateEntryRefused, LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY, setupVoid, entryArm, confirmedBreak, CONFIRM_BARS,
+  learningMode, stackedWarnings, againstMarket, marketWithUs, letItRun, dipCapRefused, saneDelta, dipIdeaRefused, dipMarketOffHigh, dipLevels, tooEarlyForOption, MARKET_WITH_US_PCT, tooEarlyToEnter, dipSignal, DIP_PCT, DIP_TARGET_PCT, DIP_STOP_PCT, lateEntryRefused, LEARNING_MAX_ENTRIES_PER_SYMBOL_DAY, setupVoid, entryArm, confirmedBreak, CONFIRM_BARS,
   fromEarlierSession, PLAYED_OUT_EXITS, countsAsEntry, etDate, expiresToday, isFade, fadeLimitReached, flipTooSoon, flipAfterStop, rebuyTooSoon, rebuyCheck, ideaCapReached, bothSidesOpen, samePlaybookPosition,
 } from "../entryRules";
 import { optionStopPct, profileFor } from "../../swingLib";
@@ -23,7 +23,7 @@ import { appendIdea } from "../../store";
 import { selectionVerdict } from "../../selectionLib";
 import { markActivity } from "../../activityLib";
 import { recordShadowEntry } from "../../shadowLib";
-import { shortDatedContract, liquidAlternative, spreadPct, SWITCH_SPREAD_PCT, nearAtmContract, nearAtmEnabled, NEAR_MAX_SPREAD_PCT } from "../../contractLib";
+import { shortDatedContract, liquidAlternative, spreadPct, SWITCH_SPREAD_PCT, nearAtmContract, nearAtmEnabled, NEAR_MAX_SPREAD_PCT, needsNearAtmRetry } from "../../contractLib";
 import { tradingHalt } from "../../riskLib";
 import { accountSize } from "../../accountLib";
 import { closedTrades, playbookVerdicts, edgeRiskMultiplier } from "../../edgeLib";
@@ -358,15 +358,19 @@ async function dayQuote(symbol) {
   }
 }
 
+// The entry-time near-term re-pick, per idea: when it was tried and what it found.
+const nearRetryAt = new Map();
+
 // QQQ's day quote, shared by every idea in one pass (30 seconds).
 let qqqDayAt = 0, qqqDayValue = null;
 async function qqqDayCached() {
-  if (!qqqDayValue || Date.now() - qqqDayAt > 30000) { qqqDayValue = await dayQuote("QQQ"); qqqDayAt = Date.now(); }
+  // A failed quote is not kept: the next idea asks again rather than falling back to SPY for 30 seconds (2026-11-17).
+  if (!qqqDayValue || !(qqqDayValue.last > 0) || Date.now() - qqqDayAt > 30000) { qqqDayValue = await dayQuote("QQQ"); qqqDayAt = Date.now(); }
   return qqqDayValue;
 }
 let spyDayAt = 0, spyDayValue = null;
 async function spyDayCached() {
-  if (!spyDayValue || Date.now() - spyDayAt > 30000) { spyDayValue = await dayQuote("SPY"); spyDayAt = Date.now(); }
+  if (!spyDayValue || !(spyDayValue.last > 0) || Date.now() - spyDayAt > 30000) { spyDayValue = await dayQuote("SPY"); spyDayAt = Date.now(); }
   return spyDayValue;
 }
 
@@ -556,10 +560,13 @@ async function placeShares(idea, { dryRun }) {
   // still gets a real paper fill instead of silently doing nothing. No
   // position-size cap here either — see the file header on affordability.
   const qty = Math.max(1, Math.round(sized > 0 ? sized : 250 / entry));
+  // A dip's -1% stop and +1% target are measured from this order's price, not the idea's (entryRules.dipLevels, 2026-11-17).
+  const levels = idea.strategy === "dip" ? dipLevels(entry) : null;
+  const stopAt = levels ? levels.stop : idea.invalidation;
   const body = {
     equity: {
       symbol: idea.symbol, side: idea.action === "SELL" ? "sell" : "buy", quantity: qty, price: entry,
-      stop: ATTACH_STOPS ? (idea.invalidation ?? undefined) : undefined, attachStop: ATTACH_STOPS && idea.invalidation != null,
+      stop: ATTACH_STOPS ? (stopAt ?? undefined) : undefined, attachStop: ATTACH_STOPS && stopAt != null,
     },
     closing: false,
     ideaId: idea.id,
@@ -579,6 +586,7 @@ async function placeShares(idea, { dryRun }) {
       ideaId: idea.id, thesis: null, vehicle: "SHARES", symbol: idea.symbol,
       side: vet.computed.side, quantity: vet.computed.quantity, limitPrice: vet.computed.price, order: orderResult,
       learningOverrides: idea.learningOverrides ?? null, entryStyle: idea.entryStyle ?? null,
+      invalidation: levels?.stop, target: levels?.target,
     });
   } catch (e) {
     console.error("Autotrade journal write failed (order was still placed):", e);
@@ -1000,7 +1008,21 @@ async function run(req) {
         /* A wide spread: switch to a liquid contract carrying the same bet
            (contractLib.liquidAlternative). Never refuses; with nothing
            better the idea's own contract goes on to the usual checks. */
-        const sp = spreadPct(bid, ask);
+        /* An idea written before the open that missed the near-term contract
+           gets it here, at the live price (contractLib.needsNearAtmRetry,
+           2026-11-17). One try per idea every 10 minutes; with none found the
+           idea keeps its own contract, as the near-term rule always has. */
+        if (needsNearAtmRetry({ enabled: nearAtmEnabled(), vehicle: idea.vehicle, action: idea.action, nearAtm: rawIdea.nearAtm, expiration: idea.expiration, today: etDate(new Date().toISOString()) })) {
+          const seen = nearRetryAt.get(idea.id);
+          const near = seen && Date.now() - seen.at < 600000 ? seen.near : await nearAtmContract(idea.symbol, idea.action === "CALL" ? "call" : "put", { price: idea.entryPrice, accountSize: ACCOUNT_SIZE });
+          if (!seen || Date.now() - seen.at >= 600000) nearRetryAt.set(idea.id, { at: Date.now(), near });
+          if (near && near.leg.occ !== idea.leg.occ) {
+            idea = { ...idea, expiration: near.expiration, strike: near.strike, nearAtm: { fromExpiration: idea.expiration, fromStrike: idea.strike, dte: near.dte, atEntry: true },
+              leg: { ...near.leg }, switchedFrom: { occ: rawIdea.leg?.occ ?? null, spreadPct: spreadPct(bid, ask) != null ? Math.round(spreadPct(bid, ask) * 10) / 10 : null } };
+            tag.switched = `${idea.switchedFrom.occ} -> ${near.leg.occ} (the nearest 1-5 day at the money, re-picked at entry)`;
+          }
+        }
+        const sp = spreadPct(idea.leg.bid, idea.leg.ask);
         /* Options expiring today ARE bought (2026-10-22, undone the same day).
            The ban would have blocked +$2,201 of winners since the restart
            (ORCL Oct 16 put +$1,182, INTC Oct 16 put +$751, ORCL +$268) to save
@@ -1010,7 +1032,7 @@ async function run(req) {
            at-the-money choice for any spread of 6-10%. A near-ATM idea keeps its
            contract up to NEAR_MAX_SPREAD_PCT and above it re-picks at the money at
            the live price (1-5 days); other ideas aim at a sane delta. */
-        const nearIdea = Boolean(rawIdea.nearAtm) && nearAtmEnabled();
+        const nearIdea = Boolean(rawIdea.nearAtm || idea.nearAtm) && nearAtmEnabled();
         if (sp != null && sp > (nearIdea ? NEAR_MAX_SPREAD_PCT : SWITCH_SPREAD_PCT)) {
           const type = idea.action === "CALL" ? "call" : "put";
           const near = nearIdea ? await nearAtmContract(idea.symbol, type, { price: idea.entryPrice, accountSize: ACCOUNT_SIZE }) : null;
@@ -1197,11 +1219,13 @@ async function run(req) {
         // No dip buys while QQQ is 0.5%+ under its day's high (entryRules.dipMarketOffHigh); SPY is the backup.
         let qq = await qqqDayCached(), idx = "QQQ";
         if (!(qq.high > 0) || !(qq.last > 0)) { qq = await spyDayCached(); idx = "SPY"; }
-        const off = dipMarketOffHigh({ indexLast: qq.last, indexHigh: qq.high });
+        const off = dipMarketOffHigh({ indexLast: qq.last, indexHigh: qq.high, index: idx });
         if (off?.refused) {
-          results.push({ ...tag, placed: false, blockedBy: "market_off_high", reason: `No dip buys while ${idx} is ${DIP_QQQ_OFF_HIGH_PCT}%+ below its day's high (it is ${off.offPct.toFixed(2)}% under $${qq.high}): those dips lost in both halves of the record (-$442, then -$341).` });
+          results.push({ ...tag, placed: false, blockedBy: "market_off_high", reason: `No dip buys while ${idx} is ${off.limitPct}%+ below its day's high (it is ${off.offPct.toFixed(2)}% under $${qq.high}): those dips lost in both halves of the record (-$442, then -$341).` });
           continue;
         }
+        // Which index decided, for the log (2026-11-17: SPCX passed on SPY's quote).
+        tag.dipIndex = off ? `${idx} ${off.offPct.toFixed(2)}% under its high (limit ${off.limitPct}%)` : "no index quote";
       }
 
       // Options from 10:30 (entryRules.tooEarlyForOption); refused ones go to the shadow book.

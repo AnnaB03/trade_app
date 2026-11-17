@@ -751,7 +751,7 @@ test("RULE: no dip buys while QQQ is 0.5%+ below its day's high — 2026-11-04, 
   assert.equal(entry.dipMarketOffHigh({ indexLast: 99.6, indexHigh: 100 }).refused, false, "0.4% off the high may buy dips");
   assert.equal(entry.dipMarketOffHigh({ indexLast: 99, indexHigh: null }), null, "no quote: cannot tell");
   const src = fs.readFileSync(path.join(process.cwd(), "app/api/order/autotrade/route.js"), "utf8");
-  assert.match(src, /dipMarketOffHigh\(\{ indexLast: qq\.last, indexHigh: qq\.high \}\)/, "the dip block checks it, with SPY as the backup");
+  assert.match(src, /dipMarketOffHigh\(\{ indexLast: qq\.last, indexHigh: qq\.high, index: idx \}\)/, "the dip block checks it, with SPY as the backup");
 });
 
 test("RULE: no option buys before 10:30 ET; shares still from 10:00 — 2026-11-03, 'Options from 10:30'", () => {
@@ -760,4 +760,34 @@ test("RULE: no option buys before 10:30 ET; shares still from 10:00 — 2026-11-
   assert.equal(entry.tooEarlyForOption(10 * 60 + 29), true);
   assert.equal(entry.tooEarlyForOption(10 * 60 + 30), false);
   assert.equal(entry.tooEarlyToEnter(10 * 60), false, "shares (and everything else) still start at 10:00");
+});
+
+test("BUG 2026-11-17: SPY as the dip backup uses its own, tighter line (SPCX bought with QQQ 0.64-0.73% off its high, SPY 0.46%)", () => {
+  assert.equal(entry.DIP_SPY_OFF_HIGH_PCT, 0.35);
+  assert.equal(entry.dipMarketOffHigh({ indexLast: 736.38, indexHigh: 739.76, index: "SPY" }).refused, true, "SPY 0.46% off its high at 10:10 refuses");
+  assert.equal(entry.dipMarketOffHigh({ indexLast: 736.38, indexHigh: 739.76 }).refused, false, "the same move read as QQQ's would not");
+  assert.equal(entry.dipMarketOffHigh({ indexLast: 99.6, indexHigh: 100, index: "SPY" }).refused, true);
+  const src = fs.readFileSync(path.join(process.cwd(), "app/api/order/autotrade/route.js"), "utf8");
+  assert.match(src, /!\(qqqDayValue\.last > 0\)/, "a failed QQQ quote is asked again, not kept for 30 seconds");
+});
+
+test("BUG 2026-11-17: a dip's -1% stop and +1% target are measured from the price paid (MARA: idea $6.80, bought $6.76, stop $6.73)", () => {
+  assert.deepEqual(entry.dipLevels(6.76), { stop: 6.69, target: 6.83 });
+  assert.equal(entry.dipLevels(0), null);
+  const src = fs.readFileSync(path.join(process.cwd(), "app/api/order/autotrade/route.js"), "utf8");
+  assert.match(src, /idea\.strategy === "dip" \? dipLevels\(entry\) : null/, "placeShares sets the dip's levels from its own order price");
+  assert.match(src, /invalidation: levels\?\.stop, target: levels\?\.target/, "and the journal row carries them");
+});
+
+test("BUG 2026-11-17: an option idea that missed the near-term contract before the open is re-picked at entry (HOOD/ORCL/PLTR kept Dec 11)", async () => {
+  const c = await import("../app/api/contractLib.js");
+  const base = { vehicle: "OPTION", action: "PUT", nearAtm: null, today: "2026-11-17" };
+  assert.equal(c.needsNearAtmRetry({ ...base, expiration: "2026-12-11" }), true, "a 24-day contract is re-picked");
+  assert.equal(c.needsNearAtmRetry({ ...base, expiration: "2026-11-24" }), false, "7 days or less is inside the near-term window (Friday fallback)");
+  assert.equal(c.needsNearAtmRetry({ ...base, expiration: "2026-12-11", nearAtm: { dte: 1 } }), false, "already near-term");
+  assert.equal(c.needsNearAtmRetry({ ...base, expiration: "2026-12-11", vehicle: "SHARES" }), false);
+  assert.equal(c.needsNearAtmRetry({ ...base, expiration: "2026-12-11", enabled: false }), false, "NEAR_ATM_CONTRACTS=false keeps the old choice");
+  const src = fs.readFileSync(path.join(process.cwd(), "app/api/order/autotrade/route.js"), "utf8");
+  assert.match(src, /needsNearAtmRetry\(\{[\s\S]{0,800}nearAtmContract\(idea\.symbol/, "the entry check re-picks with the live price");
+  assert.ok(src.indexOf("needsNearAtmRetry({") < src.indexOf('blockedBy: "before_1030"'), "before the shadow book records a blocked early option");
 });

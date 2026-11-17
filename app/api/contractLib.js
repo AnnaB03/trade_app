@@ -85,6 +85,16 @@ export function nearExpiryOrder(expirations, dte) {
   const near = all.filter((e) => dte(e) >= NEAR_DTE_MIN && dte(e) <= NEAR_DTE_MAX);
   return near.length ? near : all.filter((e) => dte(e) > NEAR_DTE_MAX && dte(e) <= NEAR_DTE_FALLBACK_MAX);
 }
+/* Bug fix (2026-11-17): the 09:23 refresh runs before the open, when single
+   stocks' short-dated contracts have no usable quotes, so HOOD, ORCL and PLTR
+   kept the model's Dec 11 contracts (11/16: three fell back to Nov 27). An
+   option idea without the near-term choice whose expiry is past the fallback
+   window is re-picked at the entry check, at the live price. */
+export function needsNearAtmRetry({ enabled = true, vehicle, action, nearAtm, expiration, today }) {
+  if (!enabled || vehicle !== "OPTION" || !(action === "CALL" || action === "PUT") || nearAtm || !expiration || !today) return false;
+  const days = Math.round((Date.parse(expiration + "T00:00:00Z") - Date.parse(today + "T00:00:00Z")) / 86400000);
+  return days > NEAR_DTE_FALLBACK_MAX;
+}
 export async function nearAtmContract(symbol, type, { price, accountSize }) {
   try {
     const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
