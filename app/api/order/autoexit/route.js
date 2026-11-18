@@ -8,7 +8,8 @@ import { dailyBars } from "../../historyCache";
 import { markActivity } from "../../activityLib";
 import { accountSize } from "../../accountLib";
 import { notifySold, notify } from "../../notifyLib";
-import { exitConfig, directionOf, heldQuantity, intrinsicAtExpiry, updatePeak, gainFigures, decideProfitExit, decideLevelExit, decideReversalExit, decideMarketTurnExit, decideAfternoonFadeExit, letRunOn, isExpired, carriesOvernight } from "../exitRules";
+import { dipLevels } from "../entryRules";
+import { exitConfig, directionOf, heldQuantity, intrinsicAtExpiry, updatePeak, gainFigures, decideProfitExit, decideLevelExit, decideReversalExit, decideMarketTurnExit, confirmedMarketTurn, decideAfternoonFadeExit, letRunOn, isExpired, carriesOvernight } from "../exitRules";
 
 /* Paper-only auto-EXIT — the other half of autotrade.js. That route only
    ever opens a position; until now, the only thing that could close one was
@@ -80,12 +81,12 @@ function alertFadeOnce(optionType, detail) {
 
 // QQQ's open and last, once per run (the market-turn exit).
 let qqqDayAt = 0, qqqDayValue = null;
-async function qqqDayForExits() {
-  if (qqqDayValue && Date.now() - qqqDayAt < 20000) return qqqDayValue;
+async function qqqDayForExits({ fresh = false } = {}) {
+  if (!fresh && qqqDayValue && Date.now() - qqqDayAt < 20000) return qqqDayValue;
   try {
     const d = await tradier(`/markets/quotes?symbols=QQQ`);
     const q = asArray(d?.quotes?.quote)[0];
-    qqqDayValue = { open: Number(q?.open) || null, last: Number(q?.last) || null, high: Number(q?.high) || null, low: Number(q?.low) || null };
+    qqqDayValue = { open: Number(q?.open) || null, last: Number(q?.last) || null, high: Number(q?.high) || null, low: Number(q?.low) || null, bid: Number(q?.bid) || null, ask: Number(q?.ask) || null };
   } catch { qqqDayValue = { open: null, last: null }; }
   qqqDayAt = Date.now();
   return qqqDayValue;
@@ -460,7 +461,11 @@ async function run(req) {
       // 1c. The market turned: QQQ back across today's open against an option (exitRules.decideMarketTurnExit).
       if (!exit && pos.vehicle === "OPTION") {
         const qd = await qqqDayForExits();
-        exit = decideMarketTurnExit({ vehicle: pos.vehicle, optionType: pos.optionType, qqqOpen: qd.open, qqqLast: qd.last });
+        // A turn seen on the cached quote is read again, fresh, and must hold on the last trade and the bid/ask middle (exitRules.confirmedMarketTurn).
+        if (decideMarketTurnExit({ vehicle: pos.vehicle, optionType: pos.optionType, qqqOpen: qd.open, qqqLast: qd.last })) {
+          const fq = await qqqDayForExits({ fresh: true });
+          exit = confirmedMarketTurn({ vehicle: pos.vehicle, optionType: pos.optionType, qqqOpen: fq.open, qqqLast: fq.last, qqqBid: fq.bid, qqqAsk: fq.ask });
+        }
         // 1d. The afternoon fade: from 14:00, QQQ 0.3% off its day's extreme against the option (exitRules.decideAfternoonFadeExit).
         if (!exit) {
           const etNow = new Date().toLocaleTimeString("en-GB", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit" }).split(":").map(Number);
@@ -470,7 +475,14 @@ async function run(req) {
       }
 
       // 2-3. The plan's own target and invalidation. 4. Thesis reversed.
-      if (!exit) exit = decideLevelExit({ dir, target: pos.target, invalidation: pos.invalidation, strategy: pos.strategy, underlyingPx, favorableExtreme });
+      /* A dip's -1% stop and +1% target are measured from the price actually
+         paid (entryRules.dipLevels; bug fix 2026-11-18, owner "yes"): MU and
+         SMCI filled under their order price and kept stops 0.65-0.73% under the buy. */
+      const dipLv = pos.strategy === "dip" ? dipLevels(pos.entryFillPrice) : null;
+      if (dipLv && !dryRun && (pos.invalidation !== dipLv.stop || pos.target !== dipLv.target)) {
+        try { updateJournalEntry(pos.id, { invalidation: dipLv.stop, target: dipLv.target }); } catch {}
+      }
+      if (!exit) exit = decideLevelExit({ dir, target: dipLv?.target ?? pos.target, invalidation: dipLv?.stop ?? pos.invalidation, strategy: pos.strategy, underlyingPx, favorableExtreme });
       if (!exit) exit = decideReversalExit({ pos, dir, ideas: allIdeas });
 
       if (!exit) { results.push({ symbol: pos.symbol, closed: false }); continue; }

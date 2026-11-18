@@ -586,7 +586,7 @@ async function placeShares(idea, { dryRun }) {
       ideaId: idea.id, thesis: null, vehicle: "SHARES", symbol: idea.symbol,
       side: vet.computed.side, quantity: vet.computed.quantity, limitPrice: vet.computed.price, order: orderResult,
       learningOverrides: idea.learningOverrides ?? null, entryStyle: idea.entryStyle ?? null,
-      invalidation: levels?.stop, target: levels?.target,
+      invalidation: levels?.stop, target: levels?.target, dipIndex: idea.dipIndex ?? null,
     });
   } catch (e) {
     console.error("Autotrade journal write failed (order was still placed):", e);
@@ -1224,8 +1224,16 @@ async function run(req) {
           results.push({ ...tag, placed: false, blockedBy: "market_off_high", reason: `No dip buys while ${idx} is ${off.limitPct}%+ below its day's high (it is ${off.offPct.toFixed(2)}% under $${qq.high}): those dips lost in both halves of the record (-$442, then -$341).` });
           continue;
         }
-        // Which index decided, for the log (2026-11-17: SPCX passed on SPY's quote).
-        tag.dipIndex = off ? `${idx} ${off.offPct.toFixed(2)}% under its high (limit ${off.limitPct}%)` : "no index quote";
+        /* With neither QQQ nor SPY readable the dip is refused, not bought blind
+           (bug fix 2026-11-18, owner "yes": GOOGL was bought at 10:32 with QQQ
+           0.73% under its high, most likely on a pass where no index could be read). */
+        if (!off) {
+          results.push({ ...tag, placed: false, blockedBy: "no_index_quote", reason: "No dip buy without a QQQ or SPY quote: the check against the day's high cannot be made." });
+          continue;
+        }
+        // Which index decided, on the result and on the journal row (2026-11-17: SPCX passed on SPY's quote).
+        tag.dipIndex = `${idx} ${off.offPct.toFixed(2)}% under its $${qq.high} high (limit ${off.limitPct}%)`;
+        idea = { ...idea, dipIndex: tag.dipIndex };
       }
 
       // Options from 10:30 (entryRules.tooEarlyForOption); refused ones go to the shadow book.

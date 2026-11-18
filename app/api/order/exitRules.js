@@ -547,6 +547,20 @@ export function decideMarketTurnExit({ vehicle, optionType, qqqOpen, qqqLast, on
   return { tag: "market_turned", detail: `The market turned: QQQ is ${move >= 0 ? "+" : ""}${move.toFixed(2)}% since the open, back across it against this ${optionType}. Sold at the bid before the loss grows.` };
 }
 
+/* The market-turn sale needs QQQ across its open on BOTH the last trade and
+   the bid/ask middle, read fresh (bug fix 2026-11-18, owner "yes"): OKLO's put
+   was sold at 13:07 on "QQQ +0.11% since the open" while every QQQ trade that
+   minute was $658.08-658.61, 0.44% under the $661.03 open. Returns the exit
+   with the numbers it used, or null. */
+export function confirmedMarketTurn({ vehicle, optionType, qqqOpen, qqqLast, qqqBid, qqqAsk, on = marketTurnExitOn() } = {}) {
+  const mid = qqqBid > 0 && qqqAsk > 0 && qqqAsk >= qqqBid ? (qqqBid + qqqAsk) / 2 : null;
+  if (mid == null) return null;
+  const byLast = decideMarketTurnExit({ vehicle, optionType, qqqOpen, qqqLast, on });
+  const byMid = decideMarketTurnExit({ vehicle, optionType, qqqOpen, qqqLast: mid, on });
+  if (!byLast || !byMid) return null;
+  return { ...byLast, detail: `${byLast.detail} (QQQ open $${qqqOpen}, last $${qqqLast}, bid/ask middle $${mid.toFixed(2)})` };
+}
+
 /* The afternoon fade (owner, 2026-11-11, after selling every call by hand as
    the market slipped: "we need to have some kind of alert to identify that all
    needs to be sold if market starts going the other way"). From 14:00 ET an

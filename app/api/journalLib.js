@@ -56,7 +56,7 @@ export function planGrade(entry, underlyingPriceAtClose) {
 // invalidation, target, conviction, catalyst, regime, the spot price the
 // idea was generated against) is pulled automatically when ideaId is given;
 // a manual (non-idea) open supplies its own short `thesis` instead.
-export function journalOpen({ ideaId, thesis, vehicle, symbol, occ, strike, optionType, expiration, side, quantity, limitPrice, order, closeByEod, stopPct, learningOverrides, entryStyle, entryUnderlying, entryDelta, switchedFrom, rebuyExempt, letRun = null, invalidation, target }) {
+export function journalOpen({ ideaId, thesis, vehicle, symbol, occ, strike, optionType, expiration, side, quantity, limitPrice, order, closeByEod, stopPct, learningOverrides, entryStyle, entryUnderlying, entryDelta, switchedFrom, rebuyExempt, letRun = null, invalidation, target, dipIndex = null }) {
   const idea = ideaId ? listIdeas().find((i) => i.id === ideaId) : null;
   return appendJournalEntry({
     ideaId: idea?.id ?? null,
@@ -77,6 +77,8 @@ export function journalOpen({ ideaId, thesis, vehicle, symbol, occ, strike, opti
     // A dip passes its own stop and target, measured from the price paid (2026-11-17).
     invalidation: invalidation ?? idea?.invalidation ?? null,
     target: target ?? idea?.target ?? null,
+    // A dip buy's market check: which index and how far under its high (2026-11-18).
+    dipIndex,
     conviction: idea?.conviction ?? null,
     catalyst: idea?.catalyst ?? null,
     regimeTrend: idea?.regimeTrend ?? null,

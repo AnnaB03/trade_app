@@ -656,7 +656,8 @@ test("RULE: an option is sold when QQQ is back across today's open against it â€
   assert.equal(exits.decideMarketTurnExit({ vehicle: "OPTION", optionType: "put", qqqOpen: null, qqqLast: 671, on: true }), null, "no quote: no exit");
   assert.equal(exits.marketTurnExitOn({ MARKET_TURN_EXIT: "false" }), false);
   const src = fs.readFileSync(path.join(process.cwd(), "app/api/order/autoexit/route.js"), "utf8");
-  assert.match(src, /if \(!exit && pos\.vehicle === "OPTION"\) \{\s*const qd = await qqqDayForExits\(\);\s*exit = decideMarketTurnExit\(/, "checked every minute after the stops and profit sales");
+  // Since 2026-11-18 (owner "yes") a turn is confirmed on a fresh read before the sale (confirmedMarketTurn).
+  assert.match(src, /if \(!exit && pos\.vehicle === "OPTION"\) \{\s*const qd = await qqqDayForExits\(\);[\s\S]{0,300}if \(decideMarketTurnExit\(/, "checked every minute after the stops and profit sales");
 });
 
 test("RULE: no option where one contract risks over 1.5x the option budget at its own stop â€” 2026-11-10, owner, after MU lost $456", () => {
@@ -790,4 +791,29 @@ test("BUG 2026-11-17: an option idea that missed the near-term contract before t
   const src = fs.readFileSync(path.join(process.cwd(), "app/api/order/autotrade/route.js"), "utf8");
   assert.match(src, /needsNearAtmRetry\(\{[\s\S]{0,800}nearAtmContract\(idea\.symbol/, "the entry check re-picks with the live price");
   assert.ok(src.indexOf("needsNearAtmRetry({") < src.indexOf('blockedBy: "before_1030"'), "before the shadow book records a blocked early option");
+});
+
+test("BUG 2026-11-18 (owner 'yes'): no dip buy without an index quote (GOOGL bought at 10:32 with QQQ 0.73% under its high)", () => {
+  const src = fs.readFileSync(path.join(process.cwd(), "app/api/order/autotrade/route.js"), "utf8");
+  assert.match(src, /if \(!off\) \{\s*results\.push\(\{ \.\.\.tag, placed: false, blockedBy: "no_index_quote"/, "no reading: refused, not bought blind");
+  assert.match(src, /dipIndex: idea\.dipIndex \?\? null/, "the reading is written on the journal row");
+});
+
+test("BUG 2026-11-18 (owner 'yes'): a dip's stop and target follow the confirmed fill (MU $712.50 order, $710.55 fill)", () => {
+  assert.deepEqual(entry.dipLevels(710.55), { stop: 703.44, target: 717.66 });
+  const src = fs.readFileSync(path.join(process.cwd(), "app/api/order/autoexit/route.js"), "utf8");
+  assert.match(src, /pos\.strategy === "dip" \? dipLevels\(pos\.entryFillPrice\) : null/, "the exit check measures from the fill");
+  assert.match(src, /decideLevelExit\(\{ dir, target: dipLv\?\.target \?\? pos\.target, invalidation: dipLv\?\.stop \?\? pos\.invalidation/);
+});
+
+test("BUG 2026-11-18 (owner 'yes'): the market-turn sale needs QQQ across its open on the last trade AND the bid/ask middle (OKLO sold on a bad +0.11%)", () => {
+  const base = { vehicle: "OPTION", optionType: "put", qqqOpen: 661.03, on: true };
+  assert.equal(exits.confirmedMarketTurn({ ...base, qqqLast: 661.76, qqqBid: 658.08, qqqAsk: 658.12 }), null, "a last print the market never traded at does not sell");
+  assert.equal(exits.confirmedMarketTurn({ ...base, qqqLast: 661.76, qqqBid: null, qqqAsk: null }), null, "no bid/ask: cannot confirm");
+  const ok = exits.confirmedMarketTurn({ ...base, qqqLast: 661.14, qqqBid: 661.12, qqqAsk: 661.16 });
+  assert.equal(ok.tag, "market_turned", "NVDA 13:39: a real turn still sells");
+  assert.match(ok.detail, /open \$661\.03, last \$661\.14, bid\/ask middle \$661\.14/, "the numbers it used are in the reason");
+  assert.equal(exits.confirmedMarketTurn({ ...base, optionType: "call", qqqLast: 658.1, qqqBid: 658.08, qqqAsk: 658.12 }).tag, "market_turned", "calls the same way");
+  const src = fs.readFileSync(path.join(process.cwd(), "app/api/order/autoexit/route.js"), "utf8");
+  assert.match(src, /qqqDayForExits\(\{ fresh: true \}\)[\s\S]{0,80}confirmedMarketTurn/, "read again, fresh, before selling");
 });
