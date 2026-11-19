@@ -105,3 +105,12 @@ With learning mode off, the table below applies as written.
 | Idea model | Opus | `suggestions/route.js` | 2026-10-13 |
 | A losing recent record | trades at 1/2 size (0 to −0.25R a trade) or 1/4 (worse), never stops | `edgeLib.edgeRiskMultiplier` | 2026-10-14 |
 | Same-day ideas are asked for | 1.8× reward to risk at the trigger | `suggestions/route.js` prompt | 2026-10-14 |
+
+## Reliability fixes (not trading rules)
+
+| Fix | What | Where | Since |
+|---|---|---|---|
+| One entry check at a time | a call that arrives while an entry check is running is skipped, not queued (runs of 80-115 s against a call every minute piled up; every call timed out 10:26-11:03 on 11/19) | `autotrade` GET | 2026-11-19 |
+| Option stops on two reads | the simulated broker fills an option's resting stop only when two reads 20 s apart are both through it (AVGO's $5.91 stop filled at $3.60 on one bad quote, market $6.80/$7.30) | `simBroker.STOP_CONFIRM_MS` | 2026-11-19 |
+| A late stop fill is a stop | if the broker's stop fills during the exit check, the row is booked as a stop at its fill, not "orphaned" with no P&L (AVGO -$415.70, corrected by hand) | `autoexit` | 2026-11-19 |
+

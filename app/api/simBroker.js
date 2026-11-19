@@ -200,6 +200,7 @@ async function marketOpen() {
   return (await getClock()).state === "open";
 }
 
+export const STOP_CONFIRM_MS = 20000;
 function fill(leg, price, now) {
   leg.status = "filled";
   leg.exec_quantity = Number(leg.quantity);
@@ -253,7 +254,17 @@ async function evaluate(state, { arrivedId = null } = {}) {
           fill(l, arrived ? bid : Number(l.price), now); changed = true;
         } else if (SELL.has(l.side) && l.type === "stop") {
           const ref = l.option_symbol ? (bid + ask) / 2 : (Number(q?.last) > 0 ? Number(q.last) : bid);
-          if (ref <= Number(l.stop_price)) { fill(l, bid, now); changed = true; }
+          /* An option's stop fills only when two reads at least STOP_CONFIRM_MS
+             apart are both through it (bug fix 2026-11-19, owner "yes"): AVGO's
+             $360 put stop ($5.91) filled at $3.60 on one bad quote while the
+             market that minute was $6.80 bid, $7.30 ask. Shares fill as before. */
+          const through = ref <= Number(l.stop_price);
+          if (through && !l.option_symbol) { fill(l, bid, now); changed = true; }
+          else if (through) {
+            const first = Date.parse(l.stop_seen_at || "");
+            if (Number.isFinite(first) && now.getTime() - first >= STOP_CONFIRM_MS) { delete l.stop_seen_at; fill(l, bid, now); changed = true; }
+            else if (!Number.isFinite(first)) { l.stop_seen_at = now.toISOString(); changed = true; }
+          } else if (l.stop_seen_at) { delete l.stop_seen_at; changed = true; }
         }
       }
     }

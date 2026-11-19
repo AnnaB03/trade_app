@@ -550,6 +550,21 @@ async function run(req) {
           continue;
         }
         if (/does not match an open position|No open .* position found/i.test(closeResult.error || "")) {
+          /* The resting stop may have filled between the check at the top and
+             this sale (bug fix 2026-11-19, owner "yes": AVGO's stop filled at
+             $3.60 at 11:07:04 and the row was booked "orphaned" with no P&L).
+             Look again before calling it orphaned. */
+          const late = await checkBrokerStopFill(pos);
+          if (late?.filled) {
+            try {
+              booked = journalClose(pos, {
+                exitOrderId: pos.entryOrderId, exitOrderStatus: "filled", exitQuantity: pos.entryQuantity, exitFillPrice: late.price,
+                exitReason: "Stop-loss filled on Tradier", exitReasonTag: "stop_hit", underlyingPriceAtClose: underlyingPx,
+              });
+            } catch (e) { console.error("autoexit late stop reconcile failed:", e); }
+            results.push({ symbol: pos.symbol, closed: true, tag: "stop_hit", detail: `Stop filled at $${late.price}`, exitPrice: late.price, pnl: booked?.pnl ?? null, instrument: pos.occ ?? pos.symbol, quantity: heldQuantity(pos) });
+            continue;
+          }
           try {
             booked = journalClose(pos, {
               exitOrderId: null, exitOrderStatus: null, exitQuantity: pos.entryQuantity, exitFillPrice: null,

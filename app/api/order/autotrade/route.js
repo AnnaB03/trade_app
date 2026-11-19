@@ -1500,7 +1500,14 @@ async function run(req) {
    written to it — so two overlapping runs would each see "nothing open" and
    both act. Queued, the second run sees what the first one did. */
 let queue = Promise.resolve();
+/* A run that arrives while another is still going is skipped, not queued (bug
+   fix 2026-11-19, owner "yes"): runs of 80-115 s against a call every minute
+   piled up behind each other, and from 10:26 to 11:03 every scheduled call hit
+   the 120 s limit, so nothing new could be bought. */
+let running = false;
 export function GET(req) {
+  if (running) return NextResponse.json({ skipped: true, placed: 0, candidateCount: 0, results: [], reason: "An entry check is already running; this one is skipped rather than queued." });
+  running = true;
   const next = queue.then(async () => {
     const res = await run(req);
     // The other playbooks, each through the same gates as the first.
@@ -1542,6 +1549,6 @@ export function GET(req) {
     }
     return out;
   });
-  queue = next.catch(() => {});
+  queue = next.catch(() => {}).finally(() => { running = false; });
   return next;
 }

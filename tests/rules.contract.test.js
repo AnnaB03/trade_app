@@ -817,3 +817,23 @@ test("BUG 2026-11-18 (owner 'yes'): the market-turn sale needs QQQ across its op
   const src = fs.readFileSync(path.join(process.cwd(), "app/api/order/autoexit/route.js"), "utf8");
   assert.match(src, /qqqDayForExits\(\{ fresh: true \}\)[\s\S]{0,80}confirmedMarketTurn/, "read again, fresh, before selling");
 });
+
+test("BUG 2026-11-19 (owner 'yes'): an entry check that arrives while one is running is skipped, not queued (10:26-11:03 every call timed out)", () => {
+  const src = fs.readFileSync(path.join(process.cwd(), "app/api/order/autotrade/route.js"), "utf8");
+  assert.match(src, /if \(running\) return NextResponse\.json\(\{ skipped: true/, "a second call returns at once");
+  assert.match(src, /queue = next\.catch\(\(\) => \{\}\)\.finally\(\(\) => \{ running = false; \}\)/, "the flag clears when the run ends, even on an error");
+});
+
+test("BUG 2026-11-19 (owner 'yes'): the simulated broker fills an option stop only on two reads 20 s apart (AVGO stop at $5.91 filled at $3.60 on one bad quote)", () => {
+  assert.equal(sim.STOP_CONFIRM_MS, 20000);
+  const src = fs.readFileSync(path.join(process.cwd(), "app/api/simBroker.js"), "utf8");
+  assert.match(src, /if \(through && !l\.option_symbol\) \{ fill\(l, bid, now\)/, "shares' stops fill as before");
+  assert.match(src, /now\.getTime\(\) - first >= STOP_CONFIRM_MS\) \{ delete l\.stop_seen_at; fill\(l, bid, now\)/, "an option's stop needs a second read");
+  assert.match(src, /else if \(l\.stop_seen_at\) \{ delete l\.stop_seen_at;/, "a read back above the stop clears the first one");
+});
+
+test("BUG 2026-11-19 (owner 'yes'): a stop that fills during the exit check is booked as a stop, not 'orphaned' with no P&L (AVGO -$415 unbooked)", () => {
+  const src = fs.readFileSync(path.join(process.cwd(), "app/api/order/autoexit/route.js"), "utf8");
+  assert.match(src, /const late = await checkBrokerStopFill\(pos\);\s*if \(late\?\.filled\)[\s\S]{0,300}exitReasonTag: "stop_hit"/, "looked at again before the orphan path");
+  assert.ok(src.indexOf("const late = await checkBrokerStopFill(pos)") < src.indexOf("No matching real position found on Tradier"), "and before the row is called orphaned");
+});
