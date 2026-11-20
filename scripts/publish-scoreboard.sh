@@ -5,6 +5,13 @@
 # page's "last update" stays fresh. Runs from ~/.cockpit (launchd cannot read
 # ~/Documents); commits are signed "Cockpit AI", never the owner's name.
 set -uo pipefail
+# launchd's PATH finds Apple's /usr/bin/git, which does not read Homebrew's
+# gitconfig and so has no credential helper: every scheduled push failed
+# silently from 11/11 to 11/20 (141 updates never reached the site). Use
+# Homebrew's git when present, name the keychain helper explicitly, and log a
+# failed push.
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+LOG="${COCKPIT_LOG:-$HOME/Library/Logs/cockpit-autopilot.log}"
 SITE="$HOME/.cockpit/scoreboard-site"
 BASE="${COCKPIT_BASE:-http://localhost:3000}"
 [ -d "$SITE/.git" ] || exit 0
@@ -23,5 +30,5 @@ PY
 age=$(( $(date +%s) - $(git -C "$SITE" log -1 --format=%ct 2>/dev/null || echo 0) ))
 if [ "$same" = "yes" ] && [ "$age" -lt 1800 ]; then rm -f "$tmp"; exit 0; fi
 mv "$tmp" "$SITE/data.json"
-cd "$SITE" && git add data.json && git -c user.name="Cockpit AI" -c user.email="cockpit-ai-record@users.noreply.github.com" commit -q -m "Record update $(TZ=America/New_York date '+%Y-%m-%d %H:%M') ET" && git push -q origin main >/dev/null 2>&1
+cd "$SITE" && git add data.json && git -c user.name="Cockpit AI" -c user.email="cockpit-ai-record@users.noreply.github.com" commit -q -m "Record update $(TZ=America/New_York date '+%Y-%m-%d %H:%M') ET" && { git -c credential.helper=osxkeychain push -q origin main >/dev/null 2>&1 || echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR scoreboard push failed (the public record is not updating)" >> "$LOG"; }
 exit 0
