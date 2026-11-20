@@ -96,7 +96,7 @@ fi
 
 run() { # run <label> <url>
   local label="$1" url="$2" code summary
-  code=$(curl -s -o "/tmp/cockpit-$label.json" -w '%{http_code}' --max-time 120 "$url")
+  code=$(curl -s -o "/tmp/cockpit-$label.json" -w '%{http_code}' --max-time 170 "$url")
   summary=$(python3 "$HERE/summarize.py" "/tmp/cockpit-$label.json")
   if [ "$code" != "200" ]; then
     log "$label http=$code $summary"

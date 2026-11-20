@@ -85,12 +85,24 @@ function migrateJson(table, filename) {
 
 function collection(table) {
   const parse = (r) => JSON.parse(r.data);
+  /* The parsed list is kept until the table changes (2026-11-20): ideas is
+     ~13,000 rows / 15 MB, and every list() re-parsed all of it, several times
+     per entry check. A change is a write through this module (writes) or a
+     commit on any other connection (PRAGMA data_version). Callers get shallow
+     copies, so setting a field on a row never leaks into the cache. */
+  let cache = null, cacheKey = null, writes = 0;
+  const key = () => `${stmt("PRAGMA data_version").get().data_version}:${writes}`;
   return {
     // Newest first, as the JSON store sorted.
-    list: () => stmt(`SELECT data FROM ${table} ORDER BY createdAt DESC, rowid DESC`).all().map(parse),
+    list: () => {
+      const k = key();
+      if (!cache || cacheKey !== k) { cache = stmt(`SELECT data FROM ${table} ORDER BY createdAt DESC, rowid DESC`).all().map(parse); cacheKey = k; }
+      return cache.map((r) => ({ ...r }));
+    },
     append: (data, extra = {}) => {
       const row = { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, createdAt: new Date().toISOString(), ...extra, ...data };
       stmt(`INSERT INTO ${table} (id, createdAt, data) VALUES (?, ?, ?)`).run(row.id, row.createdAt, JSON.stringify(row));
+      writes++;
       return row;
     },
     // Read-merge-write inside one transaction, so two routes patching the
@@ -105,6 +117,7 @@ function collection(table) {
         const next = { ...parse(cur), ...patch, updatedAt: new Date().toISOString() };
         stmt(`UPDATE ${table} SET data = ?, createdAt = ? WHERE id = ?`).run(JSON.stringify(next), String(next.createdAt || ""), String(id));
         d.exec("COMMIT");
+        writes++;
         return next;
       } catch (e) { d.exec("ROLLBACK"); throw e; }
     },

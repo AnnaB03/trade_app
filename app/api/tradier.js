@@ -24,14 +24,21 @@ export const dataMode = () => (!isSandbox && prodToken ? "realtime" : "delayed")
 // timeoutMs bounds a single call. Callers that loop over many symbols need
 // this: without it one slow response stalls a whole route, and autotrade runs
 // on a 15-minute cron that must finish well inside its own window.
-export async function tradier(path, { timeoutMs } = {}) {
+// Every call is bounded (DEFAULT_TIMEOUT_MS unless the caller sets its own): on
+// 2026-11-19 one unbounded 1-minute-bars call took 10 s+ and, repeated per
+// triggered idea, stretched entry checks to 80-115 s against a 120 s limit.
+export const DEFAULT_TIMEOUT_MS = 8000;
+export async function tradier(path, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   if (!TOKEN) throw new Error("Server is missing TRADIER_TOKEN (production, real-time) or TRADIER_TOKEN_SANDBOX — set it in your environment / Vercel project settings.");
+  // A profiled entry check (autotrade ?profile=true) collects every call's path and time here.
+  const trace = globalThis.__tradierTrace, t0 = Date.now();
   const res = await fetch(`${BASE}${path}`, {
     headers: { Authorization: `Bearer ${TOKEN}`, Accept: "application/json" },
     cache: "no-store",
     ...(timeoutMs > 0 ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
   });
   if (res.status === 401) throw new Error(`Tradier rejected the token (401) for ${isSandbox ? "sandbox" : "production"} data. Production needs TRADIER_TOKEN from a funded brokerage account; sandbox needs TRADIER_TOKEN_SANDBOX.`);
+  if (trace) trace.push({ path: path.split("?")[0], q: path, ms: Date.now() - t0, status: res.status });
   if (!res.ok) throw new Error(`Tradier responded ${res.status}`);
   return res.json();
 }

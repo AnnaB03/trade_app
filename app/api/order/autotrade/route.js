@@ -156,12 +156,25 @@ const etMinuteStamp = () => {
   return `${p.year}-${p.month}-${p.day}T${p.hour === "24" ? "00" : p.hour}:${p.minute}`;
 };
 // Today's one-minute bars for the entry-confirmation test; [] on any failure.
+// Bounded at 4 s and kept 20 s per symbol, so the playbook passes of one check
+// share a read (2026-11-20: one unbounded call took 10 s of a 14 s check).
+const barsCache = new Map();
 async function minuteBars(symbol) {
+  const hit = barsCache.get(symbol);
+  if (hit && Date.now() - hit.at < 20000) return hit.bars;
   try {
     const day = etMinuteStamp().slice(0, 10);
-    const d = await tradier(`/markets/timesales?symbol=${encodeURIComponent(symbol)}&interval=1min&start=${day}%2009:30&session_filter=open`);
-    return asArray(d?.series?.data);
-  } catch { return []; }
+    const d = await tradier(`/markets/timesales?symbol=${encodeURIComponent(symbol)}&interval=1min&start=${day}%2009:30&session_filter=open`, { timeoutMs: 4000 });
+    const bars = asArray(d?.series?.data);
+    barsCache.set(symbol, { at: Date.now(), bars });
+    return bars;
+  } catch {
+    /* A failure is remembered for a minute (2026-11-20: Tradier's timesales
+       answered 504 after 10-55 s all morning; asking again on every pass and
+       every idea is what stretched the checks). No bars: the confirm arm waits. */
+    barsCache.set(symbol, { at: Date.now() + 40000, bars: [] });
+    return [];
+  }
 }
 const STRICT_TRIGGERS = process.env.LOOSE_TRIGGERS !== "true";
 const etNowMinutes = () => {
@@ -347,12 +360,31 @@ async function liveAsk(symbol) {
 
 // Last, plus the day's high and low: the fade needs to know where in the
 // day's range an entry would be taken (fadeLib.js).
+/* Day quotes, kept 8 s per symbol so the six playbook passes of one check
+   share them (2026-11-20: QQQ was quoted 7 times in one check), and fetched in
+   one call for many symbols (prefetchDayQuotes). */
+const dayCache = new Map();
+const toDay = (q) => {
+  const last = q?.last != null ? Number(q.last) : null;
+  return { last, high: Number(q?.high) > 0 ? Number(q.high) : null, low: Number(q?.low) > 0 ? Number(q.low) : null, prevClose: Number(q?.prevclose) > 0 ? Number(q.prevclose) : null, open: Number(q?.open) > 0 ? Number(q.open) : null };
+};
+async function prefetchDayQuotes(symbols) {
+  const need = [...new Set(symbols)].filter((s) => { const h = dayCache.get(s); return !(h && Date.now() - h.at < 8000); });
+  for (let k = 0; k < need.length; k += 50) {
+    try {
+      const d = await tradier(`/markets/quotes?symbols=${encodeURIComponent(need.slice(k, k + 50).join(","))}`);
+      for (const q of asArray(d?.quotes?.quote)) if (q?.symbol && Number(q.last) > 0) dayCache.set(q.symbol, { at: Date.now(), v: toDay(q) });
+    } catch {}
+  }
+}
 async function dayQuote(symbol) {
+  const hit = dayCache.get(symbol);
+  if (hit && Date.now() - hit.at < 8000) return hit.v;
   try {
     const d = await tradier(`/markets/quotes?symbols=${encodeURIComponent(symbol)}`);
-    const q = asArray(d?.quotes?.quote)?.[0];
-    const last = q?.last != null ? Number(q.last) : null;
-    return { last, high: Number(q?.high) > 0 ? Number(q.high) : null, low: Number(q?.low) > 0 ? Number(q.low) : null, prevClose: Number(q?.prevclose) > 0 ? Number(q.prevclose) : null, open: Number(q?.open) > 0 ? Number(q.open) : null };
+    const v = toDay(asArray(d?.quotes?.quote)?.[0]);
+    if (v.last > 0) dayCache.set(symbol, { at: Date.now(), v });
+    return v;
   } catch {
     return { last: null, high: null, low: null, prevClose: null, open: null };
   }
@@ -360,6 +392,9 @@ async function dayQuote(symbol) {
 
 // The entry-time near-term re-pick, per idea: when it was tried and what it found.
 const nearRetryAt = new Map();
+
+// Profile marks (autotrade ?profile=true): label and time, into the profile output.
+const PMARK = (label) => { globalThis.__profMarks?.push([label, Date.now()]); };
 
 // QQQ's day quote, shared by every idea in one pass (30 seconds).
 let qqqDayAt = 0, qqqDayValue = null;
@@ -728,6 +763,7 @@ async function deriveDips() {
     if (mins < DIP_FROM_ET_MIN || mins >= DIP_UNTIL_ET_MIN) return made;
     const today = etDate(new Date().toISOString());
     const doneToday = new Set(listIdeas().filter((i) => i.strategy === "dip" && etDate(i.createdAt) === today).map((i) => i.symbol));
+    await prefetchDayQuotes(CORE_SYMBOLS.filter((s) => !doneToday.has(s)));
     for (const symbol of CORE_SYMBOLS) {
       if (doneToday.has(symbol)) continue;
       const q = await dayQuote(symbol);
@@ -766,8 +802,11 @@ async function run(req) {
     const asked = params.get("playbook");
     const playbook = ["intraday", "contrarian", "fade_scan", "news", "dip"].includes(asked) ? asked : null;
     // The fade scan only ever buys puts at the day's high, so it is off while fade puts are (fadeLib.FADE_ACTIONS).
+    PMARK("start");
     const derived = playbook === "dip" ? await deriveDips() : playbook === "contrarian" ? await deriveFades() : playbook === "fade_scan" && fadeActionAllowed("PUT") ? await deriveScanFades() : [];
+    PMARK("derived");
     const all = listIdeas().filter((i) => (playbook ? i.strategy === playbook : !i.strategy));
+    PMARK("listIdeas");
     const batch = latestPerSymbol(all);
     /* An empty playbook is not an error: the fade only has ideas while a
        breakout is actually being chased, so most minutes it has none, and a
@@ -787,11 +826,13 @@ async function run(req) {
        minutes after the close. The order expired at once, so nothing happened
        except a false line in the report. */
     if (!dryRun) {
+      PMARK("batch");
       const clock = await getClock();
       if (!entriesAllowed(clock.state)) {
         return NextResponse.json({ dryRun, marketClosed: true, marketState: clock.state, candidateCount: 0, placed: 0, skipped: 0, results: [] });
       }
     }
+    PMARK("clock");
     const halt = tradingHalt({ accountSize: ACCOUNT_SIZE });
     if (halt.halted) {
       return NextResponse.json({
@@ -805,10 +846,12 @@ async function run(req) {
        money does not open new ones. Judged on the recent record, so a
        playbook that stops working stops trading, and only once it has 20
        closed trades to be judged on. EDGE_GATE=false turns it off. */
+    PMARK("halt");
     const edgeBaseline = readBaseline();
     const verdicts = process.env.EDGE_GATE !== "false"
       ? playbookVerdicts(closedTrades(listJournal().filter((r) => !isLegacy(r, edgeBaseline))), { rUsd: (ACCOUNT_SIZE * INTRADAY_RISK_PCT) / 100 })
       : null;
+    PMARK("baseline");
     const openJournal = listJournal().filter((r) => r.status === "open");
     const openOccs = new Set(openJournal.filter((r) => r.occ).map((r) => r.occ));
 
@@ -827,16 +870,20 @@ async function run(req) {
     // Every directional idea gets a fresh quote right now, fetched once per
     // symbol. It used to be only the ones with a trigger, so a fade (no
     // trigger) was judged and priced on the stock price it was written at.
+    PMARK("journal+reserved");
     const conditionalSyms = [...new Set(
       batch.filter((i) => ["CALL", "PUT", "BUY", "SELL"].includes(i.action)).map((i) => i.symbol)
     )];
+    await prefetchDayQuotes(conditionalSyms);
     const quoteBySym = Object.fromEntries(await Promise.all(conditionalSyms.map(async (s) => [s, await dayQuote(s)])));
     const liveBySym = Object.fromEntries(Object.entries(quoteBySym).map(([s, q]) => [s, q.last]));
 
+    PMARK("quotes");
     const results = [];
     let deployedThisRun = 0; // cost placed earlier in this same pass, which journal rows don't show yet
     let dipsThisRun = 0, dipCostThisRun = 0; // the dip cap (entryRules.dipCapRefused) counts this pass too
     for (const rawIdea of batch) {
+      PMARK(`before ${rawIdea.symbol}`);
       const tag = { symbol: rawIdea.symbol, action: rawIdea.action, vehicle: rawIdea.vehicle, risk: rawIdea.risk, ideaId: rawIdea.id };
       /* Learning mode (entryRules.learningMode): a SOFT rule that would refuse
          is recorded here and the trade goes ahead; soft() returns true when it
@@ -1481,6 +1528,7 @@ async function run(req) {
     // No single shared timestamp anymore — each symbol carries its own (see
     // latestPerSymbol) — so report the range instead of one misleading "as
     // of" value.
+    PMARK("ideas loop");
     const createdAts = batch.map((i) => new Date(i.createdAt).getTime());
     return NextResponse.json({
       dryRun, candidateCount: batch.length,
@@ -1506,6 +1554,32 @@ let queue = Promise.resolve();
    the 120 s limit, so nothing new could be bought. */
 let running = false;
 export function GET(req) {
+  // ?profile=true&dryRun=true: time every playbook pass and every Tradier call (no orders).
+  const prof = new URL(req.url).searchParams.get("profile") === "true" && new URL(req.url).searchParams.get("dryRun") === "true";
+  if (prof && !running) {
+    running = true;
+    const trace = (globalThis.__tradierTrace = []);
+    const marks = (globalThis.__profMarks = []);
+    const passes = [];
+    const done = (async () => {
+      const u = new URL(req.url);
+      for (const pb of [null, "intraday", "contrarian", "fade_scan", "news", "dip"]) {
+        const pu = new URL(u); pu.searchParams.delete("profile");
+        if (pb) pu.searchParams.set("playbook", pb);
+        const t0 = Date.now(), n0 = trace.length;
+        try { await run(new Request(pu)); } catch {}
+        const m = marks.splice(0); const steps = m.map(([l, t], k) => [l, t - (k ? m[k - 1][1] : t0)]).filter(([, ms], k, a) => ms >= 50 || (a[k + 1] && a[k + 1][1] >= 50));
+        passes.push({ playbook: pb || "swing", ms: Date.now() - t0, calls: trace.length - n0, callMs: trace.slice(n0).reduce((a, c) => a + c.ms, 0), steps });
+      }
+      const byPath = {};
+      for (const c of trace) { const k = c.path.replace(/\/[A-Z0-9]{6,}$/, ""); (byPath[k] ||= { calls: 0, ms: 0 }); byPath[k].calls++; byPath[k].ms += c.ms; }
+      const quotes = {};
+      for (const c of trace.filter((c) => c.path === "/markets/quotes")) { const sym = decodeURIComponent((c.q.match(/symbols=([^&]+)/) || [])[1] || ""); quotes[sym] = (quotes[sym] || 0) + 1; }
+      return NextResponse.json({ passes, total: passes.reduce((a, p) => a + p.ms, 0), calls: trace.length, byPath, repeatedQuotes: Object.entries(quotes).filter(([, n]) => n > 1).sort((a, b) => b[1] - a[1]).slice(0, 25) });
+    })();
+    queue = done.catch(() => {}).finally(() => { globalThis.__tradierTrace = null; globalThis.__profMarks = null; running = false; });
+    return done;
+  }
   if (running) return NextResponse.json({ skipped: true, placed: 0, candidateCount: 0, results: [], reason: "An entry check is already running; this one is skipped rather than queued." });
   running = true;
   const next = queue.then(async () => {

@@ -837,3 +837,20 @@ test("BUG 2026-11-19 (owner 'yes'): a stop that fills during the exit check is b
   assert.match(src, /const late = await checkBrokerStopFill\(pos\);\s*if \(late\?\.filled\)[\s\S]{0,300}exitReasonTag: "stop_hit"/, "looked at again before the orphan path");
   assert.ok(src.indexOf("const late = await checkBrokerStopFill(pos)") < src.indexOf("No matching real position found on Tradier"), "and before the row is called orphaned");
 });
+
+test("SPEED 2026-11-20 (owner: 'fix the entry check speed'): the parsed ideas/journal list is cached until the table changes, from any connection", async () => {
+  const a = store.appendIdea({ symbol: "ZZCACHE", action: "WAIT" });
+  const first = store.listIdeas().find((i) => i.id === a.id);
+  first.symbol = "MUTATED";
+  assert.equal(store.listIdeas().find((i) => i.id === a.id).symbol, "ZZCACHE", "a caller's edit never leaks into the cache");
+  store.updateIdea(a.id, { note: "own write" });
+  assert.equal(store.listIdeas().find((i) => i.id === a.id).note, "own write", "a write through the store refreshes it");
+  const { DatabaseSync } = process.getBuiltinModule("node:sqlite");
+  const other = new DatabaseSync(process.env.STORE_FILE);
+  const row = JSON.parse(other.prepare("SELECT data FROM ideas WHERE id = ?").get(a.id).data);
+  other.prepare("UPDATE ideas SET data = ? WHERE id = ?").run(JSON.stringify({ ...row, note: "other connection" }), a.id);
+  other.close();
+  assert.equal(store.listIdeas().find((i) => i.id === a.id).note, "other connection", "a write from another connection (a script, a hand edit) refreshes it");
+  const t = fs.readFileSync(path.join(process.cwd(), "app/api/tradier.js"), "utf8");
+  assert.match(t, /DEFAULT_TIMEOUT_MS = 8000[\s\S]{0,120}timeoutMs = DEFAULT_TIMEOUT_MS/, "every Tradier call is time-bounded");
+});
