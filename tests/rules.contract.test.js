@@ -871,3 +871,35 @@ test("RULE 2026-11-20 review (owner: 'lets set up 1 and 2'): the dip and intrada
   assert.equal(entry.isWatchOnly("intraday", { INTRADAY_LIVE: "true" }), false, "INTRADAY_LIVE=true restores it");
   assert.equal(entry.isWatchOnly(undefined, {}), false, "the main option ideas (+$495 since 11/04) keep trading");
 });
+
+test("RECORDED TEST 2026-11-20 (owner: 'set up the 35% stop as a recorded test'): a ghost of every live option, 35% stop at the same $ risk, places nothing", async () => {
+  const gl = await import("../app/api/ghostStopLib.js");
+  assert.equal(gl.GHOST_STOP_PCT, 35);
+  assert.equal(gl.ghostContracts({ liveQty: 5, liveStopPct: 20 }), 2, "5 x 20% = 100 risk units -> 2 contracts at 35% (70)");
+  assert.equal(gl.ghostContracts({ liveQty: 7, liveStopPct: 20 }), 4, "140 -> 4 (140/35)");
+  assert.equal(gl.ghostContracts({ liveQty: 1, liveStopPct: 20 }), 1, "a 1-contract trade cannot shrink; its result is also scaled to the live risk");
+  const cfg = exits.exitConfig(25000);
+  const g = { entryPremium: 4.0, qty: 2, optionType: "put", dir: -1, peakMark: 4.0, closeByEod: true, strategy: null, invalidation: null, target: null };
+  const at = (bid, ask, extra = {}) => gl.stepGhost({ ...g, ...extra }, { bid, ask, underlyingPx: null, qqq: null, nowEtMinutes: 12 * 60, now: Date.parse("2026-11-20T17:00:30Z"), cfg });
+  assert.equal(at(3.0, 3.1).exit, null, "-24% at the mid: a 20% stop would sell, the 35% ghost holds");
+  const first = at(2.5, 2.6);
+  assert.equal(first.exit, null, "-36% at the mid on the first read: waits for a second read");
+  assert.ok(first.patch.stopSeenAt);
+  assert.equal(at(2.5, 2.6, { stopSeenAt: "2026-11-20T17:00:00Z" }).exit.tag, "premium_stop", "confirmed 30 s later: sold at the bid");
+  const prevTake = process.env.PROFIT_TAKE_USD; process.env.PROFIT_TAKE_USD = "80";
+  try { assert.equal(at(4.45, 4.55).exit?.tag, "take_profit_usd", "+$90 at the bid on 2 contracts: the +$80 quick sale, as live"); }
+  finally { process.env.PROFIT_TAKE_USD = prevTake; }
+  assert.equal(gl.stepGhost(g, { bid: 3.9, ask: 4.0, nowEtMinutes: 15 * 60 + 45, cfg }).exit.tag, "eod_flat", "every option sold from 15:45");
+  assert.equal(gl.ghostPnl({ entryPremium: 4, qty: 2 }, 4.45), 88.6, "($0.45 x 200) - $1.40 fees");
+  const state = { ghosts: [] };
+  const rows = [
+    { id: "a", vehicle: "OPTION", occ: "X", symbol: "X", optionType: "put", entryFillPrice: 4, entryFilledQuantity: 5, entryAt: "2026-11-20T16:00:00Z", status: "open" },
+    { id: "b", vehicle: "OPTION", occ: "Y", symbol: "Y", optionType: "call", entryFillPrice: 2, entryAt: "2026-11-19T16:00:00Z", status: "open" },
+    { id: "c", vehicle: "SHARES", symbol: "Z", entryFillPrice: 10, entryAt: "2026-11-20T16:00:00Z", status: "open" },
+  ];
+  assert.equal(gl.addGhosts(state, rows, Date.parse("2026-11-20T16:05:00Z")), 1, "only live options bought from 11/20");
+  assert.equal(state.ghosts[0].qty, 2);
+  assert.equal(gl.addGhosts(state, rows, Date.parse("2026-11-20T16:05:00Z")), 0, "once each");
+  const src = fs.readFileSync(path.join(process.cwd(), "app/api/ghostStopLib.js"), "utf8");
+  assert.doesNotMatch(src, /submitOrder|tradeFetch|simFetch|placeOption/, "records only: no order path is imported");
+});

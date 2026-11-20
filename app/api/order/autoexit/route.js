@@ -9,6 +9,7 @@ import { markActivity } from "../../activityLib";
 import { accountSize } from "../../accountLib";
 import { notifySold, notify } from "../../notifyLib";
 import { dipLevels } from "../entryRules";
+import { runGhosts } from "../../ghostStopLib";
 import { exitConfig, directionOf, heldQuantity, intrinsicAtExpiry, updatePeak, gainFigures, decideProfitExit, decideLevelExit, decideReversalExit, decideMarketTurnExit, confirmedMarketTurn, decideAfternoonFadeExit, letRunOn, isExpired, carriesOvernight } from "../exitRules";
 
 /* Paper-only auto-EXIT — the other half of autotrade.js. That route only
@@ -634,6 +635,8 @@ export function GET(req) {
         markActivity("exits", { ok: !d.error, error: d.error ?? null, checked: d.checked ?? 0, closed: d.closed ?? 0 });
         for (const r of d.results || []) if (r.closed && r.pnl != null) notifySold({ symbol: r.symbol, instrument: r.instrument, quantity: r.quantity, price: r.exitPrice, pnl: r.pnl, tag: r.tag }).catch(() => {});
       } catch {}
+      // The 35% stop, recorded alongside every live option (ghostStopLib.js; places nothing).
+      await runGhosts();
     }
     return res;
   });
