@@ -516,7 +516,14 @@ export function lateEntryRefused({ flatByClose, etMinutes, learning = false }) {
    puts it back to recording only. */
 /* In learning mode nothing is watch-only: every playbook trades, so the fade
    and the scan are judged on real fills rather than estimates. */
+/* Paused at the 11/20 rules review (owner: "lets set up 1 and 2"): the dip
+   playbook (60 live trades since 11/04, -$1,050, losing in both halves, -$468
+   then -$582) and the intraday option playbook (23 trades, -$538, -$357 then
+   -$181) record what they would buy and place nothing, in learning mode too.
+   DIP_LIVE=true / INTRADAY_LIVE=true put them back. */
 export function isWatchOnly(strategy, env = process.env) {
+  if (strategy === "dip") return env.DIP_LIVE !== "true";
+  if (strategy === "intraday" && env.INTRADAY_LIVE !== "true") return true;
   if (learningMode(env)) return false;
   if (strategy === "fade_scan") return true;
   if (strategy === "contrarian") return env.FADE_LIVE !== "true";

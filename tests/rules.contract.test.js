@@ -167,7 +167,8 @@ test("RULE: outside learning mode the fade and the fade scan only RECORD; same-d
   const off = { LEARNING_MODE: "false" };
   assert.equal(entry.isWatchOnly("contrarian", off), true, "FADE_LIVE=true to trade it");
   assert.equal(entry.isWatchOnly("fade_scan", off), true);
-  assert.equal(entry.isWatchOnly("intraday", off), false, "live since 2026-10-14; watch-only 2026-10-08 to 10-14");
+  assert.equal(entry.isWatchOnly("intraday", off), true, "paused at the 11/20 review (owner); was live 2026-10-14 to 11-20");
+  assert.equal(entry.isWatchOnly("intraday", { ...off, INTRADAY_LIVE: "true" }), false, "INTRADAY_LIVE=true trades it again");
   assert.equal(entry.isWatchOnly("intraday", { ...off, INTRADAY_LIVE: "false" }), true, "INTRADAY_LIVE=false to record only");
   assert.equal(entry.isWatchOnly(undefined, off), false, "multi-day ideas trade");
   assert.equal(entry.isWatchOnly("contrarian", { ...off, FADE_LIVE: "true" }), false);
@@ -179,7 +180,7 @@ test("RULE: outside learning mode the fade and the fade scan only RECORD; same-d
 test("RULE: learning mode is ON by default and every playbook trades — 2026-10-14, 'always buy->sell->learn'", () => {
   assert.equal(entry.learningMode({}), true);
   assert.equal(entry.learningMode({ LEARNING_MODE: "false" }), false);
-  for (const pb of ["contrarian", "fade_scan", "intraday", undefined]) assert.equal(entry.isWatchOnly(pb, {}), false, `${pb} trades in learning mode`);
+  for (const pb of ["contrarian", "fade_scan", undefined]) assert.equal(entry.isWatchOnly(pb, {}), false, `${pb} trades in learning mode`);
   assert.deepEqual([...entry.SOFT_RULES].sort(), ["against_market", "conviction", "consumed", "cooldown", "daily_cap", "edge_throttle", "extreme", "late_entry", "over_budget", "pdt", "reward_risk", "selection", "spread", "stale", "tape", "watch_only"].sort(),
     "the rules that record instead of refusing; adding one means changing this test on purpose");
 });
@@ -861,4 +862,12 @@ test("BUG 2026-11-19 QA (owner 'go ahead'): the 40% dip cap counts each dip's do
   const src = fs.readFileSync(path.join(process.cwd(), "app/api/order/autotrade/route.js"), "utf8");
   assert.match(src, /sizing: \{ vehicle: "SHARES", shares, dollarCost: Math\.round\(shares \* e \* 100\) \/ 100 \}/, "dip ideas carry their cost");
   assert.equal((src.match(/Number\(idea\.sizing\?\.dollarCost\) \|\| \(Number\(idea\.sizing\?\.shares\) \|\| 0\) \* \(Number\(idea\.entryPrice\) \|\| 0\)/g) || []).length, 2, "and both capital checks fall back to shares x price");
+});
+
+test("RULE 2026-11-20 review (owner: 'lets set up 1 and 2'): the dip and intraday playbooks record only, in learning mode too", () => {
+  assert.equal(entry.isWatchOnly("dip", {}), true, "dip: 60 trades -$1,050, both halves losing");
+  assert.equal(entry.isWatchOnly("intraday", {}), true, "intraday options: 23 trades -$538, both halves losing");
+  assert.equal(entry.isWatchOnly("dip", { DIP_LIVE: "true" }), false, "DIP_LIVE=true restores it");
+  assert.equal(entry.isWatchOnly("intraday", { INTRADAY_LIVE: "true" }), false, "INTRADAY_LIVE=true restores it");
+  assert.equal(entry.isWatchOnly(undefined, {}), false, "the main option ideas (+$495 since 11/04) keep trading");
 });
