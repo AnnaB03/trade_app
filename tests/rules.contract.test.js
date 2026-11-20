@@ -854,3 +854,11 @@ test("SPEED 2026-11-20 (owner: 'fix the entry check speed'): the parsed ideas/jo
   const t = fs.readFileSync(path.join(process.cwd(), "app/api/tradier.js"), "utf8");
   assert.match(t, /DEFAULT_TIMEOUT_MS = 8000[\s\S]{0,120}timeoutMs = DEFAULT_TIMEOUT_MS/, "every Tradier call is time-bounded");
 });
+
+test("BUG 2026-11-19 QA (owner 'go ahead'): the 40% dip cap counts each dip's dollars (MARA+OKLO+HOOD were $11,216 against $10,000)", () => {
+  assert.match(entry.dipCapRefused({ openDips: 2, dipDeployed: 3749 + 3737, adding: 3730, accountSize: 25000 }) || "", /over 40% of the account/, "the third $3.7K dip is refused");
+  assert.equal(entry.dipCapRefused({ openDips: 2, dipDeployed: 3749 + 3737, adding: 0, accountSize: 25000 }), null, "what the cap saw before: $0 added, so it passed");
+  const src = fs.readFileSync(path.join(process.cwd(), "app/api/order/autotrade/route.js"), "utf8");
+  assert.match(src, /sizing: \{ vehicle: "SHARES", shares, dollarCost: Math\.round\(shares \* e \* 100\) \/ 100 \}/, "dip ideas carry their cost");
+  assert.equal((src.match(/Number\(idea\.sizing\?\.dollarCost\) \|\| \(Number\(idea\.sizing\?\.shares\) \|\| 0\) \* \(Number\(idea\.entryPrice\) \|\| 0\)/g) || []).length, 2, "and both capital checks fall back to shares x price");
+});

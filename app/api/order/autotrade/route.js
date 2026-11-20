@@ -776,7 +776,7 @@ async function deriveDips() {
       const row = appendIdea({
         symbol, action: "BUY", vehicle: "SHARES", entryTrigger: `dip: ${DIP_PCT}%+ below today's high, up on the day`, triggerPrice: null, triggerDirection: null, triggered: true,
         invalidation: stop, target, staleMinutes: 15, conviction: 3, catalyst: "dip in a stock up on the day", risk: "MEDIUM",
-        why_pro: why, why_plain: why, sizing: { vehicle: "SHARES", shares }, affordable: true, accountSize: ACCOUNT_SIZE,
+        why_pro: why, why_plain: why, sizing: { vehicle: "SHARES", shares, dollarCost: Math.round(shares * e * 100) / 100 }, affordable: true, accountSize: ACCOUNT_SIZE,
         flatByClose: true, horizon: "intraday", strategy: "dip", entryPrice: e, marketState: "open",
       });
       made.push(row.id);
@@ -1418,9 +1418,10 @@ async function run(req) {
         const costOf = (r) => (Number(r.entryFillPrice ?? r.entryLimitPrice) || 0) * (Number(r.entryQuantity) || 0) * (r.vehicle === "OPTION" ? 100 : 1);
         const baseline = readBaseline();
         const held = openJournal.filter((r) => r.symbol === idea.symbol && !isLegacy(r, baseline)).reduce((s2, r) => s2 + costOf(r), 0);
+        // Shares count their dollars too (bug fix 2026-11-19 QA, owner "go ahead": dip ideas carried no dollarCost, so the 40% dip cap, the 20% per-stock and the total-capital checks added $0; 11/19's three dips were $11,216 against a $10,000 cap).
         const adding = idea.vehicle === "OPTION"
           ? (Number(payPrice(idea.leg)) || 0) * 100 * Math.max(1, Number(idea.sizing?.contracts) || 1)
-          : (Number(idea.sizing?.dollarCost) || 0);
+          : (Number(idea.sizing?.dollarCost) || (Number(idea.sizing?.shares) || 0) * (Number(idea.entryPrice) || 0));
         const pctAfter = ((held + adding) / ACCOUNT_SIZE) * 100;
         /* No `held > 0` guard. It used to be there, and it made this gate a
            no-op for exactly the case it reads as if it covers: a brand-new
@@ -1451,9 +1452,10 @@ async function run(req) {
           (r.status === "closed" && r.entryFillPrice != null && r.exitOrderId && r.exitFillPrice == null)
         ));
         const deployed = live.reduce((s2, r) => s2 + costOf(r), 0) + deployedThisRun;
+        // Shares count their dollars too (bug fix 2026-11-19 QA, owner "go ahead": dip ideas carried no dollarCost, so the 40% dip cap, the 20% per-stock and the total-capital checks added $0; 11/19's three dips were $11,216 against a $10,000 cap).
         const adding = idea.vehicle === "OPTION"
           ? (Number(payPrice(idea.leg)) || 0) * 100 * Math.max(1, Number(idea.sizing?.contracts) || 1)
-          : (Number(idea.sizing?.dollarCost) || 0);
+          : (Number(idea.sizing?.dollarCost) || (Number(idea.sizing?.shares) || 0) * (Number(idea.entryPrice) || 0));
         const ceiling = (ACCOUNT_SIZE * MAX_TOTAL_EXPOSURE_PCT) / 100;
         if (deployed + adding > ceiling) {
           results.push({ ...tag, placed: false, reason: `Deployed capital would reach $${(deployed + adding).toFixed(0)} against a $${ceiling.toFixed(0)} ceiling (${MAX_TOTAL_EXPOSURE_PCT}% of the $${ACCOUNT_SIZE} account; $${deployed.toFixed(0)} already in live positions) — no room for another.` });
